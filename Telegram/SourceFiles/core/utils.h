@@ -38,7 +38,7 @@ inline bool in_range(Value &&value, From &&from, Till &&till) {
 inline QString IconName() {
 	static const auto Result = KSandbox::isFlatpak()
 		? qEnvironmentVariable("FLATPAK_ID")
-		: u"telegram"_q;
+		: u"kotatogram"_q;
 	return Result;
 }
 #endif

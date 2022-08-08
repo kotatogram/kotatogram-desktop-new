@@ -27,9 +27,9 @@ namespace {
 [[nodiscard]] QString PanelIconName(int counter, bool muted) {
 	return (counter > 0)
 		? (muted
-			? u"telegram-mute-panel"_q
-			: u"telegram-attention-panel"_q)
-		: u"telegram-panel"_q;
+			? u"kotatogram-mute-panel"_q
+			: u"kotatogram-attention-panel"_q)
+		: u"kotatogram-panel"_q;
 }
 
 } // namespace
