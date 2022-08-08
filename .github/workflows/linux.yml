@@ -5,6 +5,7 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
+      - 'kotatogram_changes.txt'
       - 'changelog.txt'
       - 'LEGAL'
       - 'LICENSE'
@@ -23,6 +24,7 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
+      - 'kotatogram_changes.txt'
       - 'changelog.txt'
       - 'LEGAL'
       - 'LICENSE'
@@ -42,6 +44,11 @@ jobs:
 
   linux:
     name: Rocky Linux 8
+    if: >
+      !(github.event_name == 'push'
+        && contains(github.event.head_commit.message, '[skip ci]'))
+      && !(github.event_name == 'pull_request'
+        && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name) 
     runs-on: ubuntu-latest
 
     strategy:
@@ -69,7 +76,7 @@ jobs:
           docker pull ghcr.io/$GITHUB_REPOSITORY/centos_env
           docker tag ghcr.io/$GITHUB_REPOSITORY/centos_env tdesktop:centos_env
 
-      - name: Telegram Desktop build.
+      - name: Kotatogram Desktop build.
         run: |
           cd $REPO_NAME
 
@@ -77,9 +84,9 @@ jobs:
           if [ -n "${{ matrix.defines }}" ]; then
             DEFINE="-D ${{ matrix.defines }}=ON"
             echo Define from matrix: $DEFINE
-            echo "ARTIFACT_NAME=Telegram_${{ matrix.defines }}" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=Kotatogram_${{ matrix.defines }}" >> $GITHUB_ENV
           else
-            echo "ARTIFACT_NAME=Telegram" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=Kotatogram" >> $GITHUB_ENV
           fi
 
           docker run --rm \
@@ -99,7 +106,7 @@ jobs:
 
       - name: Check.
         run: |
-          filePath="$REPO_NAME/out/Debug/Telegram"
+          filePath="$REPO_NAME/out/Debug/Kotatogram"
           if test -f "$filePath"; then
             echo "Build successfully done! :)"
 
@@ -115,7 +122,7 @@ jobs:
         run: |
           cd $REPO_NAME/out/Debug
           sudo mkdir artifact
-          sudo mv {Telegram,Updater} artifact/
+          sudo mv {Kotatogram,Updater} artifact/
       - uses: actions/upload-artifact@v4
         if: env.UPLOAD_ARTIFACT == 'true'
         name: Upload artifact.

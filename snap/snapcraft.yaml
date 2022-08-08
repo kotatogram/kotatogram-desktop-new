@@ -1,5 +1,5 @@
-name: telegram-desktop
-adopt-info: telegram
+name: kotatogram-desktop
+adopt-info: kotatogram
 icon: Telegram/Resources/art/icon512@2x.png
 
 base: core24
@@ -8,13 +8,13 @@ confinement: strict
 compression: lzo
 
 apps:
-  telegram-desktop:
-    command: usr/bin/telegram-desktop
+  kotatogram-desktop:
+    command: usr/bin/kotatogram-desktop
     command-chain:
       - bin/desktop-launch
-    common-id: org.telegram.desktop
-    desktop: usr/share/applications/org.telegram.desktop.desktop
-    autostart: telegram-desktop_telegram-desktop.desktop
+    common-id: io.github.kotatogram
+    desktop: usr/share/applications/io.github.kotatogram.desktop
+    autostart: kotatogram-desktop_kotatogram-desktop.desktop
     plugs:
       - alsa
       - audio-playback
@@ -80,11 +80,11 @@ layout:
     bind: $SNAP/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/webkitgtk-6.0
 
 parts:
-  telegram:
+  kotatogram:
     plugin: cmake
     source: .
     source-type: git
-    parse-info: [usr/share/metainfo/org.telegram.desktop.metainfo.xml]
+    parse-info: [usr/share/metainfo/io.github.kotatogram.metainfo.xml]
     build-environment:
       - LD_LIBRARY_PATH: $CRAFT_STAGE/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
       - LDFLAGS: ${LDFLAGS:+$LDFLAGS} -s
@@ -139,19 +139,10 @@ parts:
     override-pull: |
       craftctl default
 
-      version_file=Telegram/build/version
-      version=$(sed -n "s/AppVersionStr[ ]\+\(.*\)\+/\1/p" $version_file)
-      beta=$(sed -n "s/BetaChannel[ ]\+\(.*\)\+/\1/p" $version_file)
-
-      if [ "$beta" != "0" ]; then
-        version="$version-beta"
-      fi
-
-      version="${version}$(git describe --tags | sed 's,^v[^-]\+,,')"
-
+      version="$(git describe --tags --always | sed -r 's,^k([0-9]\.[0-9]),\1,')"
       craftctl set version="$version"
 
-      sed -i 's|^Icon=telegram$|Icon=${SNAP}/meta/gui/icon.png|g' lib/xdg/org.telegram.desktop.desktop
+      sed -i 's|^Icon=kotatogram$|Icon=${SNAP}/meta/gui/icon.png|g' lib/xdg/io.github.kotatogram.desktop
     override-build: |
       craftctl default
       rm -rf "$CRAFT_PART_INSTALL/usr/share/icons"
@@ -207,7 +198,7 @@ parts:
       done
       GTK_PATH=$PWD/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/gtk-3.0 /usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/libgtk-3-0t64/gtk-query-immodules-3.0 > usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/gtk-3.0/3.0.0/immodules/immodules.cache
     after:
-      - telegram
+      - kotatogram
 
   ffmpeg:
     plugin: nil
