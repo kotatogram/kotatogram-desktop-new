@@ -1023,6 +1023,8 @@ PRIVATE
     iv/iv_delegate_impl.h
     iv/iv_instance.cpp
     iv/iv_instance.h
+    kotato/kotato_lang.cpp
+    kotato/kotato_lang.h
     lang/lang_cloud_manager.cpp
     lang/lang_cloud_manager.h
     lang/lang_instance.cpp
