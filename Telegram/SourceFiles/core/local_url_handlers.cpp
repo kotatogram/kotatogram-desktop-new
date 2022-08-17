@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/local_url_handlers.h"
 
+#include "kotato/kotato_settings_menu.h"
 #include "api/api_authorizations.h"
 #include "api/api_confirm_phone.h"
 #include "api/api_chat_filters.h"
@@ -669,6 +670,8 @@ bool ResolveSettings(
 			return ::Settings::GlobalTTLId();
 		} else if (section == u"information"_q) {
 			return ::Settings::Information::Id();
+		} else if (section == u"kotato"_q) {
+			return ::Settings::Kotato::Id();
 		}
 		return ::Settings::Main::Id();
 	}();
@@ -1255,7 +1258,7 @@ const std::vector<LocalUrlHandler> &LocalUrlHandlers() {
 			ResolvePrivatePost
 		},
 		{
-			u"^settings(/language|/devices|/folders|/privacy|/themes|/change_number|/auto_delete|/information|/edit_profile)?$"_q,
+			u"^settings(/language|/devices|/folders|/privacy|/themes|/change_number|/auto_delete|/information|/edit_profile|/kotato)?$"_q,
 			ResolveSettings
 		},
 		{
