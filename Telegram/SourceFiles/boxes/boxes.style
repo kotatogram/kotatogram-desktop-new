@@ -1099,3 +1099,7 @@ moderateBoxDividerLabel: FlatLabel(boxDividerLabel) {
 		selectLinkFg: windowActiveTextFg;
 	}
 }
+
+fontsBoxTextStyle: TextStyle(defaultTextStyle) {
+	font: font(13px);
+}

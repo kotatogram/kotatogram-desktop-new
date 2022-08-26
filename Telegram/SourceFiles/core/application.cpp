@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 
 #include "kotato/kotato_lang.h"
+#include "kotato/kotato_settings.h"
 #include "data/data_abstract_structure.h"
 #include "data/data_photo.h"
 #include "data/data_document.h"
@@ -255,6 +256,11 @@ void Application::run() {
 	startLocalStorage();
 
 	style::SetCustomFont(settings().customFontFamily());
+	style::SetCustomFontSettings({
+		::Kotato::JsonSettings::GetString("fonts/monospaced"),
+		::Kotato::JsonSettings::GetInt("fonts/size"),
+		::Kotato::JsonSettings::GetBool("fonts/semibold_is_bold"),
+	});
 	style::internal::StartFonts();
 
 	ValidateScale();
