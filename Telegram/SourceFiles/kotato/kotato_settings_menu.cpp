@@ -287,6 +287,8 @@ void SetupKotatoNetwork(not_null<Ui::VerticalLayout*> container) {
 	Ui::AddSubsectionTitle(container, rktr("ktg_settings_network"));
 
 
+	SettingsMenuJsonSwitch(ktg_settings_telegram_sites_autologin, telegram_sites_autologin);
+
 	Ui::AddSkip(container);
 }
 
