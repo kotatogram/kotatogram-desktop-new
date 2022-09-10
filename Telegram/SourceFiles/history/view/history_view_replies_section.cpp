@@ -595,6 +595,14 @@ void RepliesWidget::subscribeToPinnedMessages() {
 		}
 	}, lifetime());
 
+	session().changes().entryUpdates(
+		EntryUpdateFlag::PinVisible
+	) | rpl::start_with_next([=](const Data::EntryUpdate &update) {
+		if (_pinnedTracker) {
+			checkPinnedBarState();
+		}
+	}, lifetime());
+
 	setupPinnedTracker();
 }
 
