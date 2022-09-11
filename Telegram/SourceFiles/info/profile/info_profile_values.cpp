@@ -413,6 +413,13 @@ rpl::producer<ChannelData*> PersonalChannelValue(not_null<UserData*> user) {
 	});
 }
 
+rpl::producer<bool> HasLinkedChatValue(not_null<ChannelData*> channel) {
+	return channel->session().changes().peerFlagsValue(
+		channel,
+		UpdateFlag::ChannelLinkedChat
+	) | rpl::map([channel] { return channel->linkedChat() != nullptr; });
+}
+
 rpl::producer<bool> AmInChannelValue(not_null<ChannelData*> channel) {
 	return channel->session().changes().peerFlagsValue(
 		channel,
