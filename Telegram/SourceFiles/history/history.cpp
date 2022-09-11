@@ -379,6 +379,7 @@ Data::ResolvedForwardDraft History::resolveForwardDraft(
 	return Data::ResolvedForwardDraft{
 		.items = owner().idsToItems(draft.ids),
 		.options = draft.options,
+		.groupOptions = draft.groupOptions,
 	};
 }
 
@@ -390,6 +391,7 @@ Data::ResolvedForwardDraft History::resolveForwardDraft(
 		setForwardDraft(topicRootId, {
 			.ids = owner().itemsToIds(result.items),
 			.options = result.options,
+			.groupOptions = result.groupOptions,
 		});
 	}
 	return result;
