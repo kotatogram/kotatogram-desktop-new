@@ -13,6 +13,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/stickers/data_custom_emoji.h"
 #include "data/stickers/data_stickers_set.h"
 #include "main/main_session.h"
+#include "base/qthelp_regex.h"
+#include "base/qthelp_url.h"
 
 namespace Api {
 namespace {
@@ -256,11 +258,41 @@ MTPVector<MTPMessageEntity> EntitiesToMTP(
 			v.push_back(MTP_messageEntityUrl(offset, length));
 		} break;
 		case EntityType::CustomUrl: {
-			v.push_back(
-				MTP_messageEntityTextUrl(
-					offset,
-					length,
-					MTP_string(entity.data())));
+			auto url = entity.data();
+			auto inputUser = [&](const QString &data) -> MTPInputUser {
+				const auto trimmed = url.trimmed();
+				if (trimmed.isEmpty()) {
+					return MTP_inputUserEmpty();
+				}
+				auto regex = QRegularExpression(
+					QString::fromUtf8("^(?i)tg://user\\?(.+)"),
+					QRegularExpression::UseUnicodePropertiesOption);
+				regex.optimize();
+				const auto match = regex.match(trimmed);
+				if (!match.hasMatch() || match.capturedStart() != 0) {
+					return MTP_inputUserEmpty();
+				}
+				const auto parsed = qthelp::url_parse_params(match.captured(1), qthelp::UrlParamNameTransform::ToLower);
+				const auto qstr_uid = parsed.value("id");
+				if (qstr_uid.isEmpty()) {
+					return MTP_inputUserEmpty();
+				}
+				bool success;
+				UserId uid = qstr_uid.toLongLong(&success);
+				if (success && session) {
+					if (uid == session->userId()) {
+						return MTP_inputUserSelf();
+					} else if (const auto user = session->data().userLoaded(uid)) {
+						return MTP_inputUser(MTP_long(uid.bare), MTP_long(user->accessHash()));
+					}
+				}
+				return MTP_inputUserEmpty();
+			}(url);
+			if (inputUser.type() != mtpc_inputUserEmpty) {
+				v.push_back(MTP_inputMessageEntityMentionName(offset, length, inputUser));
+			} else {
+				v.push_back(MTP_messageEntityTextUrl(offset, length, MTP_string(url)));
+			}
 		} break;
 		case EntityType::Email: {
 			v.push_back(MTP_messageEntityEmail(offset, length));
