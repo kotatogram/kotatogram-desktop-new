@@ -236,6 +236,7 @@ public:
 
 	void showNonPremiumLimitToast(bool download);
 
+	bool areRecentActionsOpened();
 	void dialogsCancelled();
 
 private:

@@ -49,6 +49,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_widget.h"
 #include "history/history_widget.h"
 #include "history/history_item_helpers.h" // GetErrorTextForSending.
+#include "history/admin_log/history_admin_log_section.h"
 #include "history/view/media/history_view_media.h"
 #include "history/view/history_view_service_message.h"
 #include "history/view/history_view_sublist_section.h"
@@ -1940,6 +1941,11 @@ void MainWidget::showNonPremiumLimitToast(bool download) {
 		.slideSide = RectPart::Top,
 		.filter = std::move(filter),
 	});
+}
+
+bool MainWidget::areRecentActionsOpened() {
+	return _mainSection
+		&& static_cast<AdminLog::Widget*>(_mainSection.data());
 }
 
 void MainWidget::showBackFromStack(
