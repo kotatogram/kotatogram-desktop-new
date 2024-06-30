@@ -14,7 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QFileInfo>
 #include <QtCore/QDir>
 
-#include <gsl/gsl_util>
+#include <gsl/util>
 
 namespace Export {
 namespace Output {
@@ -22,7 +22,7 @@ namespace Output {
 File::File(const QString &path, Stats *stats) : _path(path), _stats(stats) {
 }
 
-int File::size() const {
+int64 File::size() const {
 	return _offset;
 }
 

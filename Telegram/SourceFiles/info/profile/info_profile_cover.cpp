@@ -7,127 +7,43 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/profile/info_profile_cover.h"
 
-#include "data/data_photo.h"
+#include "api/api_user_privacy.h"
 #include "data/data_peer_values.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
+#include "data/data_peer.h"
+#include "data/data_user.h"
+#include "data/data_document.h"
+#include "data/data_document_media.h"
 #include "data/data_changes.h"
-#include "editor/photo_editor_layer_widget.h"
+#include "data/data_session.h"
+#include "data/data_forum_topic.h"
+#include "data/stickers/data_custom_emoji.h"
 #include "info/profile/info_profile_values.h"
+#include "info/profile/info_profile_badge.h"
+#include "info/profile/info_profile_emoji_status_panel.h"
 #include "info/info_controller.h"
-#include "info/info_memento.h"
+#include "boxes/peers/edit_forum_topic_box.h"
+#include "history/view/media/history_view_sticker_player.h"
 #include "lang/lang_keys.h"
+#include "ui/boxes/show_or_premium_box.h"
+#include "ui/controls/userpic_button.h"
+#include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
-#include "ui/effects/ripple_animation.h"
 #include "ui/text/text_utilities.h"
-#include "ui/special_buttons.h"
-#include "ui/unread_badge.h"
 #include "base/unixtime.h"
 #include "window/window_session_controller.h"
-#include "core/application.h"
 #include "main/main_session.h"
+#include "settings/settings_premium.h"
+#include "chat_helpers/stickers_lottie.h"
 #include "apiwrap.h"
 #include "api/api_peer_photo.h"
 #include "styles/style_boxes.h"
 #include "styles/style_info.h"
+#include "styles/style_dialogs.h"
 
-namespace Info {
-namespace Profile {
+namespace Info::Profile {
 namespace {
-
-class SectionToggle : public Ui::AbstractCheckView {
-public:
-	SectionToggle(
-		const style::InfoToggle &st,
-		bool checked,
-		Fn<void()> updateCallback);
-
-	QSize getSize() const override;
-	void paint(
-		Painter &p,
-		int left,
-		int top,
-		int outerWidth) override;
-	QImage prepareRippleMask() const override;
-	bool checkRippleStartPosition(QPoint position) const override;
-
-private:
-	QSize rippleSize() const;
-
-	const style::InfoToggle &_st;
-
-};
-
-SectionToggle::SectionToggle(
-		const style::InfoToggle &st,
-		bool checked,
-		Fn<void()> updateCallback)
-: AbstractCheckView(st.duration, checked, std::move(updateCallback))
-, _st(st) {
-}
-
-QSize SectionToggle::getSize() const {
-	return QSize(_st.size, _st.size);
-}
-
-void SectionToggle::paint(
-		Painter &p,
-		int left,
-		int top,
-		int outerWidth) {
-	auto sqrt2 = sqrt(2.);
-	auto vLeft = style::rtlpoint(left + _st.skip, 0, outerWidth).x() + 0.;
-	auto vTop = top + _st.skip + 0.;
-	auto vWidth = _st.size - 2 * _st.skip;
-	auto vHeight = _st.size - 2 * _st.skip;
-	auto vStroke = _st.stroke / sqrt2;
-	constexpr auto kPointCount = 6;
-	std::array<QPointF, kPointCount> pathV = { {
-		{ vLeft, vTop + (vHeight / 4.) + vStroke },
-		{ vLeft + vStroke, vTop + (vHeight / 4.) },
-		{ vLeft + (vWidth / 2.), vTop + (vHeight * 3. / 4.) - vStroke },
-		{ vLeft + vWidth - vStroke, vTop + (vHeight / 4.) },
-		{ vLeft + vWidth, vTop + (vHeight / 4.) + vStroke },
-		{ vLeft + (vWidth / 2.), vTop + (vHeight * 3. / 4.) + vStroke },
-	} };
-
-	auto toggled = currentAnimationValue();
-	auto alpha = (toggled - 1.) * M_PI_2;
-	auto cosalpha = cos(alpha);
-	auto sinalpha = sin(alpha);
-	auto shiftx = vLeft + (vWidth / 2.);
-	auto shifty = vTop + (vHeight / 2.);
-	for (auto &point : pathV) {
-		auto x = point.x() - shiftx;
-		auto y = point.y() - shifty;
-		point.setX(shiftx + x * cosalpha - y * sinalpha);
-		point.setY(shifty + y * cosalpha + x * sinalpha);
-	}
-	QPainterPath path;
-	path.moveTo(pathV[0]);
-	for (int i = 1; i != kPointCount; ++i) {
-		path.lineTo(pathV[i]);
-	}
-	path.lineTo(pathV[0]);
-
-	PainterHighQualityEnabler hq(p);
-	p.fillPath(path, _st.color);
-}
-
-QImage SectionToggle::prepareRippleMask() const {
-	return Ui::RippleAnimation::ellipseMask(rippleSize());
-}
-
-QSize SectionToggle::rippleSize() const {
-	return getSize() + 2 * QSize(
-		_st.rippleAreaPadding,
-		_st.rippleAreaPadding);
-}
-
-bool SectionToggle::checkRippleStartPosition(QPoint position) const {
-	return QRect(QPoint(0, 0), rippleSize()).contains(position);
-
-}
 
 auto MembersStatusText(int count) {
 	return tr::lng_chat_status_members(tr::now, lt_count_decimal, count);
@@ -161,102 +77,256 @@ auto ChatStatusText(int fullCount, int onlineCount, bool isGroup) {
 		: tr::lng_channel_status(tr::now);
 };
 
+[[nodiscard]] const style::InfoProfileCover &CoverStyle(
+		not_null<PeerData*> peer,
+		Data::ForumTopic *topic,
+		Cover::Role role) {
+	return (role == Cover::Role::EditContact)
+		? st::infoEditContactCover
+		: topic
+		? st::infoTopicCover
+		: peer->isMegagroup()
+		? st::infoProfileMegagroupCover
+		: st::infoProfileCover;
+}
+
 } // namespace
 
-SectionWithToggle *SectionWithToggle::setToggleShown(
-		rpl::producer<bool> &&shown) {
-	_toggle.create(
-		this,
-		QString(),
-		st::infoToggleCheckbox,
-		std::make_unique<SectionToggle>(
-			st::infoToggle,
+TopicIconView::TopicIconView(
+	not_null<Data::ForumTopic*> topic,
+	Fn<bool()> paused,
+	Fn<void()> update)
+: TopicIconView(
+	topic,
+	std::move(paused),
+	std::move(update),
+	st::windowSubTextFg) {
+}
+
+TopicIconView::TopicIconView(
+	not_null<Data::ForumTopic*> topic,
+	Fn<bool()> paused,
+	Fn<void()> update,
+	const style::color &generalIconFg)
+: _topic(topic)
+, _generalIconFg(generalIconFg)
+, _paused(std::move(paused))
+, _update(std::move(update)) {
+	setup(topic);
+}
+
+void TopicIconView::paintInRect(QPainter &p, QRect rect) {
+	const auto paint = [&](const QImage &image) {
+		const auto size = image.size() / style::DevicePixelRatio();
+		p.drawImage(
+			QRect(
+				rect.x() + (rect.width() - size.width()) / 2,
+				rect.y() + (rect.height() - size.height()) / 2,
+				size.width(),
+				size.height()),
+			image);
+	};
+	if (_player && _player->ready()) {
+		paint(_player->frame(
+			st::infoTopicCover.photo.size,
+			QColor(0, 0, 0, 0),
 			false,
-			[this] { _toggle->updateCheck(); }));
-	_toggle->hide();
-	_toggle->lower();
-	_toggle->setCheckAlignment(style::al_right);
-	widthValue(
-	) | rpl::start_with_next([this](int newValue) {
-		_toggle->setGeometry(0, 0, newValue, height());
-	}, _toggle->lifetime());
-	std::move(
-		shown
-	) | rpl::start_with_next([this](bool shown) {
-		if (_toggle->isHidden() == shown) {
-			_toggle->setVisible(shown);
-			_toggleShown.fire_copy(shown);
-		}
-	}, lifetime());
-	return this;
-}
-
-void SectionWithToggle::toggle(bool toggled, anim::type animated) {
-	if (_toggle) {
-		_toggle->setChecked(toggled);
-		if (animated == anim::type::instant) {
-			_toggle->finishAnimating();
-		}
+			crl::now(),
+			_paused()).image);
+		_player->markFrameShown();
+	} else if (!_topic->iconId() && !_image.isNull()) {
+		paint(_image);
 	}
 }
 
-bool SectionWithToggle::toggled() const {
-	return _toggle ? _toggle->checked() : false;
+void TopicIconView::setup(not_null<Data::ForumTopic*> topic) {
+	setupPlayer(topic);
+	setupImage(topic);
 }
 
-rpl::producer<bool> SectionWithToggle::toggledValue() const {
-	if (_toggle) {
-		return _toggle->checkedValue();
+void TopicIconView::setupPlayer(not_null<Data::ForumTopic*> topic) {
+	IconIdValue(
+		topic
+	) | rpl::map([=](DocumentId id) -> rpl::producer<DocumentData*> {
+		if (!id) {
+			return rpl::single((DocumentData*)nullptr);
+		}
+		return topic->owner().customEmojiManager().resolve(
+			id
+		) | rpl::map([=](not_null<DocumentData*> document) {
+			return document.get();
+		});
+	}) | rpl::flatten_latest(
+	) | rpl::map([=](DocumentData *document)
+	-> rpl::producer<std::shared_ptr<StickerPlayer>> {
+		if (!document) {
+			return rpl::single(std::shared_ptr<StickerPlayer>());
+		}
+		const auto media = document->createMediaView();
+		media->checkStickerLarge();
+		media->goodThumbnailWanted();
+
+		return rpl::single() | rpl::then(
+			document->owner().session().downloaderTaskFinished()
+		) | rpl::filter([=] {
+			return media->loaded();
+		}) | rpl::take(1) | rpl::map([=] {
+			auto result = std::shared_ptr<StickerPlayer>();
+			const auto sticker = document->sticker();
+			if (sticker->isLottie()) {
+				result = std::make_shared<HistoryView::LottiePlayer>(
+					ChatHelpers::LottiePlayerFromDocument(
+						media.get(),
+						ChatHelpers::StickerLottieSize::StickerSet,
+						st::infoTopicCover.photo.size,
+						Lottie::Quality::High));
+			} else if (sticker->isWebm()) {
+				result = std::make_shared<HistoryView::WebmPlayer>(
+					media->owner()->location(),
+					media->bytes(),
+					st::infoTopicCover.photo.size);
+			} else {
+				result = std::make_shared<HistoryView::StaticStickerPlayer>(
+					media->owner()->location(),
+					media->bytes(),
+					st::infoTopicCover.photo.size);
+			}
+			result->setRepaintCallback(_update);
+			return result;
+		});
+	}) | rpl::flatten_latest(
+	) | rpl::start_with_next([=](std::shared_ptr<StickerPlayer> player) {
+		_player = std::move(player);
+		if (!_player) {
+			_update();
+		}
+	}, _lifetime);
+}
+
+void TopicIconView::setupImage(not_null<Data::ForumTopic*> topic) {
+	using namespace Data;
+	if (topic->isGeneral()) {
+		rpl::single(rpl::empty) | rpl::then(
+			style::PaletteChanged()
+		) | rpl::start_with_next([=] {
+			_image = ForumTopicGeneralIconFrame(
+				st::infoForumTopicIcon.size,
+				_generalIconFg);
+			_update();
+		}, _lifetime);
+		return;
 	}
-	return nullptr;
+	rpl::combine(
+		TitleValue(topic),
+		ColorIdValue(topic)
+	) | rpl::map([=](const QString &title, int32 colorId) {
+		return ForumTopicIconFrame(colorId, title, st::infoForumTopicIcon);
+	}) | rpl::start_with_next([=](QImage &&image) {
+		_image = std::move(image);
+		_update();
+	}, _lifetime);
 }
 
-rpl::producer<bool> SectionWithToggle::toggleShownValue() const {
-	return _toggleShown.events_starting_with(
-		_toggle && !_toggle->isHidden());
-}
-
-int SectionWithToggle::toggleSkip() const {
-	return (!_toggle || _toggle->isHidden())
-		? 0
-		: st::infoToggleCheckbox.checkPosition.x()
-			+ _toggle->checkRect().width();
-}
-
-Cover::Cover(
+TopicIconButton::TopicIconButton(
 	QWidget *parent,
-	not_null<PeerData*> peer,
-	not_null<Window::SessionController*> controller)
-: Cover(parent, peer, controller, NameValue(
-	peer
-) | rpl::map([=](const TextWithEntities &name) {
-	return name.text;
-})) {
-}
-
-Cover::Cover(
-	QWidget *parent,
-	not_null<PeerData*> peer,
 	not_null<Window::SessionController*> controller,
-	rpl::producer<QString> title)
-: SectionWithToggle(
+	not_null<Data::ForumTopic*> topic)
+: AbstractButton(parent)
+, _view(
+		topic,
+		[=] { return controller->isGifPausedAtLeastFor(
+			Window::GifPauseReason::Layer); },
+		[=] { update(); }) {
+	resize(st::infoTopicCover.photo.size);
+	paintRequest(
+	) | rpl::start_with_next([=] {
+		auto p = QPainter(this);
+		_view.paintInRect(p, rect());
+	}, lifetime());
+}
+
+Cover::Cover(
+	QWidget *parent,
+	not_null<Window::SessionController*> controller,
+	not_null<PeerData*> peer)
+: Cover(parent, controller, peer, Role::Info, NameValue(peer)) {
+}
+
+Cover::Cover(
+	QWidget *parent,
+	not_null<Window::SessionController*> controller,
+	not_null<Data::ForumTopic*> topic)
+: Cover(
 	parent,
-	st::infoProfilePhotoTop
-		+ st::infoProfilePhoto.size.height()
-		+ st::infoProfilePhotoBottom)
-, _peer(peer)
-, _userpic(
-	this,
 	controller,
-	_peer,
-	Ui::UserpicButton::Role::OpenPhoto,
-	st::infoProfilePhoto)
-, _name(this, st::infoProfileNameLabel)
-, _status(
-	this,
-	_peer->isMegagroup()
-		? st::infoProfileMegagroupStatusLabel
-		: st::infoProfileStatusLabel)
+	topic->channel(),
+	topic,
+	Role::Info,
+	TitleValue(topic)) {
+}
+
+Cover::Cover(
+	QWidget *parent,
+	not_null<Window::SessionController*> controller,
+	not_null<PeerData*> peer,
+	Role role,
+	rpl::producer<QString> title)
+: Cover(
+	parent,
+	controller,
+	peer,
+	nullptr,
+	role,
+	std::move(title)) {
+}
+
+Cover::Cover(
+	QWidget *parent,
+	not_null<Window::SessionController*> controller,
+	not_null<PeerData*> peer,
+	Data::ForumTopic *topic,
+	Role role,
+	rpl::producer<QString> title)
+: FixedHeightWidget(parent, CoverStyle(peer, topic, role).height)
+, _st(CoverStyle(peer, topic, role))
+, _role(role)
+, _controller(controller)
+, _peer(peer)
+, _emojiStatusPanel(peer->isSelf()
+	? std::make_unique<EmojiStatusPanel>()
+	: nullptr)
+, _badge(
+	std::make_unique<Badge>(
+		this,
+		st::infoPeerBadge,
+		peer,
+		_emojiStatusPanel.get(),
+		[=] {
+			return controller->isGifPausedAtLeastFor(
+				Window::GifPauseReason::Layer);
+		}))
+, _userpic(topic
+	? nullptr
+	: object_ptr<Ui::UserpicButton>(
+		this,
+		controller,
+		_peer,
+		Ui::UserpicButton::Role::OpenPhoto,
+		Ui::UserpicButton::Source::PeerPhoto,
+		_st.photo))
+, _changePersonal((role == Role::Info
+	|| topic
+	|| !_peer->isUser()
+	|| _peer->isSelf()
+	|| _peer->asUser()->isBot())
+	? nullptr
+	: CreateUploadSubButton(this, _peer->asUser(), controller).get())
+, _iconButton(topic
+	? object_ptr<TopicIconButton>(this, controller, topic)
+	: nullptr)
+, _name(this, _st.name)
+, _status(this, _st.status)
+, _showLastSeen(this, tr::lng_status_lastseen_when(), _st.showLastSeen)
 , _refreshStatusTimer([this] { refreshStatusText(); }) {
 	_peer->updateFull();
 
@@ -267,41 +337,130 @@ Cover::Cover(
 		_status->setAttribute(Qt::WA_TransparentForMouseEvents);
 	}
 
+	setupShowLastSeen();
+
+	_badge->setPremiumClickCallback([=] {
+		if (const auto panel = _emojiStatusPanel.get()) {
+			panel->show(_controller, _badge->widget(), _badge->sizeTag());
+		} else {
+			::Settings::ShowEmojiStatusPremium(_controller, _peer);
+		}
+	});
+	_badge->updated() | rpl::start_with_next([=] {
+		refreshNameGeometry(width());
+	}, _name->lifetime());
+
 	initViewers(std::move(title));
 	setupChildGeometry();
 
-	_userpic->uploadPhotoRequests(
-	) | rpl::start_with_next([=] {
-		_peer->session().api().peerPhoto().upload(
-			_peer,
-			_userpic->takeResultImage());
-	}, _userpic->lifetime());
+	if (_userpic) {
+	} else if (topic->canEdit()) {
+		_iconButton->setClickedCallback([=] {
+			_controller->show(Box(
+				EditForumTopicBox,
+				_controller,
+				topic->history(),
+				topic->rootId()));
+		});
+	} else {
+		_iconButton->setAttribute(Qt::WA_TransparentForMouseEvents);
+	}
+}
+
+void Cover::setupShowLastSeen() {
+	const auto user = _peer->asUser();
+	if (_st.showLastSeenVisible
+		&& user
+		&& !user->isSelf()
+		&& !user->isBot()
+		&& !user->isServiceUser()
+		&& user->session().premiumPossible()) {
+		if (user->session().premium()) {
+			if (user->lastseen().isHiddenByMe()) {
+				user->updateFullForced();
+			}
+			_showLastSeen->hide();
+			return;
+		}
+
+		rpl::combine(
+			user->session().changes().peerFlagsValue(
+				user,
+				Data::PeerUpdate::Flag::OnlineStatus),
+			Data::AmPremiumValue(&user->session())
+		) | rpl::start_with_next([=](auto, bool premium) {
+			const auto wasShown = !_showLastSeen->isHidden();
+			const auto hiddenByMe = user->lastseen().isHiddenByMe();
+			const auto shown = hiddenByMe
+				&& !user->lastseen().isOnline(base::unixtime::now())
+				&& !premium
+				&& user->session().premiumPossible();
+			_showLastSeen->setVisible(shown);
+			if (wasShown && premium && hiddenByMe) {
+				user->updateFullForced();
+			}
+		}, _showLastSeen->lifetime());
+
+		_controller->session().api().userPrivacy().value(
+			Api::UserPrivacy::Key::LastSeen
+		) | rpl::filter([=](Api::UserPrivacy::Rule rule) {
+			return (rule.option == Api::UserPrivacy::Option::Everyone);
+		}) | rpl::start_with_next([=] {
+			if (user->lastseen().isHiddenByMe()) {
+				user->updateFullForced();
+			}
+		}, _showLastSeen->lifetime());
+	} else {
+		_showLastSeen->hide();
+	}
+
+	using TextTransform = Ui::RoundButton::TextTransform;
+	_showLastSeen->setTextTransform(TextTransform::NoTransform);
+	_showLastSeen->setFullRadius(true);
+
+	_showLastSeen->setClickedCallback([=] {
+		const auto type = Ui::ShowOrPremium::LastSeen;
+		auto box = Box(Ui::ShowOrPremiumBox, type, user->shortName(), [=] {
+			_controller->session().api().userPrivacy().save(
+				::Api::UserPrivacy::Key::LastSeen,
+				{});
+		}, [=] {
+			::Settings::ShowPremium(_controller, u"lastseen_hidden"_q);
+		});
+		_controller->show(std::move(box));
+	});
 }
 
 void Cover::setupChildGeometry() {
-	using namespace rpl::mappers;
-	rpl::combine(
-		toggleShownValue(),
-		widthValue(),
-		_2
+	widthValue(
 	) | rpl::start_with_next([this](int newWidth) {
-		_userpic->moveToLeft(
-			st::infoProfilePhotoLeft,
-			st::infoProfilePhotoTop,
-			newWidth);
+		if (_userpic) {
+			_userpic->moveToLeft(_st.photoLeft, _st.photoTop, newWidth);
+		} else {
+			_iconButton->moveToLeft(_st.photoLeft, _st.photoTop, newWidth);
+		}
+		if (_changePersonal) {
+			_changePersonal->moveToLeft(
+				(_st.photoLeft
+					+ _st.photo.photoSize
+					- _changePersonal->width()
+					+ st::infoEditContactPersonalLeft),
+				(_userpic->y()
+					+ _userpic->height()
+					- _changePersonal->height()));
+		}
 		refreshNameGeometry(newWidth);
 		refreshStatusGeometry(newWidth);
 	}, lifetime());
 }
 
 Cover *Cover::setOnlineCount(rpl::producer<int> &&count) {
-	std::move(
-		count
-	) | rpl::start_with_next([this](int count) {
-		_onlineCount = count;
-		refreshStatusText();
-	}, lifetime());
+	_onlineCount = std::move(count);
 	return this;
+}
+
+std::optional<QImage> Cover::updatedPersonalPhoto() const {
+	return _personalChosen;
 }
 
 void Cover::initViewers(rpl::producer<QString> title) {
@@ -313,81 +472,108 @@ void Cover::initViewers(rpl::producer<QString> title) {
 		refreshNameGeometry(width());
 	}, lifetime());
 
-	_peer->session().changes().peerFlagsValue(
-		_peer,
-		Flag::OnlineStatus | Flag::Members
-	) | rpl::start_with_next(
-		[=] { refreshStatusText(); },
-		lifetime());
-	if (!_peer->isUser()) {
+	rpl::combine(
 		_peer->session().changes().peerFlagsValue(
 			_peer,
-			Flag::Rights
-		) | rpl::start_with_next(
-			[=] { refreshUploadPhotoOverlay(); },
-			lifetime());
-	} else if (_peer->isSelf()) {
-		refreshUploadPhotoOverlay();
-	}
-	BadgeValue(
-		_peer
-	) | rpl::start_with_next([=](Badge badge) {
-		setBadge(badge);
+			Flag::OnlineStatus | Flag::Members),
+		_onlineCount.value()
+	) | rpl::start_with_next([=] {
+		refreshStatusText();
 	}, lifetime());
+
+	_peer->session().changes().peerFlagsValue(
+		_peer,
+		(_peer->isUser() ? Flag::IsContact : Flag::Rights)
+	) | rpl::start_with_next([=] {
+		refreshUploadPhotoOverlay();
+	}, lifetime());
+
+	setupChangePersonal();
 }
 
 void Cover::refreshUploadPhotoOverlay() {
+	if (!_userpic) {
+		return;
+	} else if (_role == Role::EditContact) {
+		_userpic->setAttribute(Qt::WA_TransparentForMouseEvents);
+		return;
+	}
+
 	_userpic->switchChangePhotoOverlay([&] {
 		if (const auto chat = _peer->asChat()) {
 			return chat->canEditInformation();
 		} else if (const auto channel = _peer->asChannel()) {
 			return channel->canEditInformation();
+		} else if (const auto user = _peer->asUser()) {
+			return user->isSelf()
+				|| (user->isContact()
+					&& !user->isInaccessible()
+					&& !user->isServiceUser());
 		}
-		return _peer->isSelf();
-	}());
+		Unexpected("Peer type in Info::Profile::Cover.");
+	}(), [=](Ui::UserpicButton::ChosenImage chosen) {
+		using ChosenType = Ui::UserpicButton::ChosenType;
+		auto result = Api::PeerPhoto::UserPhoto{
+			base::take<QImage>(chosen.image), // Strange MSVC bug with take.
+			chosen.markup.documentId,
+			chosen.markup.colors,
+		};
+		switch (chosen.type) {
+		case ChosenType::Set:
+			_userpic->showCustom(base::duplicate(result.image));
+			_peer->session().api().peerPhoto().upload(
+				_peer,
+				std::move(result));
+			break;
+		case ChosenType::Suggest:
+			_peer->session().api().peerPhoto().suggest(
+				_peer,
+				std::move(result));
+			break;
+		}
+	});
+
+	if (const auto user = _peer->asUser()) {
+		_userpic->resetPersonalRequests(
+		) | rpl::start_with_next([=] {
+			user->session().api().peerPhoto().clearPersonal(user);
+			_userpic->showSource(Ui::UserpicButton::Source::PeerPhoto);
+		}, lifetime());
+	}
 }
 
-void Cover::setBadge(Badge badge) {
-	if (_badge == badge) {
+void Cover::setupChangePersonal() {
+	if (!_changePersonal) {
 		return;
 	}
-	_badge = badge;
-	_verifiedCheck.destroy();
-	_scamFakeBadge.destroy();
-	switch (_badge) {
-	case Badge::Verified:
-		_verifiedCheck.create(this);
-		_verifiedCheck->show();
-		_verifiedCheck->resize(st::infoVerifiedCheck.size());
-		_verifiedCheck->paintRequest(
-		) | rpl::start_with_next([check = _verifiedCheck.data()]{
-			Painter p(check);
-			st::infoVerifiedCheck.paint(p, 0, 0, check->width());
-			}, _verifiedCheck->lifetime());
-		break;
-	case Badge::Scam:
-	case Badge::Fake: {
-		const auto fake = (_badge == Badge::Fake);
-		const auto size = Ui::ScamBadgeSize(fake);
-		const auto skip = st::infoVerifiedCheckPosition.x();
-		_scamFakeBadge.create(this);
-		_scamFakeBadge->show();
-		_scamFakeBadge->resize(
-			size.width() + 2 * skip,
-			size.height() + 2 * skip);
-		_scamFakeBadge->paintRequest(
-		) | rpl::start_with_next([=, badge = _scamFakeBadge.data()]{
-			Painter p(badge);
-			Ui::DrawScamBadge(
-				fake,
-				p,
-				badge->rect().marginsRemoved({ skip, skip, skip, skip }),
-				badge->width(),
-				st::attentionButtonFg);
-			}, _scamFakeBadge->lifetime());
-	} break;
-	}
-	refreshNameGeometry(width());
+
+	_changePersonal->chosenImages(
+	) | rpl::start_with_next([=](Ui::UserpicButton::ChosenImage &&chosen) {
+		if (chosen.type == Ui::UserpicButton::ChosenType::Suggest) {
+			_peer->session().api().peerPhoto().suggest(
+				_peer,
+				{
+					std::move(chosen.image),
+					chosen.markup.documentId,
+					chosen.markup.colors,
+				});
+		} else {
+			_personalChosen = std::move(chosen.image);
+			_userpic->showCustom(base::duplicate(*_personalChosen));
+			_changePersonal->overrideHasPersonalPhoto(true);
+			_changePersonal->showSource(
+				Ui::UserpicButton::Source::NonPersonalIfHasPersonal);
+		}
+	}, _changePersonal->lifetime());
+
+	_changePersonal->resetPersonalRequests(
+	) | rpl::start_with_next([=] {
+		_personalChosen = QImage();
+		_userpic->showSource(
+			Ui::UserpicButton::Source::NonPersonalPhoto);
+		_changePersonal->overrideHasPersonalPhoto(false);
+		_changePersonal->showCustom(QImage());
+	}, _changePersonal->lifetime());
 }
 
 void Cover::refreshStatusText() {
@@ -408,24 +594,26 @@ void Cover::refreshStatusText() {
 				_refreshStatusTimer.callOnce(updateIn);
 			}
 			return showOnline
-				? PlainLink(result)
+				? Ui::Text::Colorized(result)
 				: TextWithEntities{ .text = result };
 		} else if (auto chat = _peer->asChat()) {
 			if (!chat->amIn()) {
 				return tr::lng_chat_status_unaccessible({}, WithEntities);
 			}
-			auto fullCount = std::max(
+			const auto onlineCount = _onlineCount.current();
+			const auto fullCount = std::max(
 				chat->count,
 				int(chat->participants.size()));
-			return { .text = ChatStatusText(fullCount, _onlineCount, true) };
+			return { .text = ChatStatusText(fullCount, onlineCount, true) };
 		} else if (auto channel = _peer->asChannel()) {
-			auto fullCount = qMax(channel->membersCount(), 1);
+			const auto onlineCount = _onlineCount.current();
+			const auto fullCount = qMax(channel->membersCount(), 1);
 			auto result = ChatStatusText(
 				fullCount,
-				_onlineCount,
+				onlineCount,
 				channel->isMegagroup());
 			return hasMembersLink
-				? PlainLink(result)
+				? Ui::Text::Link(result)
 				: TextWithEntities{ .text = result };
 		}
 		return tr::lng_chat_status_unaccessible(tr::now, WithEntities);
@@ -443,90 +631,27 @@ Cover::~Cover() {
 }
 
 void Cover::refreshNameGeometry(int newWidth) {
-	auto nameLeft = st::infoProfileNameLeft;
-	auto nameTop = st::infoProfileNameTop;
-	auto nameWidth = newWidth
-		- nameLeft
-		- st::infoProfileNameRight
-		- toggleSkip();
-	if (_verifiedCheck) {
-		nameWidth -= st::infoVerifiedCheckPosition.x()
-			+ _verifiedCheck->width();
-	} else if (_scamFakeBadge) {
-		nameWidth -= st::infoVerifiedCheckPosition.x()
-			+ _scamFakeBadge->width();
+	auto nameWidth = newWidth - _st.nameLeft - _st.rightSkip;
+	if (const auto widget = _badge->widget()) {
+		nameWidth -= st::infoVerifiedCheckPosition.x() + widget->width();
 	}
 	_name->resizeToNaturalWidth(nameWidth);
-	_name->moveToLeft(nameLeft, nameTop, newWidth);
-	if (_verifiedCheck) {
-		const auto checkLeft = nameLeft
-			+ _name->width()
-			+ st::infoVerifiedCheckPosition.x();
-		const auto checkTop = nameTop
-			+ st::infoVerifiedCheckPosition.y();
-		_verifiedCheck->moveToLeft(checkLeft, checkTop, newWidth);
-	} else if (_scamFakeBadge) {
-		const auto skip = st::infoVerifiedCheckPosition.x();
-		const auto badgeLeft = nameLeft
-			+ _name->width()
-			+ st::infoVerifiedCheckPosition.x()
-			- skip;
-		const auto badgeTop = nameTop
-			+ (_name->height() - _scamFakeBadge->height()) / 2;
-		_scamFakeBadge->moveToLeft(badgeLeft, badgeTop, newWidth);
-	}
+	_name->moveToLeft(_st.nameLeft, _st.nameTop, newWidth);
+	const auto badgeLeft = _st.nameLeft + _name->width();
+	const auto badgeTop = _st.nameTop;
+	const auto badgeBottom = _st.nameTop + _name->height();
+	_badge->move(badgeLeft, badgeTop, badgeBottom);
 }
 
 void Cover::refreshStatusGeometry(int newWidth) {
-	auto statusWidth = newWidth
-		- st::infoProfileStatusLeft
-		- st::infoProfileStatusRight
-		- toggleSkip();
+	auto statusWidth = newWidth - _st.statusLeft - _st.rightSkip;
 	_status->resizeToWidth(statusWidth);
-	_status->moveToLeft(
-		st::infoProfileStatusLeft,
-		st::infoProfileStatusTop,
+	_status->moveToLeft(_st.statusLeft, _st.statusTop, newWidth);
+	const auto left = _st.statusLeft + _status->textMaxWidth();
+	_showLastSeen->moveToLeft(
+		left + _st.showLastSeenPosition.x(),
+		_st.showLastSeenPosition.y(),
 		newWidth);
 }
 
-QMargins SharedMediaCover::getMargins() const {
-	return QMargins(0, 0, 0, st::infoSharedMediaBottomSkip);
-}
-
-SharedMediaCover::SharedMediaCover(QWidget *parent)
-: SectionWithToggle(parent, st::infoSharedMediaCoverHeight) {
-	createLabel();
-}
-
-SharedMediaCover *SharedMediaCover::setToggleShown(rpl::producer<bool> &&shown) {
-	return static_cast<SharedMediaCover*>(
-		SectionWithToggle::setToggleShown(std::move(shown)));
-}
-
-void SharedMediaCover::createLabel() {
-	using namespace rpl::mappers;
-	auto label = object_ptr<Ui::FlatLabel>(
-		this,
-		tr::lng_profile_shared_media() | Ui::Text::ToUpper(),
-		st::infoBlockHeaderLabel);
-	label->setAttribute(Qt::WA_TransparentForMouseEvents);
-
-	rpl::combine(
-		toggleShownValue(),
-		widthValue(),
-		_2
-	) | rpl::start_with_next([this, weak = label.data()](int newWidth) {
-		auto availableWidth = newWidth
-			- st::infoBlockHeaderPosition.x()
-			- st::infoSharedMediaButton.padding.right()
-			- toggleSkip();
-		weak->resizeToWidth(availableWidth);
-		weak->moveToLeft(
-			st::infoBlockHeaderPosition.x(),
-			st::infoBlockHeaderPosition.y(),
-			newWidth);
-	}, label->lifetime());
-}
-
-} // namespace Profile
-} // namespace Info
+} // namespace Info::Profile

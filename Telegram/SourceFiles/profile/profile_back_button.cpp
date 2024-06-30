@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 //#include "history/view/history_view_top_bar_widget.h"
 #include "main/main_session.h"
 #include "data/data_session.h"
+#include "ui/painter.h"
 #include "styles/style_widgets.h"
 #include "styles/style_window.h"
 #include "styles/style_profile.h"
@@ -24,7 +25,7 @@ BackButton::BackButton(
 	rpl::producer<bool> oneColumnValue)
 : Ui::AbstractButton(parent)
 , _session(session)
-, _text(text.toUpper()) {
+, _text(text) {
 	setCursor(style::cur_pointer);
 
 	std::move(
@@ -46,7 +47,7 @@ BackButton::BackButton(
 }
 
 void BackButton::setText(const QString &text) {
-	_text = text.toUpper();
+	_text = text;
 	update();
 }
 

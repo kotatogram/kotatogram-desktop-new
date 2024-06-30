@@ -7,10 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/player/media_player_float.h"
 
-#include <rpl/merge.h>
 #include "data/data_document.h"
 #include "data/data_session.h"
-#include "data/data_media_types.h"
 #include "history/view/media/history_view_media.h"
 #include "history/history_item.h"
 #include "history/history.h"
@@ -25,8 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/core_settings.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
-#include "ui/ui_utility.h"
-#include "facades.h"
+#include "ui/painter.h"
 #include "styles/style_media_player.h"
 #include "styles/style_chat.h"
 
@@ -36,6 +33,55 @@ namespace Media {
 namespace Player {
 
 using DoubleClickedCallback = Fn<void(not_null<const HistoryItem*>)>;
+
+RoundPainter::RoundPainter(not_null<HistoryItem*> item)
+: _item(item) {
+}
+
+bool RoundPainter::fillFrame(const QSize &size) {
+	auto creating = _frame.isNull();
+	const auto ratio = style::DevicePixelRatio();
+	if (creating) {
+		_frame = QImage(
+			size * ratio,
+			QImage::Format_ARGB32_Premultiplied);
+		_frame.setDevicePixelRatio(ratio);
+	}
+	auto frameInner = [&] {
+		return QRect(QPoint(), _frame.size() / ratio);
+	};
+	if (const auto streamed = instance()->roundVideoStreamed(_item)) {
+		auto request = Streaming::FrameRequest::NonStrict();
+		request.outer = request.resize = _frame.size();
+		if (_roundingMask.size() != request.outer) {
+			_roundingMask = Images::EllipseMask(frameInner().size());
+		}
+		request.mask = _roundingMask;
+		auto frame = streamed->frame(request);
+		if (!frame.isNull()) {
+			_frame.fill(Qt::transparent);
+
+			auto p = QPainter(&_frame);
+			PainterHighQualityEnabler hq(p);
+			p.drawImage(frameInner(), frame);
+			return true;
+		}
+	}
+	if (creating) {
+		_frame.fill(Qt::transparent);
+
+		auto p = QPainter(&_frame);
+		PainterHighQualityEnabler hq(p);
+		p.setPen(Qt::NoPen);
+		p.setBrush(st::imageBg);
+		p.drawEllipse(frameInner());
+	}
+	return false;
+}
+
+const QImage &RoundPainter::frame() const {
+	return _frame;
+}
 
 Float::Float(
 	QWidget *parent,
@@ -59,6 +105,7 @@ Float::Float(
 	auto size = 2 * margin + st::mediaPlayerFloatSize;
 	resize(size, size);
 
+	_roundPainter = std::make_unique<RoundPainter>(item);
 	prepareShadow();
 
 	document->session().data().itemRepaintRequest(
@@ -155,6 +202,7 @@ void Float::pauseResume() {
 void Float::detach() {
 	if (_item) {
 		_item = nullptr;
+		_roundPainter = nullptr;
 		if (_toggleCallback) {
 			_toggleCallback(false);
 		}
@@ -162,11 +210,14 @@ void Float::detach() {
 }
 
 void Float::prepareShadow() {
-	auto shadow = QImage(size() * cIntRetinaFactor(), QImage::Format_ARGB32_Premultiplied);
+	const auto ratio = style::DevicePixelRatio();
+	auto shadow = QImage(
+		size() * ratio,
+		QImage::Format_ARGB32_Premultiplied);
 	shadow.fill(Qt::transparent);
-	shadow.setDevicePixelRatio(cRetinaFactor());
+	shadow.setDevicePixelRatio(ratio);
 	{
-		Painter p(&shadow);
+		auto p = QPainter(&shadow);
 		PainterHighQualityEnabler hq(p);
 		p.setPen(Qt::NoPen);
 		p.setBrush(st::shadowFg);
@@ -182,17 +233,20 @@ QRect Float::getInnerRect() const {
 }
 
 void Float::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 
 	p.setOpacity(_opacity);
 	p.drawPixmap(0, 0, _shadow);
 
-	if (!fillFrame() && _toggleCallback) {
+	const auto inner = getInnerRect();
+	if (!(_roundPainter && _roundPainter->fillFrame(inner.size()))
+		&& _toggleCallback) {
 		_toggleCallback(false);
 	}
 
-	auto inner = getInnerRect();
-	p.drawImage(inner.topLeft(), _frame);
+	if (_roundPainter) {
+		p.drawImage(inner.topLeft(), _roundPainter->frame());
+	}
 
 	const auto playback = getPlayback();
 	const auto progress = playback ? playback->value() : 1.;
@@ -204,8 +258,8 @@ void Float::paintEvent(QPaintEvent *e) {
 		p.setPen(pen);
 		p.setOpacity(_opacity * st::historyVideoMessageProgressOpacity);
 
-		auto from = QuarterArcLength;
-		auto len = -qRound(FullArcLength * progress);
+		auto from = arc::kQuarterLength;
+		auto len = -qRound(arc::kFullLength * progress);
 		auto stepInside = st::radialLine / 2;
 		{
 			PainterHighQualityEnabler hq(p);
@@ -227,43 +281,6 @@ View::PlaybackProgress *Float::getPlayback() const {
 
 bool Float::hasFrame() const {
 	return (getStreamed() != nullptr);
-}
-
-bool Float::fillFrame() {
-	auto creating = _frame.isNull();
-	if (creating) {
-		_frame = QImage(
-			getInnerRect().size() * cIntRetinaFactor(),
-			QImage::Format_ARGB32_Premultiplied);
-		_frame.setDevicePixelRatio(cRetinaFactor());
-	}
-	auto frameInner = [&] {
-		return QRect(QPoint(), _frame.size() / cIntRetinaFactor());
-	};
-	if (const auto streamed = getStreamed()) {
-		auto request = Streaming::FrameRequest::NonStrict();
-		request.outer = request.resize = _frame.size();
-		request.radius = ImageRoundRadius::Ellipse;
-		auto frame = streamed->frame(request);
-		if (!frame.isNull()) {
-			_frame.fill(Qt::transparent);
-
-			Painter p(&_frame);
-			PainterHighQualityEnabler hq(p);
-			p.drawImage(frameInner(), frame);
-			return true;
-		}
-	}
-	if (creating) {
-		_frame.fill(Qt::transparent);
-
-		Painter p(&_frame);
-		PainterHighQualityEnabler hq(p);
-		p.setPen(Qt::NoPen);
-		p.setBrush(st::imageBg);
-		p.drawEllipse(frameInner());
-	}
-	return false;
 }
 
 void Float::repaintItem() {

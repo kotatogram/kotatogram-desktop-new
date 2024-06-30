@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/image/image_prepare.h"
 #include "ui/widgets/shadow.h"
+#include "ui/painter.h"
 #include "styles/style_calls.h" // st::callShadow.
 
 namespace Media::View {
@@ -20,45 +21,43 @@ namespace {
 	if (!rotation) {
 		return request;
 	}
-	const auto unrotatedCorner = [&](RectPart corner) {
-		if (!(request.corners & corner)) {
-			return RectPart(0);
-		}
-		switch (corner) {
-		case RectPart::TopLeft:
+	const auto unrotatedCorner = [&](int index) {
+		using namespace Images;
+		switch (index) {
+		case kTopLeft:
 			return (rotation == 90)
-				? RectPart::BottomLeft
+				? kBottomLeft
 				: (rotation == 180)
-				? RectPart::BottomRight
-				: RectPart::TopRight;
-		case RectPart::TopRight:
+				? kBottomRight
+				: kTopRight;
+		case kTopRight:
 			return (rotation == 90)
-				? RectPart::TopLeft
+				? kTopLeft
 				: (rotation == 180)
-				? RectPart::BottomLeft
-				: RectPart::BottomRight;
-		case RectPart::BottomRight:
+				? kBottomLeft
+				: kBottomRight;
+		case kBottomRight:
 			return (rotation == 90)
-				? RectPart::TopRight
+				? kTopRight
 				: (rotation == 180)
-				? RectPart::TopLeft
-				: RectPart::BottomLeft;
-		case RectPart::BottomLeft:
+				? kTopLeft
+				: kBottomLeft;
+		case kBottomLeft:
 			return (rotation == 90)
-				? RectPart::BottomRight
+				? kBottomRight
 				: (rotation == 180)
-				? RectPart::TopRight
-				: RectPart::TopLeft;
+				? kTopRight
+				: kTopLeft;
 		}
 		Unexpected("Corner in rotateCorner.");
 	};
 	auto result = request;
 	result.outer = FlipSizeByRotation(request.outer, rotation);
 	result.resize = FlipSizeByRotation(request.resize, rotation);
-	result.corners = unrotatedCorner(RectPart::TopLeft)
-		| unrotatedCorner(RectPart::TopRight)
-		| unrotatedCorner(RectPart::BottomRight)
-		| unrotatedCorner(RectPart::BottomLeft);
+	auto rounding = result.rounding;
+	for (auto i = 0; i != 4; ++i) {
+		result.rounding.p[unrotatedCorner(i)] = rounding.p[i];
+	}
 	return result;
 }
 
@@ -136,23 +135,23 @@ void Pip::RendererSW::paintButton(
 
 Pip::FrameRequest Pip::RendererSW::frameRequest(
 		ContentGeometry geometry) const {
+	using namespace Images;
 	auto result = FrameRequest();
 	result.outer = geometry.inner.size() * style::DevicePixelRatio();
 	result.resize = result.outer;
-	result.corners = RectPart(0)
-		| ((geometry.attached & (RectPart::Left | RectPart::Top))
-			? RectPart(0)
-			: RectPart::TopLeft)
-		| ((geometry.attached & (RectPart::Top | RectPart::Right))
-			? RectPart(0)
-			: RectPart::TopRight)
-		| ((geometry.attached & (RectPart::Right | RectPart::Bottom))
-			? RectPart(0)
-			: RectPart::BottomRight)
-		| ((geometry.attached & (RectPart::Bottom | RectPart::Left))
-			? RectPart(0)
-			: RectPart::BottomLeft);
-	result.radius = ImageRoundRadius::Large;
+	result.rounding = CornersMaskRef(CornersMask(ImageRoundRadius::Large));
+	if (geometry.attached & (RectPart::Top | RectPart::Left)) {
+		result.rounding.p[kTopLeft] = nullptr;
+	}
+	if (geometry.attached & (RectPart::Top | RectPart::Right)) {
+		result.rounding.p[kTopRight] = nullptr;
+	}
+	if (geometry.attached & (RectPart::Bottom | RectPart::Left)) {
+		result.rounding.p[kBottomLeft] = nullptr;
+	}
+	if (geometry.attached & (RectPart::Bottom | RectPart::Right)) {
+		result.rounding.p[kBottomRight] = nullptr;
+	}
 	return UnrotateRequest(result, geometry.rotation);
 }
 
@@ -168,25 +167,13 @@ QImage Pip::RendererSW::staticContentByRequest(
 	}
 	_preparedStaticKey = image.cacheKey();
 	_preparedStaticRequest = request;
-	//_preparedCoverStorage = Streaming::PrepareByRequest(
-	//	_instance.info().video.cover,
-	//	false,
-	//	_instance.info().video.rotation,
-	//	request,
-	//	std::move(_preparedCoverStorage));
-	using Option = Images::Option;
-	const auto corner = [&](RectPart part, Option skip) {
-		return !(request.corners & part) ? skip : Option();
-	};
-	const auto options = Option::RoundLarge
-		| corner(RectPart::TopLeft, Option::RoundSkipTopLeft)
-		| corner(RectPart::TopRight, Option::RoundSkipTopRight)
-		| corner(RectPart::BottomLeft, Option::RoundSkipBottomLeft)
-		| corner(RectPart::BottomRight, Option::RoundSkipBottomRight);
-	_preparedStaticContent = Images::Prepare(
-		image,
-		request.resize,
-		{ .options = options, .outer = request.outer });
+	_preparedStaticContent = Images::Round(
+		Images::Prepare(
+			image,
+			request.resize,
+			{ .outer = request.outer / style::DevicePixelRatio() }),
+		request.rounding);
+
 	return _preparedStaticContent;
 }
 

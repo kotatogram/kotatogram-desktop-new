@@ -20,6 +20,7 @@ public:
 	void remove(SharedMediaRemoveOne &&query);
 	void remove(SharedMediaRemoveAll &&query);
 	void invalidate(SharedMediaInvalidateBottom &&query);
+	void unload(SharedMediaUnloadThread &&query);
 	rpl::producer<SharedMediaResult> query(SharedMediaQuery &&query) const;
 	SharedMediaResult snapshot(const SharedMediaQuery &query) const;
 	bool empty(const SharedMediaKey &key) const;
@@ -28,6 +29,7 @@ public:
 	rpl::producer<SharedMediaRemoveAll> sharedMediaAllRemoved() const;
 	rpl::producer<SharedMediaInvalidateBottom> sharedMediaBottomInvalidated() const;
 
+	void add(UserPhotosSetBack &&query);
 	void add(UserPhotosAddNew &&query);
 	void add(UserPhotosAddSlice &&query);
 	void remove(UserPhotosRemoveOne &&query);
@@ -65,6 +67,10 @@ void Facade::Impl::invalidate(SharedMediaInvalidateBottom &&query) {
 	_sharedMedia.invalidate(std::move(query));
 }
 
+void Facade::Impl::unload(SharedMediaUnloadThread &&query) {
+	_sharedMedia.unload(std::move(query));
+}
+
 rpl::producer<SharedMediaResult> Facade::Impl::query(SharedMediaQuery &&query) const {
 	return _sharedMedia.query(std::move(query));
 }
@@ -91,6 +97,10 @@ rpl::producer<SharedMediaRemoveAll> Facade::Impl::sharedMediaAllRemoved() const 
 
 rpl::producer<SharedMediaInvalidateBottom> Facade::Impl::sharedMediaBottomInvalidated() const {
 	return _sharedMedia.bottomInvalidated();
+}
+
+void Facade::Impl::add(UserPhotosSetBack &&query) {
+	return _userPhotos.add(std::move(query));
 }
 
 void Facade::Impl::add(UserPhotosAddNew &&query) {
@@ -144,6 +154,10 @@ void Facade::invalidate(SharedMediaInvalidateBottom &&query) {
 	_impl->invalidate(std::move(query));
 }
 
+void Facade::unload(SharedMediaUnloadThread &&query) {
+	_impl->unload(std::move(query));
+}
+
 rpl::producer<SharedMediaResult> Facade::query(SharedMediaQuery &&query) const {
 	return _impl->query(std::move(query));
 }
@@ -170,6 +184,10 @@ rpl::producer<SharedMediaRemoveAll> Facade::sharedMediaAllRemoved() const {
 
 rpl::producer<SharedMediaInvalidateBottom> Facade::sharedMediaBottomInvalidated() const {
 	return _impl->sharedMediaBottomInvalidated();
+}
+
+void Facade::add(UserPhotosSetBack &&query) {
+	return _impl->add(std::move(query));
 }
 
 void Facade::add(UserPhotosAddNew &&query) {

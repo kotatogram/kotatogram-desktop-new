@@ -21,6 +21,8 @@ class Session;
 } // namespace Main
 
 namespace Lottie {
+class SinglePlayer;
+class FrameProvider;
 struct ColorReplacements;
 } // namespace Lottie
 
@@ -32,6 +34,10 @@ namespace Emoji {
 class UniversalImages;
 } // namespace Emoji
 } // namespace Ui
+
+namespace HistoryView {
+class Element;
+} // namespace HistoryView
 
 namespace Stickers {
 
@@ -46,6 +52,8 @@ struct LargeEmojiImage {
 
 class EmojiPack final {
 public:
+	using ViewElement = HistoryView::Element;
+
 	struct Sticker {
 		DocumentData *document = nullptr;
 		const Lottie::ColorReplacements *replacements = nullptr;
@@ -61,14 +69,33 @@ public:
 	explicit EmojiPack(not_null<Main::Session*> session);
 	~EmojiPack();
 
-	bool add(not_null<HistoryItem*> item);
-	void remove(not_null<const HistoryItem*> item);
+	bool add(not_null<ViewElement*> view);
+	void remove(not_null<const ViewElement*> view);
 
+	[[nodiscard]] Sticker stickerForEmoji(EmojiPtr emoji);
 	[[nodiscard]] Sticker stickerForEmoji(const IsolatedEmoji &emoji);
 	[[nodiscard]] std::shared_ptr<LargeEmojiImage> image(EmojiPtr emoji);
 
+	[[nodiscard]] EmojiPtr chooseInteractionEmoji(
+		not_null<HistoryItem*> item) const;
+	[[nodiscard]] EmojiPtr chooseInteractionEmoji(
+		const QString &emoticon) const;
 	[[nodiscard]] auto animationsForEmoji(EmojiPtr emoji) const
 		-> const base::flat_map<int, not_null<DocumentData*>> &;
+	[[nodiscard]] bool hasAnimationsFor(not_null<HistoryItem*> item) const;
+	[[nodiscard]] bool hasAnimationsFor(const QString &emoticon) const;
+	[[nodiscard]] int animationsVersion() const {
+		return _animationsVersion;
+	}
+	[[nodiscard]] rpl::producer<> refreshed() const {
+		return _refreshed.events();
+	}
+
+	[[nodiscard]] std::unique_ptr<Lottie::SinglePlayer> effectPlayer(
+		not_null<DocumentData*> document,
+		QByteArray data,
+		QString filepath,
+		bool premium);
 
 private:
 	class ImageLoader;
@@ -88,20 +115,30 @@ private:
 		-> base::flat_map<uint64, base::flat_set<int>>;
 	void refreshAll();
 	void refreshItems(EmojiPtr emoji);
-	void refreshItems(const base::flat_set<not_null<HistoryItem*>> &list);
+	void refreshItems(const base::flat_set<not_null<ViewElement*>> &list);
+	void refreshItems(const base::flat_set<not_null<HistoryItem*>> &items);
 
-	not_null<Main::Session*> _session;
+	const not_null<Main::Session*> _session;
 	base::flat_map<EmojiPtr, not_null<DocumentData*>> _map;
 	base::flat_map<
 		IsolatedEmoji,
-		base::flat_set<not_null<HistoryItem*>>> _items;
+		base::flat_set<not_null<HistoryView::Element*>>> _items;
 	base::flat_map<EmojiPtr, std::weak_ptr<LargeEmojiImage>> _images;
 	mtpRequestId _requestId = 0;
 
+	base::flat_set<not_null<HistoryView::Element*>> _onlyCustomItems;
+
+	int _animationsVersion = 0;
 	base::flat_map<
 		EmojiPtr,
 		base::flat_map<int, not_null<DocumentData*>>> _animations;
 	mtpRequestId _animationsRequestId = 0;
+
+	base::flat_map<
+		not_null<DocumentData*>,
+		std::weak_ptr<Lottie::FrameProvider>> _sharedProviders;
+
+	rpl::event_stream<> _refreshed;
 
 	rpl::lifetime _lifetime;
 

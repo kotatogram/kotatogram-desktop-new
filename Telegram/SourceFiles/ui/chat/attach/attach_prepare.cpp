@@ -35,6 +35,22 @@ bool PreparedFile::canBeInAlbumType(AlbumType album) const {
 	return CanBeInAlbumType(type, album);
 }
 
+bool PreparedFile::isSticker() const {
+	Expects(information != nullptr);
+
+	return (type == PreparedFile::Type::Photo)
+		&& Core::IsMimeSticker(information->filemime);
+}
+
+bool PreparedFile::isGifv() const {
+	Expects(information != nullptr);
+
+	using Video = Ui::PreparedFileInformation::Video;
+	return (type == PreparedFile::Type::Video)
+		&& v::is<Video>(information->media)
+		&& v::get<Video>(information->media).isGifv;
+}
+
 AlbumType PreparedFile::albumType(bool sendImagesAsPhotos) const {
 	switch (type) {
 	case Type::Photo:
@@ -138,7 +154,7 @@ bool PreparedList::canBeSentInSlowmodeWith(const PreparedList &other) const {
 	return !hasNonGrouping && (!hasFiles || !hasVideos);
 }
 
-bool PreparedList::canAddCaption(bool sendingAlbum) const {
+bool PreparedList::canAddCaption(bool sendingAlbum, bool compress) const {
 	if (!filesToProcess.empty()
 		|| files.empty()
 		|| files.size() > kMaxAlbumCount) {
@@ -146,11 +162,9 @@ bool PreparedList::canAddCaption(bool sendingAlbum) const {
 	}
 	if (files.size() == 1) {
 		Assert(files.front().information != nullptr);
-		const auto isSticker = Core::IsMimeSticker(
-			files.front().information->filemime)
-			|| files.front().path.endsWith(
-				qstr(".tgs"),
-				Qt::CaseInsensitive);
+		const auto isSticker = (!compress
+				&& Core::IsMimeSticker(files.front().information->filemime))
+			|| files.front().path.endsWith(u".tgs"_q, Qt::CaseInsensitive);
 		return !isSticker;
 	} else if (!sendingAlbum) {
 		return false;
@@ -196,6 +210,20 @@ bool PreparedList::hasSendImagesAsPhotosOption(bool slowmode) const {
 	return slowmode
 		? ((files.size() == 1) && (files.front().type == Type::Photo))
 		: ranges::contains(files, Type::Photo, &PreparedFile::type);
+}
+
+bool PreparedList::canHaveEditorHintLabel() const {
+	for (const auto &file : files) {
+		if ((file.type == PreparedFile::Type::Photo)
+			&& !Core::IsMimeSticker(file.information->filemime)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool PreparedList::hasSticker() const {
+	return ranges::any_of(files, &PreparedFile::isSticker);
 }
 
 int MaxAlbumItems() {
@@ -275,6 +303,27 @@ QPixmap PrepareSongCoverForThumbnail(QImage image, int size) {
 			.options = Option::RoundCircle,
 			.outer = { size, size },
 		}));
+}
+
+QPixmap BlurredPreviewFromPixmap(QPixmap pixmap, RectParts corners) {
+	const auto image = pixmap.toImage();
+	const auto skip = st::roundRadiusLarge * image.devicePixelRatio();
+	auto small = image.copy(
+		skip,
+		skip,
+		image.width() - 2 * skip,
+		image.height() - 2 * skip
+	).scaled(
+		40,
+		40,
+		Qt::KeepAspectRatioByExpanding,
+		Qt::SmoothTransformation);
+
+	using namespace Images;
+	return PixmapFromImage(Prepare(
+		Blur(std::move(small), true),
+		image.size(),
+		{ .options = RoundOptions(ImageRoundRadius::Large, corners) }));
 }
 
 } // namespace Ui

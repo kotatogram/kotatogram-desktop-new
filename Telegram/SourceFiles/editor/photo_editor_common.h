@@ -27,8 +27,11 @@ struct EditorData {
 	enum class CropType {
 		Rect,
 		Ellipse,
+		RoundedRect,
 	};
 
+	TextWithEntities about;
+	QString confirm;
 	CropType cropType = CropType::Rect;
 	bool keepAspectRatio = false;
 };

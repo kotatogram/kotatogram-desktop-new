@@ -25,8 +25,6 @@ def error(message):
 if sys.platform == 'win32' and 'COMSPEC' not in os.environ:
     error('COMSPEC environment variable is not set.')
 
-executePath = os.getcwd()
-scriptPath = os.path.dirname(os.path.realpath(__file__))
 scriptName = os.path.basename(scriptPath)
 
 arguments = sys.argv[1:]
@@ -59,4 +57,5 @@ if officialTarget != '':
                 arguments.append('-DTDESKTOP_API_HASH=' + apiHashMatch.group(1))
     if arch != '':
         arguments.append(arch)
+
 finish(run_cmake.run(scriptName, arguments))

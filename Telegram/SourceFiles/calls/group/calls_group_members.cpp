@@ -21,17 +21,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_group_call.h"
 #include "data/data_peer_values.h" // Data::CanWriteValue.
 #include "data/data_session.h" // Data::Session::invitedToCallUsers.
-#include "settings/settings_common.h" // Settings::CreateButton.
+#include "settings/settings_common.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/effects/cross_line.h"
+#include "ui/painter.h"
+#include "ui/power_saving.h"
 #include "core/application.h" // Core::App().domain, .activeWindow.
 #include "main/main_domain.h" // Core::App().domain().activate.
 #include "main/main_session.h"
-#include "main/main_account.h" // account().appConfig().
-#include "main/main_app_config.h" // appConfig().get<double>().
+#include "lang/lang_keys.h"
 #include "info/profile/info_profile_values.h" // Info::Profile::NameValue.
 #include "boxes/peers/edit_participants_box.h" // SubscribeToMigration.
 #include "boxes/peers/prepare_short_info_box.h" // PrepareShortInfo...
@@ -88,11 +89,11 @@ public:
 	void rowUpdateRow(not_null<Row*> row) override;
 	void rowScheduleRaisedHandStatusRemove(not_null<Row*> row) override;
 	void rowPaintIcon(
-		Painter &p,
+		QPainter &p,
 		QRect rect,
 		const IconState &state) override;
 	int rowPaintStatusIcon(
-		Painter &p,
+		QPainter &p,
 		int x,
 		int y,
 		int outerWidth,
@@ -235,10 +236,10 @@ Members::Controller::Controller(
 	}, _lifetime);
 
 	rpl::combine(
-		rpl::single(anim::Disabled()) | rpl::then(anim::Disables()),
+		PowerSaving::OnValue(PowerSaving::kCalls),
 		Core::App().appDeactivatedValue()
-	) | rpl::start_with_next([=](bool animDisabled, bool deactivated) {
-		const auto hide = !(!animDisabled && !deactivated);
+	) | rpl::start_with_next([=](bool disabled, bool deactivated) {
+		const auto hide = disabled || deactivated;
 
 		if (!(hide && _soundingAnimationHideLastTime)) {
 			_soundingAnimationHideLastTime = hide ? crl::now() : 0;
@@ -964,7 +965,7 @@ void Members::Controller::scheduleRaisedHandStatusRemove() {
 }
 
 void Members::Controller::rowPaintIcon(
-		Painter &p,
+		QPainter &p,
 		QRect rect,
 		const IconState &state) {
 	if (_mode == PanelMode::Wide
@@ -1076,7 +1077,7 @@ void Members::Controller::rowPaintIcon(
 }
 
 int Members::Controller::rowPaintStatusIcon(
-		Painter &p,
+		QPainter &p,
 		int x,
 		int y,
 		int outerWidth,
@@ -1190,15 +1191,12 @@ base::unique_qptr<Ui::PopupMenu> Members::Controller::createRowContextMenu(
 	const auto muteState = real->state();
 	const auto muted = (muteState == Row::State::Muted)
 		|| (muteState == Row::State::RaisedHand);
-	const auto addCover = true;
-	const auto addVolumeItem = !muted || isMe(participantPeer);
+	const auto addCover = !_call->rtmp();
+	const auto addVolumeItem = (!muted || isMe(participantPeer));
 	const auto admin = IsGroupCallAdmin(_peer, participantPeer);
 	const auto session = &_peer->session();
 	const auto getCurrentWindow = [=]() -> Window::SessionController* {
-		if (const auto window = Core::App().separateWindowForPeer(
-				participantPeer)) {
-			return window->sessionController();
-		} else if (const auto window = Core::App().activeWindow()) {
+		if (const auto window = Core::App().windowFor(participantPeer)) {
 			if (const auto controller = window->sessionController()) {
 				if (&controller->session() == session) {
 					return controller;
@@ -1259,11 +1257,11 @@ base::unique_qptr<Ui::PopupMenu> Members::Controller::createRowContextMenu(
 			result->menu(),
 			st::groupCallPopupCoverMenu,
 			st::groupCallMenuCover,
-			Info::Profile::NameValue(
-				participantPeer
-			) | rpl::map([](const auto &text) { return text.text; }),
+			Info::Profile::NameValue(participantPeer),
 			PrepareShortInfoStatus(participantPeer),
-			PrepareShortInfoUserpic(participantPeer)));
+			PrepareShortInfoUserpic(
+				participantPeer,
+				st::groupCallMenuCover)));
 
 		if (const auto about = participantPeer->about(); !about.isEmpty()) {
 			result->addAction(base::make_unique_q<AboutItem>(
@@ -1324,7 +1322,13 @@ base::unique_qptr<Ui::PopupMenu> Members::Controller::createRowContextMenu(
 			}
 		}
 
-		if (participant
+		if (_call->rtmp()) {
+			addMuteActionsToContextMenu(
+				result,
+				row->peer(),
+				false,
+				static_cast<Row*>(row.get()));
+		} else if (participant
 			&& (!isMe(participantPeer) || _peer->canManageGroupCall())
 			&& (participant->ssrc != 0
 				|| GetAdditionalAudioSsrc(participant->videoParams) != 0)) {
@@ -1428,7 +1432,7 @@ void Members::Controller::addMuteActionsToContextMenu(
 
 	auto mutesFromVolume = rpl::never<bool>() | rpl::type_erased();
 
-	const auto addVolumeItem = !muted || isMe(participantPeer);
+	const auto addVolumeItem = (!muted || isMe(participantPeer));
 	if (addVolumeItem) {
 		auto otherParticipantStateValue
 			= _call->otherParticipantStateValue(
@@ -1440,7 +1444,7 @@ void Members::Controller::addMuteActionsToContextMenu(
 			menu->menu(),
 			st::groupCallPopupVolumeMenu,
 			otherParticipantStateValue,
-			row->volume(),
+			_call->rtmp() ? _call->rtmpVolume() : row->volume(),
 			Group::kMaxVolume,
 			muted);
 
@@ -1483,13 +1487,14 @@ void Members::Controller::addMuteActionsToContextMenu(
 
 		menu->addAction(std::move(volumeItem));
 
-		if (!isMe(participantPeer)) {
+		if (!_call->rtmp() && !isMe(participantPeer)) {
 			menu->addSeparator();
 		}
 	};
 
 	const auto muteAction = [&]() -> QAction* {
 		if (muteState == Row::State::Invited
+			|| _call->rtmp()
 			|| isMe(participantPeer)
 			|| (muteState == Row::State::Inactive
 				&& participantIsCallAdmin
@@ -1636,7 +1641,7 @@ void Members::setupAddMember(not_null<GroupCall*> call) {
 			return rpl::single(false) | rpl::type_erased();
 		}
 		return rpl::combine(
-			Data::CanWriteValue(peer.get()),
+			Data::CanSendValue(peer, ChatRestriction::SendOther, false),
 			_call->joinAsValue()
 		) | rpl::map([=](bool can, not_null<PeerData*> joinAs) {
 			return can && joinAs->isSelf();
@@ -1679,13 +1684,11 @@ void Members::setupAddMember(not_null<GroupCall*> call) {
 			}
 			return;
 		}
-		auto addMember = Settings::CreateButton(
+		auto addMember = Settings::CreateButtonWithIcon(
 			_layout.get(),
 			tr::lng_group_call_invite(),
 			st::groupCallAddMember,
-			&st::groupCallAddMemberIcon,
-			st::groupCallAddMemberIconLeft,
-			&st::groupCallMemberInactiveIcon);
+			{ .icon = &st::groupCallAddMemberIcon });
 		addMember->clicks(
 		) | rpl::to_empty | rpl::start_to_stream(
 			_addMemberRequests,
@@ -1702,6 +1705,13 @@ void Members::setupAddMember(not_null<GroupCall*> call) {
 
 Row *Members::lookupRow(not_null<PeerData*> peer) const {
 	return _listController->findRow(peer);
+}
+
+not_null<MembersRow*> Members::rtmpFakeRow(not_null<PeerData*> peer) const {
+	if (!_rtmpFakeRow) {
+		_rtmpFakeRow = std::make_unique<Row>(_listController.get(), peer);
+	}
+	return _rtmpFakeRow.get();
 }
 
 void Members::setMode(PanelMode mode) {
@@ -1964,6 +1974,10 @@ void Members::peerListFinishSelectedRowsBunch() {
 void Members::peerListSetDescription(
 		object_ptr<Ui::FlatLabel> description) {
 	description.destroy();
+}
+
+std::shared_ptr<Main::SessionShow> Members::peerListUiShow() {
+	Unexpected("...Members::peerListUiShow");
 }
 
 } // namespace Calls::Group

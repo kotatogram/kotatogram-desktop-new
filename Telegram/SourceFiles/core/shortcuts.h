@@ -34,6 +34,20 @@ enum class Command {
 	ChatPinned3,
 	ChatPinned4,
 	ChatPinned5,
+	ChatPinned6,
+	ChatPinned7,
+	ChatPinned8,
+
+	ShowAccount1,
+	ShowAccount2,
+	ShowAccount3,
+	ShowAccount4,
+	ShowAccount5,
+	ShowAccount6,
+	ShowAccount7,
+	ShowAccount8,
+	ShowAccount9,
+	ShowAccountLast,
 
 	ShowAllChats,
 	ShowFolder1,
@@ -56,6 +70,8 @@ enum class Command {
 
 	ReadChat,
 
+	MediaViewerFullscreen,
+
 	SupportReloadTemplates,
 	SupportToggleMuted,
 	SupportScrollToCurrent,
@@ -66,17 +82,6 @@ enum class Command {
 	JumpToDate,
 	ReloadLang,
 	Restart,
-
-	ShowAccount1,
-	ShowAccount2,
-	ShowAccount3,
-	ShowAccount4,
-	ShowAccount5,
-	ShowAccount6,
-	ShowAccount7,
-	ShowAccount8,
-	ShowAccount9,
-	ShowAccountLast,
 };
 
 [[maybe_unused]] constexpr auto kShowFolder = {
@@ -126,8 +131,10 @@ rpl::producer<not_null<Request*>> Requests();
 void Start();
 void Finish();
 
+void Listen(not_null<QWidget*> widget);
+
 bool Launch(Command command);
-bool HandleEvent(not_null<QShortcutEvent*> event);
+bool HandleEvent(not_null<QObject*> object, not_null<QShortcutEvent*> event);
 
 const QStringList &Errors();
 

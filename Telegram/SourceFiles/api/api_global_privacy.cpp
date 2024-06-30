@@ -56,6 +56,15 @@ rpl::producer<bool> GlobalPrivacy::archiveAndMute() const {
 	return _archiveAndMute.value();
 }
 
+UnarchiveOnNewMessage GlobalPrivacy::unarchiveOnNewMessageCurrent() const {
+	return _unarchiveOnNewMessage.current();
+}
+
+auto GlobalPrivacy::unarchiveOnNewMessage() const
+-> rpl::producer<UnarchiveOnNewMessage> {
+	return _unarchiveOnNewMessage.value();
+}
+
 rpl::producer<bool> GlobalPrivacy::showArchiveAndMute() const {
 	using namespace rpl::mappers;
 
@@ -75,28 +84,105 @@ void GlobalPrivacy::dismissArchiveAndMuteSuggestion() {
 		u"AUTOARCHIVE_POPULAR"_q);
 }
 
-void GlobalPrivacy::update(bool archiveAndMute) {
+void GlobalPrivacy::updateHideReadTime(bool hide) {
+	update(
+		archiveAndMuteCurrent(),
+		unarchiveOnNewMessageCurrent(),
+		hide,
+		newRequirePremiumCurrent());
+}
+
+bool GlobalPrivacy::hideReadTimeCurrent() const {
+	return _hideReadTime.current();
+}
+
+rpl::producer<bool> GlobalPrivacy::hideReadTime() const {
+	return _hideReadTime.value();
+}
+
+void GlobalPrivacy::updateNewRequirePremium(bool value) {
+	update(
+		archiveAndMuteCurrent(),
+		unarchiveOnNewMessageCurrent(),
+		hideReadTimeCurrent(),
+		value);
+}
+
+bool GlobalPrivacy::newRequirePremiumCurrent() const {
+	return _newRequirePremium.current();
+}
+
+rpl::producer<bool> GlobalPrivacy::newRequirePremium() const {
+	return _newRequirePremium.value();
+}
+
+
+void GlobalPrivacy::updateArchiveAndMute(bool value) {
+	update(
+		value,
+		unarchiveOnNewMessageCurrent(),
+		hideReadTimeCurrent(),
+		newRequirePremiumCurrent());
+}
+
+void GlobalPrivacy::updateUnarchiveOnNewMessage(
+		UnarchiveOnNewMessage value) {
+	update(
+		archiveAndMuteCurrent(),
+		value,
+		hideReadTimeCurrent(),
+		newRequirePremiumCurrent());
+}
+
+void GlobalPrivacy::update(
+		bool archiveAndMute,
+		UnarchiveOnNewMessage unarchiveOnNewMessage,
+		bool hideReadTime,
+		bool newRequirePremium) {
 	using Flag = MTPDglobalPrivacySettings::Flag;
 
 	_api.request(_requestId).cancel();
+	const auto flags = Flag()
+		| (archiveAndMute
+			? Flag::f_archive_and_mute_new_noncontact_peers
+			: Flag())
+		| (unarchiveOnNewMessage == UnarchiveOnNewMessage::None
+			? Flag::f_keep_archived_unmuted
+			: Flag())
+		| (unarchiveOnNewMessage != UnarchiveOnNewMessage::AnyUnmuted
+			? Flag::f_keep_archived_folders
+			: Flag())
+		| (hideReadTime ? Flag::f_hide_read_marks : Flag())
+		| ((newRequirePremium && _session->premium())
+			? Flag::f_new_noncontact_peers_require_premium
+			: Flag());
 	_requestId = _api.request(MTPaccount_SetGlobalPrivacySettings(
-		MTP_globalPrivacySettings(
-			MTP_flags(Flag::f_archive_and_mute_new_noncontact_peers),
-			MTP_bool(archiveAndMute))
+		MTP_globalPrivacySettings(MTP_flags(flags))
 	)).done([=](const MTPGlobalPrivacySettings &result) {
 		_requestId = 0;
 		apply(result);
-	}).fail([=] {
+	}).fail([=](const MTP::Error &error) {
 		_requestId = 0;
+		if (error.type() == u"PREMIUM_ACCOUNT_REQUIRED"_q) {
+			update(archiveAndMute, unarchiveOnNewMessage, hideReadTime, {});
+		}
 	}).send();
 	_archiveAndMute = archiveAndMute;
+	_unarchiveOnNewMessage = unarchiveOnNewMessage;
+	_hideReadTime = hideReadTime;
+	_newRequirePremium = newRequirePremium;
 }
 
 void GlobalPrivacy::apply(const MTPGlobalPrivacySettings &data) {
 	data.match([&](const MTPDglobalPrivacySettings &data) {
-		_archiveAndMute = data.varchive_and_mute_new_noncontact_peers()
-			? mtpIsTrue(*data.varchive_and_mute_new_noncontact_peers())
-			: false;
+		_archiveAndMute = data.is_archive_and_mute_new_noncontact_peers();
+		_unarchiveOnNewMessage = data.is_keep_archived_unmuted()
+			? UnarchiveOnNewMessage::None
+			: data.is_keep_archived_folders()
+			? UnarchiveOnNewMessage::NotInFoldersUnmuted
+			: UnarchiveOnNewMessage::AnyUnmuted;
+		_hideReadTime = data.is_hide_read_marks();
+		_newRequirePremium = data.is_new_noncontact_peers_require_premium();
 	});
 }
 

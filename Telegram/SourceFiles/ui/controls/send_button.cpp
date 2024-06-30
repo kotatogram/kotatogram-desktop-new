@@ -8,7 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/controls/send_button.h"
 
 #include "ui/effects/ripple_animation.h"
-#include "styles/style_chat.h"
+#include "ui/painter.h"
+#include "styles/style_chat_helpers.h"
 
 namespace Ui {
 namespace {
@@ -17,9 +18,10 @@ constexpr int kWideScale = 5;
 
 } // namespace
 
-SendButton::SendButton(QWidget *parent)
-: RippleButton(parent, st::historyReplyCancel.ripple) {
-	resize(st::historySendSize);
+SendButton::SendButton(QWidget *parent, const style::SendButton &st)
+: RippleButton(parent, st.inner.ripple)
+, _st(st) {
+	resize(_st.inner.width, _st.inner.height);
 }
 
 void SendButton::setType(Type type) {
@@ -64,7 +66,7 @@ void SendButton::finishAnimating() {
 }
 
 void SendButton::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 
 	auto over = (isDown() || isOver());
 	auto changed = _a_typeChanged.value(1.);
@@ -91,47 +93,32 @@ void SendButton::paintEvent(QPaintEvent *e) {
 	}
 }
 
-void SendButton::paintRecord(Painter &p, bool over) {
-	const auto recordActive = 0.;
+void SendButton::paintRecord(QPainter &p, bool over) {
 	if (!isDisabled()) {
-		auto rippleColor = anim::color(
-			st::historyAttachEmoji.ripple.color,
-			st::historyRecordVoiceRippleBgActive,
-			recordActive);
 		paintRipple(
 			p,
-			(width() - st::historyAttachEmoji.rippleAreaSize) / 2,
-			st::historyAttachEmoji.rippleAreaPosition.y(),
-			&rippleColor);
+			(width() - _st.inner.rippleAreaSize) / 2,
+			_st.inner.rippleAreaPosition.y());
 	}
 
-	auto fastIcon = [&] {
-		if (isDisabled()) {
-			return &st::historyRecordVoice;
-		} else if (recordActive == 1.) {
-			return &st::historyRecordVoiceActive;
-		} else if (over) {
-			return &st::historyRecordVoiceOver;
-		}
-		return &st::historyRecordVoice;
-	};
-	fastIcon()->paintInCenter(p, rect());
-	if (!isDisabled() && recordActive > 0. && recordActive < 1.) {
-		p.setOpacity(recordActive);
-		st::historyRecordVoiceActive.paintInCenter(p, rect());
-		p.setOpacity(1.);
-	}
+	const auto &icon = (isDisabled() || !over)
+		? _st.record
+		: _st.recordOver;
+	icon.paintInCenter(p, rect());
 }
 
-void SendButton::paintSave(Painter &p, bool over) {
+void SendButton::paintSave(QPainter &p, bool over) {
 	const auto &saveIcon = over
 		? st::historyEditSaveIconOver
 		: st::historyEditSaveIcon;
 	saveIcon.paintInCenter(p, rect());
 }
 
-void SendButton::paintCancel(Painter &p, bool over) {
-	paintRipple(p, (width() - st::historyAttachEmoji.rippleAreaSize) / 2, st::historyAttachEmoji.rippleAreaPosition.y());
+void SendButton::paintCancel(QPainter &p, bool over) {
+	paintRipple(
+		p,
+		(width() - _st.inner.rippleAreaSize) / 2,
+		_st.inner.rippleAreaPosition.y());
 
 	const auto &cancelIcon = over
 		? st::historyReplyCancelIconOver
@@ -139,10 +126,8 @@ void SendButton::paintCancel(Painter &p, bool over) {
 	cancelIcon.paintInCenter(p, rect());
 }
 
-void SendButton::paintSend(Painter &p, bool over) {
-	const auto &sendIcon = over
-		? st::historySendIconOver
-		: st::historySendIcon;
+void SendButton::paintSend(QPainter &p, bool over) {
+	const auto &sendIcon = over ? _st.inner.iconOver : _st.inner.icon;
 	if (isDisabled()) {
 		const auto color = st::historyRecordVoiceFg->c;
 		sendIcon.paint(p, st::historySendIconPosition, width(), color);
@@ -151,7 +136,7 @@ void SendButton::paintSend(Painter &p, bool over) {
 	}
 }
 
-void SendButton::paintSchedule(Painter &p, bool over) {
+void SendButton::paintSchedule(QPainter &p, bool over) {
 	{
 		PainterHighQualityEnabler hq(p);
 		p.setPen(Qt::NoPen);
@@ -168,7 +153,7 @@ void SendButton::paintSchedule(Painter &p, bool over) {
 		width());
 }
 
-void SendButton::paintSlowmode(Painter &p) {
+void SendButton::paintSlowmode(QPainter &p) {
 	p.setFont(st::normalFont);
 	p.setPen(st::windowSubTextFg);
 	p.drawText(
@@ -188,7 +173,7 @@ QPixmap SendButton::grabContent() {
 	result.setDevicePixelRatio(style::DevicePixelRatio());
 	result.fill(Qt::transparent);
 	{
-		Painter p(&result);
+		auto p = QPainter(&result);
 		p.drawPixmap(
 			(kWideScale - 1) / 2 * width(),
 			(kWideScale - 1) / 2 * height(),
@@ -198,20 +183,14 @@ QPixmap SendButton::grabContent() {
 }
 
 QImage SendButton::prepareRippleMask() const {
-	auto size = (_type == Type::Record)
-		? st::historyAttachEmoji.rippleAreaSize
-		: st::historyReplyCancel.rippleAreaSize;
-	return RippleAnimation::ellipseMask(QSize(size, size));
+	const auto size = _st.inner.rippleAreaSize;
+	return RippleAnimation::EllipseMask(QSize(size, size));
 }
 
 QPoint SendButton::prepareRippleStartPosition() const {
-	auto real = mapFromGlobal(QCursor::pos());
-	auto size = (_type == Type::Record)
-		? st::historyAttachEmoji.rippleAreaSize
-		: st::historyReplyCancel.rippleAreaSize;
-	auto y = (_type == Type::Record)
-		? st::historyAttachEmoji.rippleAreaPosition.y()
-		: (height() - st::historyReplyCancel.rippleAreaSize) / 2;
+	const auto real = mapFromGlobal(QCursor::pos());
+	const auto size = _st.inner.rippleAreaSize;
+	const auto y = (height() - _st.inner.rippleAreaSize) / 2;
 	return real - QPoint((width() - size) / 2, y);
 }
 

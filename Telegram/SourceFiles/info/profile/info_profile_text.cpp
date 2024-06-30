@@ -22,6 +22,7 @@ TextWithLabel CreateTextWithLabel(
 		QWidget *parent,
 		rpl::producer<TextWithEntities> &&label,
 		rpl::producer<TextWithEntities> &&text,
+		const style::FlatLabel &labelSt,
 		const style::FlatLabel &textSt,
 		const style::margins &padding) {
 	auto result = object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
@@ -51,16 +52,16 @@ TextWithLabel CreateTextWithLabel(
 		textSt));
 	labeled->setSelectable(true);
 	layout->add(Ui::CreateSkipWidget(layout, st::infoLabelSkip));
-	layout->add(object_ptr<Ui::FlatLabel>(
+	const auto subtext = layout->add(object_ptr<Ui::FlatLabel>(
 		layout,
 		std::move(
 			label
 		) | rpl::after_next([=] {
 			layout->resizeToWidth(layout->widthNoMargins());
 		}),
-		st::infoLabel));
+		labelSt));
 	result->finishAnimating();
-	return { std::move(result), labeled };
+	return { std::move(result), labeled, subtext };
 }
 
 } // namespace Profile

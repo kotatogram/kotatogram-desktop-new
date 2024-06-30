@@ -7,36 +7,31 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/abstract_box.h"
-#include "settings/settings_common.h"
+#include "settings/settings_common_session.h"
 
-namespace Main {
-class Session;
-} // namespace Main
+namespace Ui {
+class VerticalLayout;
+} // namespace Ui
 
 namespace Settings {
 
-class Sessions : public Section {
+class Sessions : public Section<Sessions> {
 public:
 	Sessions(
 		QWidget *parent,
 		not_null<Window::SessionController*> controller);
+
+	[[nodiscard]] rpl::producer<QString> title() override;
 
 private:
 	void setupContent(not_null<Window::SessionController*> controller);
 
 };
 
+void AddSessionInfoRow(
+	not_null<Ui::VerticalLayout*> container,
+	rpl::producer<QString> label,
+	const QString &value,
+	const style::icon &icon);
+
 } // namespace Settings
-
-class SessionsBox : public Ui::BoxContent {
-public:
-	SessionsBox(QWidget*, not_null<Window::SessionController*> controller);
-
-protected:
-	void prepare() override;
-
-private:
-	const not_null<Window::SessionController*> _controller;
-
-};

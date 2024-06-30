@@ -7,27 +7,52 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "ui/chat/choose_send_as.h"
 
+#include "kotato/kotato_radius.h"
 #include "boxes/peer_list_box.h"
 #include "data/data_peer.h"
 #include "data/data_channel.h"
 #include "data/data_peer_values.h"
 #include "history/history.h"
 #include "ui/controls/send_as_button.h"
+#include "ui/text/text_utilities.h"
+#include "ui/painter.h"
 #include "window/window_session_controller.h"
 #include "main/main_session.h"
 #include "main/session/send_as_peers.h"
 #include "lang/lang_keys.h"
+#include "settings/settings_premium.h"
 #include "styles/style_calls.h"
 #include "styles/style_boxes.h"
 #include "styles/style_chat.h"
+#include "styles/style_chat_helpers.h"
 
 namespace Ui {
 namespace {
 
+class Row final : public PeerListRow {
+public:
+	explicit Row(const Main::SendAsPeer &sendAsPeer);
+
+	int paintNameIconGetWidth(
+		Painter &p,
+		Fn<void()> repaint,
+		crl::time now,
+		int nameLeft,
+		int nameTop,
+		int nameWidth,
+		int availableWidth,
+		int outerWidth,
+		bool selected) override;
+
+private:
+	bool _premiumRequired = false;
+
+};
+
 class ListController final : public PeerListController {
 public:
 	ListController(
-		std::vector<not_null<PeerData*>> list,
+		std::vector<Main::SendAsPeer> list,
 		not_null<PeerData*> selected);
 
 	Main::Session &session() const override;
@@ -37,35 +62,78 @@ public:
 	[[nodiscard]] rpl::producer<not_null<PeerData*>> clicked() const;
 
 private:
-	std::unique_ptr<PeerListRow> createRow(not_null<PeerData*> peer);
+	std::unique_ptr<Row> createRow(const Main::SendAsPeer &sendAsPeer);
 
-	std::vector<not_null<PeerData*>> _list;
+	std::vector<Main::SendAsPeer> _list;
 	not_null<PeerData*> _selected;
 	rpl::event_stream<not_null<PeerData*>> _clicked;
 
 };
 
+Row::Row(const Main::SendAsPeer &sendAsPeer)
+: PeerListRow(sendAsPeer.peer)
+, _premiumRequired(sendAsPeer.premiumRequired) {
+}
+
+int Row::paintNameIconGetWidth(
+		Painter &p,
+		Fn<void()> repaint,
+		crl::time now,
+		int nameLeft,
+		int nameTop,
+		int nameWidth,
+		int availableWidth,
+		int outerWidth,
+		bool selected) {
+	if (_premiumRequired && !peer()->session().premium()) {
+		const auto &icon = st::emojiPremiumRequired;
+		availableWidth -= icon.width();
+		const auto x = nameLeft + std::min(nameWidth, availableWidth);
+		icon.paint(p, x, nameTop, outerWidth);
+		return icon.width();
+	}
+	return PeerListRow::paintNameIconGetWidth(
+		p,
+		std::move(repaint),
+		now,
+		nameLeft,
+		nameTop,
+		nameWidth,
+		availableWidth,
+		outerWidth,
+		selected);
+}
+
 ListController::ListController(
-	std::vector<not_null<PeerData*>> list,
+	std::vector<Main::SendAsPeer> list,
 	not_null<PeerData*> selected)
 : PeerListController()
 , _list(std::move(list))
 , _selected(selected) {
+	Data::AmPremiumValue(
+		&selected->session()
+	) | rpl::skip(1) | rpl::start_with_next([=] {
+		const auto count = delegate()->peerListFullRowsCount();
+		for (auto i = 0; i != count; ++i) {
+			delegate()->peerListUpdateRow(
+				delegate()->peerListRowAt(i));
+		}
+	}, lifetime());
 }
 
 Main::Session &ListController::session() const {
 	return _selected->session();
 }
 
-std::unique_ptr<PeerListRow> ListController::createRow(
-		not_null<PeerData*> peer) {
-	auto result = std::make_unique<PeerListRow>(peer);
-	if (peer->isSelf()) {
+std::unique_ptr<Row> ListController::createRow(
+		const Main::SendAsPeer &sendAsPeer) {
+	auto result = std::make_unique<Row>(sendAsPeer);
+	if (sendAsPeer.peer->isSelf()) {
 		result->setCustomStatus(
 			tr::lng_group_call_join_as_personal(tr::now));
-	} else if (peer->isMegagroup()) {
+	} else if (sendAsPeer.peer->isMegagroup()) {
 		result->setCustomStatus(tr::lng_send_as_anonymous_admin(tr::now));
-	} else if (const auto channel = peer->asChannel()) {
+	} else if (const auto channel = sendAsPeer.peer->asChannel()) {
 		result->setCustomStatus(tr::lng_chat_status_subscribers(
 			tr::now,
 			lt_count,
@@ -76,11 +144,11 @@ std::unique_ptr<PeerListRow> ListController::createRow(
 
 void ListController::prepare() {
 	delegate()->peerListSetSearchMode(PeerListSearchMode::Disabled);
-	for (const auto &peer : _list) {
-		auto row = createRow(peer);
+	for (const auto &sendAsPeer : _list) {
+		auto row = createRow(sendAsPeer);
 		const auto raw = row.get();
 		delegate()->peerListAppendRow(std::move(row));
-		if (peer == _selected) {
+		if (sendAsPeer.peer == _selected) {
 			delegate()->peerListSetRowChecked(raw, true);
 			raw->finishCheckedAnimation();
 		}
@@ -104,10 +172,10 @@ rpl::producer<not_null<PeerData*>> ListController::clicked() const {
 
 void ChooseSendAsBox(
 		not_null<GenericBox*> box,
-		std::vector<not_null<PeerData*>> list,
+		std::vector<Main::SendAsPeer> list,
 		not_null<PeerData*> chosen,
-		Fn<void(not_null<PeerData*>)> done) {
-	Expects(ranges::contains(list, chosen));
+		Fn<bool(not_null<PeerData*>)> done) {
+	Expects(ranges::contains(list, chosen, &Main::SendAsPeer::peer));
 	Expects(done != nullptr);
 
 	box->setWidth(st::groupCallJoinAsWidth);
@@ -132,8 +200,7 @@ void ChooseSendAsBox(
 	controller->clicked(
 	) | rpl::start_with_next([=](not_null<PeerData*> peer) {
 		const auto weak = MakeWeak(box);
-		done(peer);
-		if (weak) {
+		if (done(peer) && weak) {
 			box->closeBox();
 		}
 	}, box->lifetime());
@@ -165,7 +232,28 @@ void SetupSendAsButton(
 			return;
 		}
 		const auto done = [=](not_null<PeerData*> sendAs) {
+			const auto i = ranges::find(
+				list,
+				sendAs,
+				&Main::SendAsPeer::peer);
+			if (i != end(list)
+				&& i->premiumRequired
+				&& !sendAs->session().premium()) {
+				Settings::ShowPremiumPromoToast(
+					window->uiShow(),
+					tr::lng_send_as_premium_required(
+						tr::now,
+						lt_link,
+						Ui::Text::Link(
+							Ui::Text::Bold(
+								tr::lng_send_as_premium_required_link(
+									tr::now))),
+						Ui::Text::WithEntities),
+					u"send_as"_q);
+				return false;
+			}
 			session->sendAsPeers().saveChosen(peer, sendAs);
+			return true;
 		};
 		window->show(Box(
 			Ui::ChooseSendAsBox,
@@ -181,7 +269,7 @@ void SetupSendAsButton(
 		const auto channel = peer->asMegagroup();
 
 		auto updates = rpl::single(
-			rpl::empty_value()
+			rpl::empty
 		) | rpl::then(channel->session().sendAsPeers().updated(
 		) | rpl::filter(
 			_1 == channel
@@ -196,7 +284,8 @@ void SetupSendAsButton(
 		) | rpl::map([=](not_null<PeerData*> chosen) {
 			return Data::PeerUserpicImageValue(
 				chosen,
-				st::sendAsButton.size * style::DevicePixelRatio());
+				st::sendAsButton.size * style::DevicePixelRatio(),
+				st::sendAsButton.size * Kotato::UserpicRadius());
 		}) | rpl::flatten_latest();
 	}) | rpl::flatten_latest();
 
@@ -211,7 +300,7 @@ void SetupSendAsButton(
 		not_null<SendAsButton*> button,
 		not_null<Window::SessionController*> window) {
 	auto active = window->activeChatValue(
-	) | rpl::map([=](const Dialogs::Key &key) {
+	) | rpl::map([=](Dialogs::Key key) {
 		return key.history() ? key.history()->peer.get() : nullptr;
 	});
 	SetupSendAsButton(button, std::move(active), window);

@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/peers/edit_peer_invite_link.h"
 
+#include "core/application.h"
 #include "data/data_peer.h"
 #include "data/data_user.h"
 #include "data/data_channel.h"
@@ -25,27 +26,26 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/popup_menu.h"
 #include "ui/abstract_button.h"
 #include "ui/toast/toast.h"
-#include "ui/toasts/common_toasts.h"
 #include "ui/text/text_utilities.h"
 #include "ui/boxes/edit_invite_link.h"
+#include "ui/painter.h"
+#include "ui/vertical_list.h"
 #include "boxes/share_box.h"
 #include "history/view/history_view_group_call_bar.h" // GenerateUserpics...
-#include "history/history_message.h" // GetErrorTextForSending.
+#include "history/history_item_helpers.h" // GetErrorTextForSending.
 #include "history/history.h"
 #include "ui/boxes/confirm_box.h"
 #include "boxes/peer_list_box.h"
 #include "mainwindow.h"
-#include "facades.h" // Ui::showPerProfile.
 #include "lang/lang_keys.h"
 #include "window/window_session_controller.h"
-#include "settings/settings_common.h"
+#include "window/window_controller.h"
 #include "mtproto/sender.h"
 #include "qr/qr_generate.h"
 #include "intro/intro_qr.h" // TelegramLogoImage
 #include "styles/style_boxes.h"
 #include "styles/style_layers.h" // st::boxDividerLabel.
 #include "styles/style_info.h"
-#include "styles/style_settings.h"
 #include "styles/style_menu_icons.h"
 
 #include <QtGui/QGuiApplication>
@@ -59,6 +59,18 @@ constexpr auto kShareQrSize = 768;
 constexpr auto kShareQrPadding = 16;
 
 using LinkData = Api::InviteLink;
+
+void ShowPeerInfoSync(not_null<PeerData*> peer) {
+	// While a peer info is demanded by the left click
+	// we can safely use activeWindow.
+	if (const auto window = Core::App().activeWindow()) {
+		if (const auto controller = window->sessionController()) {
+			if (&controller->session() == &peer->session()) {
+				controller->showPeerInfo(peer);
+			}
+		}
+	}
+}
 
 class RequestedRow final : public PeerListRow {
 public:
@@ -260,10 +272,15 @@ QImage QrForShare(const QString &text) {
 void QrBox(
 		not_null<Ui::GenericBox*> box,
 		const QString &link,
-		Fn<void(QImage)> share) {
+		rpl::producer<QString> about,
+		Fn<void(QImage, std::shared_ptr<Ui::Show>)> share) {
 	box->setTitle(tr::lng_group_invite_qr_title());
 
 	box->addButton(tr::lng_about_done(), [=] { box->closeBox(); });
+
+	const auto copyCallback = [=, show = box->uiShow()] {
+		share(QrForShare(link), show);
+	};
 
 	const auto qr = Qr(
 		link,
@@ -284,20 +301,16 @@ void QrBox(
 	) | rpl::start_with_next([=](int width) {
 		button->move((width - size) / 2, st::inviteLinkQrSkip);
 	}, button->lifetime());
-	button->setClickedCallback([=] {
-		share(QrForShare(link));
-	});
+	button->setClickedCallback(copyCallback);
 
 	box->addRow(
 		object_ptr<Ui::FlatLabel>(
 			box,
-			tr::lng_group_invite_qr_about(),
+			std::move(about),
 			st::boxLabel),
 		st::inviteLinkQrValuePadding);
 
-	box->addLeftButton(
-		tr::lng_group_invite_context_copy(),
-		[=] { share(QrForShare(link)); });
+	box->addLeftButton(tr::lng_group_invite_context_copy(), copyCallback);
 }
 
 Controller::Controller(
@@ -331,22 +344,26 @@ void Controller::addHeaderBlock(not_null<Ui::VerticalLayout*> container) {
 	const auto admin = current.admin;
 	const auto weak = Ui::MakeWeak(container);
 	const auto copyLink = crl::guard(weak, [=] {
-		CopyInviteLink(link);
+		CopyInviteLink(delegate()->peerListUiShow(), link);
 	});
-	const auto shareLink = crl::guard(weak, [=] {
-		ShareInviteLinkBox(_peer, link);
+	const auto shareLink = crl::guard(weak, [=, peer = _peer] {
+		delegate()->peerListUiShow()->showBox(ShareInviteLinkBox(peer, link));
 	});
 	const auto getLinkQr = crl::guard(weak, [=] {
-		InviteLinkQrBox(link);
+		delegate()->peerListUiShow()->showBox(
+			InviteLinkQrBox(link, tr::lng_group_invite_qr_about()));
 	});
 	const auto revokeLink = crl::guard(weak, [=] {
-		RevokeLink(_peer, admin, link);
+		delegate()->peerListUiShow()->showBox(
+			RevokeLinkBox(_peer, admin, link));
 	});
 	const auto editLink = crl::guard(weak, [=] {
-		EditLink(_peer, _data.current());
+		delegate()->peerListUiShow()->showBox(
+			EditLinkBox(_peer, _data.current()));
 	});
 	const auto deleteLink = crl::guard(weak, [=] {
-		DeleteLink(_peer, admin, link);
+		delegate()->peerListUiShow()->showBox(
+			DeleteLinkBox(_peer, admin, link));
 	});
 
 	const auto createMenu = [=] {
@@ -385,7 +402,7 @@ void Controller::addHeaderBlock(not_null<Ui::VerticalLayout*> container) {
 		return result;
 	};
 
-	const auto prefix = qstr("https://");
+	const auto prefix = u"https://"_q;
 	const auto label = container->lifetime().make_state<Ui::InviteLinkLabel>(
 		container,
 		rpl::single(link.startsWith(prefix)
@@ -416,7 +433,7 @@ void Controller::addHeaderBlock(not_null<Ui::VerticalLayout*> container) {
 		AddDeleteLinkButton(container, deleteLink);
 	}
 
-	AddSkip(container, st::inviteLinkJoinedRowPadding.bottom() * 2);
+	Ui::AddSkip(container, st::inviteLinkJoinedRowPadding.bottom() * 2);
 
 	auto grayLabelText = dataValue(
 	) | rpl::map([=](const LinkData &data) {
@@ -439,7 +456,7 @@ void Controller::addHeaderBlock(not_null<Ui::VerticalLayout*> container) {
 					container,
 					tr::lng_group_invite_expired_about(),
 					st::boxAttentionDividerLabel),
-				st::settingsDividerLabelPadding)));
+				st::defaultBoxDividerLabelPadding)));
 	const auto grayLabelWrap = container->add(
 		object_ptr<Ui::SlideWrap<Ui::DividerLabel>>(
 			container,
@@ -449,12 +466,12 @@ void Controller::addHeaderBlock(not_null<Ui::VerticalLayout*> container) {
 					container,
 					std::move(grayLabelText),
 					st::boxDividerLabel),
-				st::settingsDividerLabelPadding)));
+				st::defaultBoxDividerLabelPadding)));
 	const auto justDividerWrap = container->add(
 		object_ptr<Ui::SlideWrap<>>(
 			container,
 			object_ptr<Ui::BoxContentDivider>(container)));
-	AddSkip(container);
+	Ui::AddSkip(container);
 
 	dataValue(
 	) | rpl::start_with_next([=](const LinkData &data) {
@@ -491,23 +508,37 @@ not_null<Ui::SlideWrap<>*> Controller::addRequestedListBlock(
 	const auto wrap = result->entity();
 	// Make this container occupy full width.
 	wrap->add(object_ptr<Ui::RpWidget>(wrap));
-	AddDivider(wrap);
-	AddSkip(wrap);
+	Ui::AddDivider(wrap);
+	Ui::AddSkip(wrap);
 	auto requestedCount = dataValue(
 	) | rpl::filter([](const LinkData &data) {
 		return data.requested > 0;
 	}) | rpl::map([=](const LinkData &data) {
 		return float64(data.requested);
 	});
-	AddSubsectionTitle(
+	Ui::AddSubsectionTitle(
 		wrap,
 		tr::lng_group_invite_requested_full(
 			lt_count_decimal,
 			std::move(requestedCount)));
 
-	const auto delegate = container->lifetime().make_state<
-		PeerListContentDelegateSimple
-	>();
+	class Delegate final : public PeerListContentDelegateSimple {
+	public:
+		explicit Delegate(std::shared_ptr<Main::SessionShow> show)
+		: _show(std::move(show)) {
+		}
+
+		std::shared_ptr<Main::SessionShow> peerListUiShow() override {
+			return _show;
+		}
+
+	private:
+		const std::shared_ptr<Main::SessionShow> _show;
+
+	};
+	const auto delegate = container->lifetime().make_state<Delegate>(
+		this->delegate()->peerListUiShow());
+
 	const auto controller = container->lifetime().make_state<
 		Controller
 	>(_peer, _data.current().admin, _data.value(), Role::Requested);
@@ -570,14 +601,14 @@ void Controller::setupAboveJoinedWidget() {
 	if (revoked || !current.permanent) {
 		addHeaderBlock(container);
 	}
-	AddSubsectionTitle(
+	Ui::AddSubsectionTitle(
 		container,
 		tr::lng_group_invite_created_by());
 	AddSinglePeerRow(
 		container,
 		current.admin,
 		rpl::single(langDateTime(base::unixtime::parse(current.date))));
-	AddSkip(container, st::membersMarginBottom);
+	Ui::AddSkip(container, st::membersMarginBottom);
 
 	auto requestedWrap = addRequestedListBlock(container);
 
@@ -591,8 +622,8 @@ void Controller::setupAboveJoinedWidget() {
 	// Make this container occupy full width.
 	listHeader->add(object_ptr<Ui::RpWidget>(listHeader));
 
-	AddDivider(listHeader);
-	AddSkip(listHeader);
+	Ui::AddDivider(listHeader);
+	Ui::AddSkip(listHeader);
 
 	auto listHeaderText = dataValue(
 	) | rpl::map([=](const LinkData &data) {
@@ -647,7 +678,7 @@ void Controller::setupAboveJoinedWidget() {
 	const auto remaining = Ui::CreateChild<Ui::FlatLabel>(
 		listHeader,
 		std::move(remainingText),
-		st::settingsSubsectionTitleRight);
+		st::inviteLinkTitleRight);
 	dataValue(
 	) | rpl::start_with_next([=](const LinkData &data) {
 		remaining->setTextColorOverride(
@@ -707,9 +738,14 @@ void Controller::loadMoreRows() {
 void Controller::appendSlice(const Api::JoinedByLinkSlice &slice) {
 	for (const auto &user : slice.users) {
 		_lastUser = user;
-		delegate()->peerListAppendRow((_role == Role::Requested)
+		auto row = (_role == Role::Requested)
 			? std::make_unique<RequestedRow>(user.user, user.date)
-			: std::make_unique<PeerListRow>(user.user));
+			: std::make_unique<PeerListRow>(user.user);
+		if (_role != Role::Requested && user.viaFilterLink) {
+			row->setCustomStatus(
+				tr::lng_group_invite_joined_via_filter(tr::now));
+		}
+		delegate()->peerListAppendRow(std::move(row));
 	}
 	delegate()->peerListRefreshRows();
 	if (delegate()->peerListFullRowsCount() > 0) {
@@ -721,7 +757,7 @@ void Controller::appendSlice(const Api::JoinedByLinkSlice &slice) {
 }
 
 void Controller::rowClicked(not_null<PeerListRow*> row) {
-	Ui::showPeerProfile(row->peer());
+	ShowPeerInfoSync(row->peer());
 }
 
 void Controller::rowRightActionClicked(not_null<PeerListRow*> row) {
@@ -779,15 +815,13 @@ void Controller::processRequest(
 			delegate()->peerListRefreshRows();
 		}
 		if (approved) {
-			Ui::ShowMultilineToast({
-				.text = (_peer->isBroadcast()
-					? tr::lng_group_requests_was_added_channel
-					: tr::lng_group_requests_was_added)(
-						tr::now,
-						lt_user,
-						Ui::Text::Bold(user->name),
-						Ui::Text::WithEntities)
-			});
+			delegate()->peerListUiShow()->showToast((_peer->isBroadcast()
+				? tr::lng_group_requests_was_added_channel
+				: tr::lng_group_requests_was_added)(
+					tr::now,
+					lt_user,
+					Ui::Text::Bold(user->name()),
+					Ui::Text::WithEntities));
 		}
 	});
 	const auto fail = crl::guard(this, [=] {
@@ -852,7 +886,7 @@ void SingleRowController::loadMoreRows() {
 }
 
 void SingleRowController::rowClicked(not_null<PeerListRow*> row) {
-	Ui::showPeerProfile(row->peer());
+	ShowPeerInfoSync(row->peer());
 }
 
 Main::Session &SingleRowController::session() const {
@@ -885,6 +919,7 @@ void AddSinglePeerRow(
 }
 
 void AddPermanentLinkBlock(
+		std::shared_ptr<Ui::Show> show,
 		not_null<Ui::VerticalLayout*> container,
 		not_null<PeerData*> peer,
 		not_null<UserData*> admin,
@@ -929,43 +964,30 @@ void AddPermanentLinkBlock(
 	const auto weak = Ui::MakeWeak(container);
 	const auto copyLink = crl::guard(weak, [=] {
 		if (const auto current = value->current(); !current.link.isEmpty()) {
-			CopyInviteLink(current.link);
+			CopyInviteLink(show, current.link);
 		}
 	});
 	const auto shareLink = crl::guard(weak, [=] {
 		if (const auto current = value->current(); !current.link.isEmpty()) {
-			ShareInviteLinkBox(peer, current.link);
+			show->showBox(ShareInviteLinkBox(peer, current.link));
 		}
 	});
 	const auto getLinkQr = crl::guard(weak, [=] {
 		if (const auto current = value->current(); !current.link.isEmpty()) {
-			InviteLinkQrBox(current.link);
+			show->showBox(InviteLinkQrBox(
+				current.link,
+				tr::lng_group_invite_qr_about()));
 		}
 	});
 	const auto revokeLink = crl::guard(weak, [=] {
-		const auto box = std::make_shared<QPointer<Ui::ConfirmBox>>();
-		const auto done = crl::guard(weak, [=] {
-			const auto close = [=] {
-				if (*box) {
-					(*box)->closeBox();
-				}
-			};
-			peer->session().api().inviteLinks().revokePermanent(
-				peer,
-				admin,
-				value->current().link,
-				close);
-		});
-		*box = Ui::show(
-			Box<Ui::ConfirmBox>(
-				tr::lng_group_invite_about_new(tr::now),
-				done),
-			Ui::LayerOption::KeepOther);
+		if (const auto current = value->current(); !current.link.isEmpty()) {
+			show->showBox(RevokeLinkBox(peer, admin, current.link, true));
+		}
 	});
 
 	auto link = value->value(
 	) | rpl::map([=](const LinkData &data) {
-		const auto prefix = qstr("https://");
+		const auto prefix = u"https://"_q;
 		return data.link.startsWith(prefix)
 			? data.link.mid(prefix.size())
 			: data.link;
@@ -1025,11 +1047,12 @@ void AddPermanentLinkBlock(
 		state->allUserpicsLoaded = ranges::all_of(
 			state->list,
 			[](const HistoryView::UserpicInRow &element) {
-				return !element.peer->hasUserpic() || element.view->image();
+				return !element.peer->hasUserpic()
+					|| !Ui::PeerUserpicLoading(element.view);
 			});
 		state->content = Ui::JoinedCountContent{
 			.count = state->count,
-			.userpics = state->cachedUserpics
+			.userpics = state->cachedUserpics,
 		};
 	};
 	value->value(
@@ -1070,7 +1093,7 @@ void AddPermanentLinkBlock(
 			} else if (element.peer->userpicUniqueKey(element.view)
 				!= element.uniqueKey) {
 				pushing = true;
-			} else if (!element.view->image()) {
+			} else if (Ui::PeerUserpicLoading(element.view)) {
 				state->allUserpicsLoaded = false;
 			}
 		}
@@ -1085,7 +1108,7 @@ void AddPermanentLinkBlock(
 		st::inviteLinkJoinedRowPadding
 	)->setClickedCallback([=] {
 		if (!currentLinkFields->link.isEmpty()) {
-			ShowInviteLinkBox(peer, *currentLinkFields);
+			show->showBox(ShowInviteLinkBox(peer, *currentLinkFields));
 		}
 	});
 
@@ -1100,21 +1123,35 @@ void AddPermanentLinkBlock(
 	}));
 }
 
-void CopyInviteLink(const QString &link) {
+void CopyInviteLink(std::shared_ptr<Ui::Show> show, const QString &link) {
 	QGuiApplication::clipboard()->setText(link);
-	Ui::Toast::Show(tr::lng_group_invite_copied(tr::now));
+	show->showToast(tr::lng_group_invite_copied(tr::now));
 }
 
-void ShareInviteLinkBox(not_null<PeerData*> peer, const QString &link) {
+object_ptr<Ui::BoxContent> ShareInviteLinkBox(
+		not_null<PeerData*> peer,
+		const QString &link) {
+	return ShareInviteLinkBox(&peer->session(), link);
+}
+
+object_ptr<Ui::BoxContent> ShareInviteLinkBox(
+		not_null<Main::Session*> session,
+		const QString &link) {
 	const auto sending = std::make_shared<bool>();
 	const auto box = std::make_shared<QPointer<ShareBox>>();
 
+	const auto showToast = [=](const QString &text) {
+		if (*box) {
+			(*box)->showToast(text);
+		}
+	};
+
 	auto copyCallback = [=] {
 		QGuiApplication::clipboard()->setText(link);
-		Ui::Toast::Show(tr::lng_group_invite_copied(tr::now));
+		showToast(tr::lng_group_invite_copied(tr::now));
 	};
 	auto submitCallback = [=](
-			std::vector<not_null<PeerData*>> &&result,
+			std::vector<not_null<Data::Thread*>> &&result,
 			TextWithTags &&comment,
 			Api::SendOptions options,
 			Data::ForwardOptions,
@@ -1124,13 +1161,12 @@ void ShareInviteLinkBox(not_null<PeerData*> peer, const QString &link) {
 		}
 
 		const auto error = [&] {
-			for (const auto peer : result) {
+			for (const auto thread : result) {
 				const auto error = GetErrorTextForSending(
-					peer,
-					{},
-					comment);
+					thread,
+					{ .text = &comment });
 				if (!error.isEmpty()) {
-					return std::make_pair(error, peer);
+					return std::make_pair(error, thread);
 				}
 			}
 			return std::make_pair(QString(), result.front());
@@ -1139,13 +1175,13 @@ void ShareInviteLinkBox(not_null<PeerData*> peer, const QString &link) {
 			auto text = TextWithEntities();
 			if (result.size() > 1) {
 				text.append(
-					Ui::Text::Bold(error.second->name)
+					Ui::Text::Bold(error.second->chatListName())
 				).append("\n\n");
 			}
 			text.append(error.first);
-			Ui::show(
-				Box<Ui::InformBox>(text),
-				Ui::LayerOption::KeepOther);
+			if (*box) {
+				(*box)->uiShow()->showBox(Ui::MakeInformBox(text));
+			}
 			return;
 		}
 
@@ -1159,41 +1195,52 @@ void ShareInviteLinkBox(not_null<PeerData*> peer, const QString &link) {
 		} else {
 			comment.text = link;
 		}
-		const auto owner = &peer->owner();
-		auto &api = peer->session().api();
-		for (const auto peer : result) {
-			const auto history = owner->history(peer);
-			auto message = Api::MessageToSend(Api::SendAction(history, options));
+		auto &api = session->api();
+		for (const auto thread : result) {
+			auto message = Api::MessageToSend(
+				Api::SendAction(thread, options));
 			message.textWithTags = comment;
 			message.action.clearDraft = false;
 			api.sendMessage(std::move(message));
 		}
-		Ui::Toast::Show(tr::lng_share_done(tr::now));
 		if (*box) {
+			showToast(tr::lng_share_done(tr::now));
 			(*box)->closeBox();
 		}
 	};
-	*box = Ui::show(
-		Box<ShareBox>(ShareBox::Descriptor{
-			.session = &peer->session(),
-			.copyCallback = std::move(copyCallback),
-			.submitCallback = std::move(submitCallback),
-			.filterCallback = [](auto peer) { return peer->canWrite(); },
-			.navigation = App::wnd()->sessionController() }),
-		Ui::LayerOption::KeepOther);
+	auto filterCallback = [](not_null<Data::Thread*> thread) {
+		if (const auto user = thread->peer()->asUser()) {
+			if (user->canSendIgnoreRequirePremium()) {
+				return true;
+			}
+		}
+		return Data::CanSendTexts(thread);
+	};
+	auto object = Box<ShareBox>(ShareBox::Descriptor{
+		.session = session,
+		.copyCallback = std::move(copyCallback),
+		.submitCallback = std::move(submitCallback),
+		.filterCallback = std::move(filterCallback),
+		.premiumRequiredError = SharePremiumRequiredError(),
+	});
+	*box = Ui::MakeWeak(object.data());
+	return object;
 }
 
-void InviteLinkQrBox(const QString &link) {
-	Ui::show(Box(QrBox, link, [=](const QImage &image) {
+object_ptr<Ui::BoxContent> InviteLinkQrBox(
+		const QString &link,
+		rpl::producer<QString> about) {
+	return Box(QrBox, link, std::move(about), [=](
+			const QImage &image,
+			std::shared_ptr<Ui::Show> show) {
 		auto mime = std::make_unique<QMimeData>();
 		mime->setImageData(image);
 		QGuiApplication::clipboard()->setMimeData(mime.release());
-
-		Ui::Toast::Show(tr::lng_group_invite_qr_copied(tr::now));
-	}));
+		show->showToast(tr::lng_group_invite_qr_copied(tr::now));
+	});
 }
 
-void EditLink(
+object_ptr<Ui::BoxContent> EditLinkBox(
 		not_null<PeerData*> peer,
 		const Api::InviteLink &data) {
 	const auto creating = data.link.isEmpty();
@@ -1201,10 +1248,11 @@ void EditLink(
 	using Fields = Ui::InviteLinkFields;
 	const auto done = [=](Fields result) {
 		const auto finish = [=](Api::InviteLink finished) {
-			if (creating) {
-				ShowInviteLinkBox(peer, finished);
-			}
 			if (*box) {
+				if (creating) {
+					(*box)->getDelegate()->show(
+						ShowInviteLinkBox(peer, finished));
+				}
 				(*box)->closeBox();
 			}
 		};
@@ -1231,67 +1279,65 @@ void EditLink(
 	};
 	const auto isGroup = !peer->isBroadcast();
 	const auto isPublic = peer->isChannel() && peer->asChannel()->isPublic();
-	*box = Ui::show(
-		(creating
-			? Box(Ui::CreateInviteLinkBox, isGroup, isPublic, done)
-			: Box(
-				Ui::EditInviteLinkBox,
-				Fields{
-					.link = data.link,
-					.label = data.label,
-					.expireDate = data.expireDate,
-					.usageLimit = data.usageLimit,
-					.requestApproval = data.requestApproval,
-					.isGroup = isGroup,
-					.isPublic = isPublic,
-				},
-				done)),
-		Ui::LayerOption::KeepOther);
+	if (creating) {
+		auto object = Box(Ui::CreateInviteLinkBox, isGroup, isPublic, done);
+		*box = Ui::MakeWeak(object.data());
+		return object;
+	} else {
+		auto object = Box(
+			Ui::EditInviteLinkBox,
+			Fields{
+				.link = data.link,
+				.label = data.label,
+				.expireDate = data.expireDate,
+				.usageLimit = data.usageLimit,
+				.requestApproval = data.requestApproval,
+				.isGroup = isGroup,
+				.isPublic = isPublic,
+			},
+			done);
+		*box = Ui::MakeWeak(object.data());
+		return object;
+	}
 }
 
-void RevokeLink(
+object_ptr<Ui::BoxContent> RevokeLinkBox(
 		not_null<PeerData*> peer,
 		not_null<UserData*> admin,
-		const QString &link) {
-	const auto box = std::make_shared<QPointer<Ui::ConfirmBox>>();
-	const auto revoke = [=] {
-		const auto done = [=](const LinkData &data) {
-			if (*box) {
-				(*box)->closeBox();
-			}
-		};
-		peer->session().api().inviteLinks().revoke(peer, admin, link, done);
+		const QString &link,
+		bool permanent) {
+	const auto revoke = [=](Fn<void()> &&close) {
+		auto &l = peer->session().api().inviteLinks();
+		if (permanent) {
+			l.revokePermanent(peer, admin, link, std::move(close));
+		} else {
+			auto done = [c = std::move(close)](const LinkData &) { c(); };
+			l.revoke(peer, admin, link, std::move(done));
+		}
 	};
-	*box = Ui::show(
-		Box<Ui::ConfirmBox>(
-			tr::lng_group_invite_revoke_about(tr::now),
-			revoke),
-		Ui::LayerOption::KeepOther);
+	return Ui::MakeConfirmBox({
+		permanent
+			? tr::lng_group_invite_about_new()
+			: tr::lng_group_invite_revoke_about(),
+		revoke
+	});
 }
 
-void DeleteLink(
+object_ptr<Ui::BoxContent> DeleteLinkBox(
 		not_null<PeerData*> peer,
 		not_null<UserData*> admin,
 		const QString &link) {
-	const auto box = std::make_shared<QPointer<Ui::ConfirmBox>>();
-	const auto sure = [=] {
-		const auto finish = [=] {
-			if (*box) {
-				(*box)->closeBox();
-			}
-		};
+	const auto sure = [=](Fn<void()> &&close) {
 		peer->session().api().inviteLinks().destroy(
 			peer,
 			admin,
 			link,
-			finish);
+			std::move(close));
 	};
-	*box = Ui::show(
-		Box<Ui::ConfirmBox>(tr::lng_group_invite_delete_sure(tr::now), sure),
-		Ui::LayerOption::KeepOther);
+	return Ui::MakeConfirmBox({ tr::lng_group_invite_delete_sure(), sure });
 }
 
-void ShowInviteLinkBox(
+object_ptr<Ui::BoxContent> ShowInviteLinkBox(
 		not_null<PeerData*> peer,
 		const Api::InviteLink &link) {
 	const auto admin = link.admin;
@@ -1309,7 +1355,7 @@ void ShowInviteLinkBox(
 	auto data = rpl::single(link) | rpl::then(std::move(updates));
 
 	auto initBox = [=, data = rpl::duplicate(data)](
-			not_null<Ui::BoxContent*> box) {
+		not_null<Ui::BoxContent*> box) {
 		rpl::duplicate(
 			data
 		) | rpl::start_with_next([=](const LinkData &link) {
@@ -1331,22 +1377,20 @@ void ShowInviteLinkBox(
 
 		box->addButton(tr::lng_about_done(), [=] { box->closeBox(); });
 	};
-	Ui::show(
-		Box<PeerListBox>(
-			std::make_unique<Controller>(
-				peer,
-				link.admin,
-				std::move(data),
-				Controller::Role::Joined),
-			std::move(initBox)),
-		Ui::LayerOption::KeepOther);
+	return Box<PeerListBox>(
+		std::make_unique<Controller>(
+			peer,
+			link.admin,
+			std::move(data),
+			Controller::Role::Joined),
+		std::move(initBox));
 }
 
 QString PrepareRequestedRowStatus(TimeId date) {
 	const auto now = QDateTime::currentDateTime();
 	const auto parsed = base::unixtime::parse(date);
 	const auto parsedDate = parsed.date();
-	const auto time = parsed.time().toString(cTimeFormat());
+	const auto time = QLocale().toString(parsed.time(), QLocale::ShortFormat);
 	const auto generic = [&] {
 		return tr::lng_group_requests_status_date_time(
 			tr::now,

@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/abstract_box.h"
+#include "ui/layers/box_content.h"
 #include "mtproto/sender.h"
 #include "core/core_cloud_password.h"
 
@@ -36,13 +36,17 @@ public:
 	struct CloudFields {
 		static CloudFields From(const Core::CloudPasswordState &current);
 
-		Core::CloudPasswordCheckRequest curRequest;
-		Core::CloudPasswordAlgo newAlgo;
+		struct Mtp {
+			Core::CloudPasswordCheckRequest curRequest;
+			Core::CloudPasswordAlgo newAlgo;
+			Core::SecureSecretAlgo newSecureSecretAlgo;
+		};
+		Mtp mtp;
+		bool hasPassword = false;
 		bool hasRecovery = false;
 		QString fromRecoveryCode;
 		bool notEmptyPassport = false;
 		QString hint;
-		Core::SecureSecretAlgo newSecureSecretAlgo;
 		bool turningOff = false;
 		TimeId pendingResetDate = 0;
 
@@ -86,7 +90,6 @@ private:
 	void closeReplacedBy();
 	void oldChanged();
 	void newChanged();
-	void emailChanged();
 	void save(bool force = false);
 	void badOldPasscode();
 	void recoverByEmail();

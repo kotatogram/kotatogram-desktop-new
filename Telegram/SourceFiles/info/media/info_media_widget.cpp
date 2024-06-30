@@ -9,14 +9,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "info/media/info_media_inner_widget.h"
 #include "info/info_controller.h"
+#include "main/main_session.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/search_field_controller.h"
 #include "ui/ui_utility.h"
 #include "data/data_peer.h"
+#include "data/data_user.h"
+#include "data/data_channel.h"
+#include "data/data_forum_topic.h"
+#include "lang/lang_keys.h"
 #include "styles/style_info.h"
 
-namespace Info {
-namespace Media {
+namespace Info::Media {
 
 std::optional<int> TypeToTabIndex(Type type) {
 	switch (type) {
@@ -38,16 +42,38 @@ Type TabIndexToType(int index) {
 
 Memento::Memento(not_null<Controller*> controller)
 : Memento(
-	controller->peer(),
+	(controller->peer()
+		? controller->peer()
+		: controller->storiesPeer()
+		? controller->storiesPeer()
+		: controller->parentController()->session().user()),
+	controller->topic(),
 	controller->migratedPeerId(),
-	controller->section().mediaType()) {
+	(controller->section().type() == Section::Type::Downloads
+		? Type::File
+		: controller->section().type() == Section::Type::Stories
+		? Type::PhotoVideo
+		: controller->section().mediaType())) {
 }
 
 Memento::Memento(not_null<PeerData*> peer, PeerId migratedPeerId, Type type)
-: ContentMemento(peer, migratedPeerId)
+: Memento(peer, nullptr, migratedPeerId, type) {
+}
+
+Memento::Memento(not_null<Data::ForumTopic*> topic, Type type)
+: Memento(topic->channel(), topic, PeerId(), type) {
+}
+
+Memento::Memento(
+	not_null<PeerData*> peer,
+	Data::ForumTopic *topic,
+	PeerId migratedPeerId,
+	Type type)
+: ContentMemento(peer, topic, migratedPeerId)
 , _type(type) {
 	_searchState.query.type = type;
 	_searchState.query.peerId = peer->id;
+	_searchState.query.topicRootId = topic ? topic->rootId() : 0;
 	_searchState.query.migratedPeerId = migratedPeerId;
 	if (migratedPeerId) {
 		_searchState.migratedList = Storage::SparseIdsList();
@@ -87,11 +113,37 @@ rpl::producer<SelectedItems> Widget::selectedListValue() const {
 	return _inner->selectedListValue();
 }
 
-void Widget::cancelSelection() {
-	_inner->cancelSelection();
+void Widget::selectionAction(SelectionAction action) {
+	_inner->selectionAction(action);
+}
+
+rpl::producer<QString> Widget::title() {
+	if (controller()->key().peer()->sharedMediaInfo() && isStackBottom()) {
+		return tr::lng_profile_shared_media();
+	}
+	switch (controller()->section().mediaType()) {
+	case Section::MediaType::Photo:
+		return tr::lng_media_type_photos();
+	case Section::MediaType::GIF:
+		return tr::lng_media_type_gifs();
+	case Section::MediaType::Video:
+		return tr::lng_media_type_videos();
+	case Section::MediaType::MusicFile:
+		return tr::lng_media_type_songs();
+	case Section::MediaType::File:
+		return tr::lng_media_type_files();
+	case Section::MediaType::RoundVoiceFile:
+		return tr::lng_media_type_audios();
+	case Section::MediaType::Link:
+		return tr::lng_media_type_links();
+	case Section::MediaType::RoundFile:
+		return tr::lng_media_type_rounds();
+	}
+	Unexpected("Bad media type in Info::TitleValue()");
 }
 
 void Widget::setIsStackBottom(bool isStackBottom) {
+	ContentWidget::setIsStackBottom(isStackBottom);
 	_inner->setIsStackBottom(isStackBottom);
 }
 
@@ -129,5 +181,4 @@ void Widget::restoreState(not_null<Memento*> memento) {
 	_inner->restoreState(memento);
 }
 
-} // namespace Media
-} // namespace Info
+} // namespace Info::Media

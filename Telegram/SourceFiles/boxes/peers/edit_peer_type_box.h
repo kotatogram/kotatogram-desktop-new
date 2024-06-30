@@ -7,8 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/abstract_box.h"
-#include "base/timer.h"
+#include "ui/layers/box_content.h"
 
 namespace style {
 struct SettingsCountButton;
@@ -18,6 +17,10 @@ namespace Ui {
 class VerticalLayout;
 class SettingsButton;
 } // namespace Ui
+
+namespace Window {
+class SessionNavigation;
+} // namespace Window
 
 enum class Privacy {
 	HasUsername,
@@ -30,16 +33,25 @@ enum class UsernameState {
 	NotAvailable,
 };
 
+struct EditPeerTypeData {
+	Privacy privacy = Privacy::NoUsername;
+	QString username;
+	std::vector<QString> usernamesOrder;
+	bool hasLinkedChat = false;
+	bool noForwards = false;
+	bool joinToWrite = false;
+	bool requestToJoin = false;
+};
+
 class EditPeerTypeBox : public Ui::BoxContent {
 public:
 	EditPeerTypeBox(
 		QWidget*,
+		Window::SessionNavigation *navigation,
 		not_null<PeerData*> peer,
 		bool useLocationPhrases,
-		std::optional<FnMut<void(Privacy, QString, bool)>> savedCallback,
-		std::optional<Privacy> privacySaved,
-		std::optional<QString> usernameSaved,
-		std::optional<bool> noForwardsSaved,
+		std::optional<FnMut<void(EditPeerTypeData)>> savedCallback,
+		std::optional<EditPeerTypeData> dataSaved,
 		std::optional<rpl::producer<QString>> usernameError = {});
 
 	// For invite link only.
@@ -52,13 +64,12 @@ protected:
 	void setInnerFocus() override;
 
 private:
-	not_null<PeerData*> _peer;
+	Window::SessionNavigation *_navigation = nullptr;
+	const not_null<PeerData*> _peer;
 	bool _useLocationPhrases = false;
-	std::optional<FnMut<void(Privacy, QString, bool)>> _savedCallback;
+	std::optional<FnMut<void(EditPeerTypeData)>> _savedCallback;
 
-	std::optional<Privacy> _privacySavedValue;
-	std::optional<QString> _usernameSavedValue;
-	std::optional<bool> _noForwardsValue;
+	std::optional<EditPeerTypeData> _dataSavedValue;
 	std::optional<rpl::producer<QString>> _usernameError;
 
 	rpl::event_stream<> _focusRequests;

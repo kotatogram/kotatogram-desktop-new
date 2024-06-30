@@ -19,9 +19,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/menu/menu_action.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/checkbox.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/layers/generic_box.h"
+#include "ui/painter.h"
 #include "lang/lang_keys.h"
 #include "base/unixtime.h"
 #include "base/timer_rpl.h"
@@ -58,7 +59,7 @@ private:
 	const not_null<QAction*> _dummyAction;
 	const style::Menu &_st;
 	const not_null<PeerData*> _peer;
-	std::shared_ptr<Data::CloudImageView> _userpicView;
+	Ui::PeerUserpicView _userpicView;
 
 	Ui::Text::String _text;
 	Ui::Text::String _name;
@@ -181,10 +182,10 @@ void JoinAsAction::prepare() {
 	rpl::combine(
 		tr::lng_group_call_display_as_header(),
 		Info::Profile::NameValue(_peer)
-	) | rpl::start_with_next([=](QString text, TextWithEntities name) {
+	) | rpl::start_with_next([=](QString text, QString name) {
 		const auto &padding = st::groupCallJoinAsPadding;
 		_text.setMarkedText(_st.itemStyle, { text }, MenuTextOptions);
-		_name.setMarkedText(_st.itemStyle, name, MenuTextOptions);
+		_name.setMarkedText(_st.itemStyle, { name }, MenuTextOptions);
 		const auto textWidth = _text.maxWidth();
 		const auto nameWidth = _name.maxWidth();
 		const auto textLeft = padding.left()
@@ -216,7 +217,7 @@ QPoint JoinAsAction::prepareRippleStartPosition() const {
 }
 
 QImage JoinAsAction::prepareRippleMask() const {
-	return Ui::RippleAnimation::rectMask(size());
+	return Ui::RippleAnimation::RectMask(size());
 }
 
 int JoinAsAction::contentHeight() const {
@@ -364,7 +365,7 @@ QPoint RecordingAction::prepareRippleStartPosition() const {
 }
 
 QImage RecordingAction::prepareRippleMask() const {
-	return Ui::RippleAnimation::rectMask(size());
+	return Ui::RippleAnimation::RectMask(size());
 }
 
 int RecordingAction::contentHeight() const {
@@ -454,7 +455,7 @@ void LeaveBox(
 				st::boxRowPadding.right(),
 				st::boxRowPadding.bottom()))
 		: nullptr;
-	const auto weak = base::make_weak(call.get());
+	const auto weak = base::make_weak(call);
 	auto label = scheduled
 		? tr::lng_group_call_close()
 		: tr::lng_group_call_leave();
@@ -473,22 +474,10 @@ void LeaveBox(
 	box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 }
 
-void ConfirmBoxBuilder(
-		not_null<Ui::GenericBox*> box,
-		ConfirmBoxArgs &&args) {
-	const auto label = box->addRow(
-		object_ptr<Ui::FlatLabel>(
-			box.get(),
-			rpl::single(args.text),
-			args.st ? *args.st : st::groupCallBoxLabel),
-		st::boxPadding);
-	if (args.callback) {
-		box->addButton(std::move(args.button), std::move(args.callback));
-	}
-	if (args.filter) {
-		label->setClickHandlerFilter(std::move(args.filter));
-	}
-	box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+object_ptr<Ui::GenericBox> ConfirmBox(Ui::ConfirmBoxArgs &&args) {
+	auto copy = std::move(args);
+	copy.labelStyle = &st::groupCallBoxLabel;
+	return Ui::MakeConfirmBox(std::move(copy));
 }
 
 void FillMenu(
@@ -499,7 +488,7 @@ void FillMenu(
 		Fn<void()> chooseJoinAs,
 		Fn<void()> chooseShareScreenSource,
 		Fn<void(object_ptr<Ui::BoxContent>)> showBox) {
-	const auto weak = base::make_weak(call.get());
+	const auto weak = base::make_weak(call);
 	const auto resolveReal = [=] {
 		const auto real = peer->groupCall();
 		const auto strong = weak.get();
@@ -539,7 +528,7 @@ void FillMenu(
 			if (const auto real = resolveReal()) {
 				showBox(Box(
 					EditGroupCallTitleBox,
-					peer->name,
+					peer->name(),
 					real->title(),
 					livestream,
 					done));

@@ -27,14 +27,14 @@ public:
 	GroupCallUserpics(
 		const style::GroupCallUserpics &st,
 		rpl::producer<bool> &&hideBlobs,
-		Fn<void()> repaint,
-		int userpicRadius);
+		Fn<void()> repaint);
 	~GroupCallUserpics();
 
 	void update(
 		const std::vector<GroupCallUser> &users,
 		bool visible);
-	void paint(Painter &p, int x, int y, int size);
+	void paint(QPainter &p, int x, int y, int size);
+	void finishAnimating();
 
 	[[nodiscard]] int maxWidth() const;
 	[[nodiscard]] rpl::producer<int> widthValue() const;
@@ -64,7 +64,6 @@ private:
 	int _maxWidth = 0;
 	bool _skipLevelUpdate = false;
 	crl::time _speakingAnimationHideLastTime = 0;
-	int _userpicRadius = 3;
 
 	rpl::variable<int> _width;
 

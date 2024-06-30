@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
+#include "ui/unread_badge.h"
 #include "ui/effects/animations.h"
 #include "base/timer.h"
 #include "base/object_ptr.h"
@@ -21,10 +22,14 @@ namespace Ui {
 class AbstractButton;
 class RoundButton;
 class IconButton;
-class DropdownMenu;
+class PopupMenu;
 class UnreadBadge;
+class InputField;
+class CrossButton;
 class InfiniteRadialAnimation;
 enum class ReportReason;
+template <typename Widget>
+class FadeWrapScaled;
 } // namespace Ui
 
 namespace Window {
@@ -34,6 +39,8 @@ class SessionController;
 namespace HistoryView {
 
 class SendActionPainter;
+
+[[nodiscard]] QString SwitchToChooseFromQuery();
 
 class TopBarWidget final : public Ui::RpWidget {
 public:
@@ -71,21 +78,46 @@ public:
 	void showChooseMessagesForReport(Ui::ReportReason reason);
 	void clearChooseMessagesForReport();
 
-	rpl::producer<> forwardSelectionRequest() const {
+	bool toggleSearch(bool shown, anim::type animated);
+	void searchEnableJumpToDate(bool enable);
+	void searchEnableChooseFromUser(bool enable, bool visible);
+	bool searchSetFocus();
+	[[nodiscard]] bool searchMode() const;
+	[[nodiscard]] bool searchHasFocus() const;
+	[[nodiscard]] rpl::producer<> searchCancelled() const;
+	[[nodiscard]] rpl::producer<> searchSubmitted() const;
+	[[nodiscard]] rpl::producer<QString> searchQuery() const;
+	[[nodiscard]] QString searchQueryCurrent() const;
+	void searchClear();
+	void searchSetText(const QString &query);
+
+	[[nodiscard]] rpl::producer<> forwardSelectionRequest() const {
 		return _forwardSelection.events();
 	}
-	rpl::producer<> sendNowSelectionRequest() const {
+	[[nodiscard]] rpl::producer<> sendNowSelectionRequest() const {
 		return _sendNowSelection.events();
 	}
-	rpl::producer<> deleteSelectionRequest() const {
+	[[nodiscard]] rpl::producer<> deleteSelectionRequest() const {
 		return _deleteSelection.events();
 	}
-	rpl::producer<> clearSelectionRequest() const {
+	[[nodiscard]] rpl::producer<> clearSelectionRequest() const {
 		return _clearSelection.events();
 	}
-	rpl::producer<> cancelChooseForReportRequest() const {
+	[[nodiscard]] rpl::producer<> cancelChooseForReportRequest() const {
 		return _cancelChooseForReport.events();
 	}
+	[[nodiscard]] rpl::producer<> jumpToDateRequest() const {
+		return _jumpToDateRequests.events();
+	}
+	[[nodiscard]] rpl::producer<> chooseFromUserRequest() const {
+		return _chooseFromUserRequests.events();
+	}
+	[[nodiscard]] rpl::producer<> searchRequest() const;
+
+	void setGeometryWithNarrowRatio(
+		QRect geometry,
+		int narrowWidth,
+		float64 narrowRatio);
 
 protected:
 	void paintEvent(QPaintEvent *e) override;
@@ -102,15 +134,17 @@ private:
 	void refreshLang();
 	void updateSearchVisibility();
 	void updateControlsGeometry();
-	void selectedShowCallback();
+	void slideAnimationCallback();
 	void updateInfoToggleActive();
+	void setupDragOnBackButton();
 
 	void call();
 	void groupCall();
-	void startGroupCall(not_null<ChannelData*> megagroup, bool confirmed);
-	void search();
-	void showMenu();
+	void showPeerMenu();
+	void showGroupCallMenu(not_null<PeerData*> peer);
 	void toggleInfoSection();
+
+	[[nodiscard]] bool createMenu(not_null<Ui::IconButton*> button);
 
 	void handleEmojiInteractionSeen(const QString &emoticon);
 	bool paintSendAction(
@@ -135,7 +169,8 @@ private:
 		int availableWidth,
 		int outerWidth);
 	bool paintConnectingState(Painter &p, int left, int top, int outerWidth);
-	QRect getMembersShowAreaGeometry() const;
+	[[nodiscard]] QRect getMembersShowAreaGeometry() const;
+	[[nodiscard]] bool trackOnlineOf(not_null<PeerData*> user) const;
 	void updateMembersShowArea();
 	void updateOnlineDisplay();
 	void updateOnlineDisplayTimer();
@@ -151,20 +186,38 @@ private:
 	[[nodiscard]] bool showSelectedActions() const;
 
 	const not_null<Window::SessionController*> _controller;
+	const bool _primaryWindow = false;
 	ActiveChat _activeChat;
 	QString _customTitleText;
 	std::unique_ptr<EmojiInteractionSeenAnimation> _emojiInteractionSeen;
 	rpl::lifetime _activeChatLifetime;
 
+	Ui::PeerBadge _titleBadge;
+	Ui::Text::String _title;
+	int _titleNameVersion = 0;
+
 	int _selectedCount = 0;
 	bool _canDelete = false;
 	bool _canForward = false;
 	bool _canSendNow = false;
+	bool _searchMode = false;
 
 	Ui::Animations::Simple _selectedShown;
+	Ui::Animations::Simple _searchShown;
 
 	object_ptr<Ui::RoundButton> _clear;
 	object_ptr<Ui::RoundButton> _forward, _sendNow, _delete;
+	object_ptr<Ui::InputField> _searchField = { nullptr };
+	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _chooseFromUser
+		= { nullptr };
+	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _jumpToDate
+		= { nullptr };
+	object_ptr<Ui::CrossButton> _searchCancel = { nullptr };
+	rpl::variable<QString> _searchQuery;
+	rpl::event_stream<> _searchCancelled;
+	rpl::event_stream<> _searchSubmitted;
+	rpl::event_stream<> _jumpToDateRequests;
+	rpl::event_stream<> _chooseFromUserRequests;
 
 	object_ptr<Ui::IconButton> _back;
 	object_ptr<Ui::IconButton> _cancelChoose;
@@ -176,10 +229,13 @@ private:
 	object_ptr<Ui::IconButton> _search;
 	object_ptr<Ui::IconButton> _infoToggle;
 	object_ptr<Ui::IconButton> _menuToggle;
-	object_ptr<Ui::DropdownMenu> _menu = { nullptr };
+	base::unique_qptr<Ui::PopupMenu> _menu;
 
 	object_ptr<TWidget> _membersShowArea = { nullptr };
 	rpl::event_stream<bool> _membersShowAreaActive;
+
+	float64 _narrowRatio = 0.;
+	int _narrowWidth = 0;
 
 	Ui::Text::String _titlePeerText;
 	bool _titlePeerTextOnline = false;
@@ -198,6 +254,8 @@ private:
 	rpl::event_stream<> _deleteSelection;
 	rpl::event_stream<> _clearSelection;
 	rpl::event_stream<> _cancelChooseForReport;
+
+	rpl::lifetime _backLifetime;
 
 };
 

@@ -9,11 +9,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/timer.h"
 #include "base/object_ptr.h"
-#include "core/core_settings.h"
+#include "core/core_settings_proxy.h"
 #include "mtproto/connection_abstract.h"
 #include "mtproto/mtproto_proxy_data.h"
 
 namespace Ui {
+class Show;
 class BoxContent;
 class InputField;
 class PortInput;
@@ -117,6 +118,7 @@ private:
 	rpl::event_stream<ItemView> _views;
 	base::Timer _saveTimer;
 	rpl::event_stream<ProxyData::Settings> _proxySettingsChanges;
+	std::shared_ptr<Ui::Show> _show;
 
 	ProxyData _lastSelectedProxy;
 	bool _lastSelectedProxyUsed = false;

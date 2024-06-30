@@ -11,7 +11,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_widget.h"
 #include "info/members/info_members_widget.h"
 #include "info/common_groups/info_common_groups_widget.h"
+#include "info/saved/info_saved_sublists_widget.h"
 #include "info/settings/info_settings_widget.h"
+#include "info/similar_channels/info_similar_channels_widget.h"
 #include "info/polls/info_polls_results_widget.h"
 #include "info/info_section_widget.h"
 #include "info/info_layer_widget.h"
@@ -20,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peer_list_box.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
+#include "data/data_forum_topic.h"
 #include "data/data_session.h"
 #include "main/main_session.h"
 
@@ -33,6 +36,14 @@ Memento::Memento(not_null<PeerData*> peer, Section section)
 : Memento(DefaultStack(peer, section)) {
 }
 
+Memento::Memento(not_null<Data::ForumTopic*> topic)
+: Memento(topic, Section::Type::Profile) {
+}
+
+Memento::Memento(not_null<Data::ForumTopic*> topic, Section section)
+: Memento(DefaultStack(topic, section)) {
+}
+
 Memento::Memento(Settings::Tag settings, Section section)
 : Memento(DefaultStack(settings, section)) {
 }
@@ -43,6 +54,27 @@ Memento::Memento(not_null<PollData*> poll, FullMsgId contextId)
 
 Memento::Memento(std::vector<std::shared_ptr<ContentMemento>> stack)
 : _stack(std::move(stack)) {
+	auto topics = base::flat_set<not_null<Data::ForumTopic*>>();
+	for (auto &entry : _stack) {
+		if (const auto topic = entry->topic()) {
+			topics.emplace(topic);
+		}
+	}
+	for (const auto &topic : topics) {
+		topic->destroyed(
+		) | rpl::start_with_next([=] {
+			for (auto i = begin(_stack); i != end(_stack);) {
+				if (i->get()->topic() == topic) {
+					i = _stack.erase(i);
+				} else {
+					++i;
+				}
+			}
+			if (_stack.empty()) {
+				_removeRequests.fire({});
+			}
+		}, _lifetime);
+	}
 }
 
 std::vector<std::shared_ptr<ContentMemento>> Memento::DefaultStack(
@@ -50,6 +82,14 @@ std::vector<std::shared_ptr<ContentMemento>> Memento::DefaultStack(
 		Section section) {
 	auto result = std::vector<std::shared_ptr<ContentMemento>>();
 	result.push_back(DefaultContent(peer, section));
+	return result;
+}
+
+std::vector<std::shared_ptr<ContentMemento>> Memento::DefaultStack(
+		not_null<Data::ForumTopic*> topic,
+		Section section) {
+	auto result = std::vector<std::shared_ptr<ContentMemento>>();
+	result.push_back(DefaultContent(topic, section));
 	return result;
 }
 
@@ -72,7 +112,9 @@ std::vector<std::shared_ptr<ContentMemento>> Memento::DefaultStack(
 }
 
 Section Memento::DefaultSection(not_null<PeerData*> peer) {
-	if (peer->sharedMediaInfo()) {
+	if (peer->savedSublistsInfo()) {
+		return Section(Section::Type::SavedSublists);
+	} else if (peer->sharedMediaInfo()) {
 		return Section(Section::MediaType::Photo);
 	}
 	return Section(Section::Type::Profile);
@@ -103,10 +145,32 @@ std::shared_ptr<ContentMemento> Memento::DefaultContent(
 			section.mediaType());
 	case Section::Type::CommonGroups:
 		return std::make_shared<CommonGroups::Memento>(peer->asUser());
+	case Section::Type::SimilarChannels:
+		return std::make_shared<SimilarChannels::Memento>(
+			peer->asChannel());
+	case Section::Type::SavedSublists:
+		return std::make_shared<Saved::SublistsMemento>(&peer->session());
 	case Section::Type::Members:
 		return std::make_shared<Members::Memento>(
 			peer,
 			migratedPeerId);
+	}
+	Unexpected("Wrong section type in Info::Memento::DefaultContent()");
+}
+
+std::shared_ptr<ContentMemento> Memento::DefaultContent(
+		not_null<Data::ForumTopic*> topic,
+		Section section) {
+	const auto peer = topic->peer();
+	const auto migrated = peer->migrateFrom();
+	const auto migratedPeerId = migrated ? migrated->id : PeerId(0);
+	switch (section.type()) {
+	case Section::Type::Profile:
+		return std::make_shared<Profile::Memento>(topic);
+	case Section::Type::Media:
+		return std::make_shared<Media::Memento>(topic, section.mediaType());
+	case Section::Type::Members:
+		return std::make_shared<Members::Memento>(peer, migratedPeerId);
 	}
 	Unexpected("Wrong section type in Info::Memento::DefaultContent()");
 }

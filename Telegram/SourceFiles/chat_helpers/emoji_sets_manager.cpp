@@ -15,10 +15,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animations.h"
 #include "ui/effects/radial_animation.h"
 #include "ui/emoji_config.h"
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "core/application.h"
+#include "lang/lang_keys.h"
 #include "main/main_account.h"
-#include "mainwidget.h"
 #include "storage/storage_cloud_blob.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
@@ -35,14 +36,14 @@ struct Set : public Blob {
 };
 
 inline auto PreviewPath(int i) {
-	return qsl(":/gui/emoji/set%1_preview.webp").arg(i);
+	return u":/gui/emoji/set%1_preview.webp"_q.arg(i);
 }
 
 const auto kSets = {
 	Set{ { 0,    0,         0, "Mac" },       PreviewPath(0) },
-	Set{ { 1, 1112, 7'914'459, "Android" },   PreviewPath(1) },
-	Set{ { 2, 1113, 5'287'724, "Twemoji" },   PreviewPath(2) },
-	Set{ { 3, 1114, 6'687'347, "JoyPixels" }, PreviewPath(3) },
+	Set{ { 1, 1804, 8'115'639, "Android" },   PreviewPath(1) },
+	Set{ { 2, 1805, 5'481'197, "Twemoji" },   PreviewPath(2) },
+	Set{ { 3, 1806, 7'047'594, "JoyPixels" }, PreviewPath(3) },
 };
 
 using Loading = MTP::DedicatedLoader::Progress;
@@ -93,8 +94,8 @@ private:
 	void setupLabels(const Set &set);
 	void setupPreview(const Set &set);
 	void setupAnimation();
-	void paintPreview(Painter &p) const;
-	void paintRadio(Painter &p);
+	void paintPreview(QPainter &p) const;
+	void paintRadio(QPainter &p);
 	void setupHandler();
 	void load();
 	void radialAnimationCallback(crl::time now);
@@ -120,7 +121,7 @@ void SetGlobalLoader(base::unique_qptr<Loader> loader) {
 	GlobalLoaderValues.fire(GlobalLoader.get());
 }
 
-int GetDownloadSize(int id) {
+int64 GetDownloadSize(int id) {
 	return ranges::find(kSets, id, &Set::id)->size;
 }
 
@@ -152,9 +153,8 @@ QString StateDescription(const SetState &state) {
 }
 
 bool GoodSetPartName(const QString &name) {
-	return (name == qstr("config.json"))
-		|| (name.startsWith(qstr("emoji_"))
-			&& name.endsWith(qstr(".webp")));
+	return (name == u"config.json"_q)
+		|| (name.startsWith(u"emoji_"_q) && name.endsWith(u".webp"_q));
 }
 
 bool UnpackSet(const QString &path, const QString &folder) {
@@ -230,7 +230,7 @@ Row::Row(QWidget *widget, not_null<Main::Session*> session, const Set &set)
 }
 
 void Row::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 
 	const auto over = showOver();
 	const auto bg = over ? st::windowBgOver : st::windowBg;
@@ -241,13 +241,13 @@ void Row::paintEvent(QPaintEvent *e) {
 	paintRadio(p);
 }
 
-void Row::paintPreview(Painter &p) const {
+void Row::paintPreview(QPainter &p) const {
 	const auto x = st::manageEmojiPreviewPadding.left();
 	const auto y = st::manageEmojiPreviewPadding.top();
 	const auto width = st::manageEmojiPreviewWidth;
 	const auto height = st::manageEmojiPreviewWidth;
 	auto &&preview = ranges::views::zip(_preview, ranges::views::ints(0, int(_preview.size())));
-	for (const auto [pixmap, index] : preview) {
+	for (const auto &[pixmap, index] : preview) {
 		const auto row = (index / 2);
 		const auto column = (index % 2);
 		const auto left = x + (column ? width - st::manageEmojiPreview : 0);
@@ -256,13 +256,13 @@ void Row::paintPreview(Painter &p) const {
 	}
 }
 
-void Row::paintRadio(Painter &p) {
+void Row::paintRadio(QPainter &p) {
 	if (_loading && !_loading->animating()) {
 		_loading = nullptr;
 	}
 	const auto loading = _loading
 		? _loading->computeState()
-		: Ui::RadialState{ 0., 0, FullArcLength };
+		: Ui::RadialState{ 0., 0, arc::kFullLength };
 	const auto isToggledSet = v::is<Active>(_state.current());
 	const auto isActiveSet = isToggledSet || v::is<Loading>(_state.current());
 	const auto toggled = _toggled.value(isToggledSet ? 1. : 0.);
@@ -301,7 +301,7 @@ void Row::paintRadio(Painter &p) {
 			_st->thickness,
 			pen.color(),
 			_st->bg);
-	} else if (loading.arcLength < FullArcLength) {
+	} else if (loading.arcLength < arc::kFullLength) {
 		p.drawArc(rect, loading.arcFrom, loading.arcLength);
 	} else {
 		p.drawEllipse(rect);
@@ -364,9 +364,7 @@ void Row::setupContent(const Set &set) {
 	) | rpl::map([=](Loader *loader) {
 		return (loader && loader->id() == _id)
 			? loader->state()
-			: rpl::single(
-				rpl::empty_value()
-			) | rpl::then(
+			: rpl::single(rpl::empty) | rpl::then(
 				Updated()
 			) | rpl::map([=] {
 				return ComputeState(_id);

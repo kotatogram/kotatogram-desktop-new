@@ -5,7 +5,6 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
-      - '!docs/building-win.md'
       - 'kotatogram_changes.txt'
       - 'changelog.txt'
       - 'LEGAL'
@@ -14,7 +13,7 @@ on:
       - '!.github/workflows/win.yml'
       - 'lib/xdg/**'
       - 'snap/**'
-      - 'Telegram/build/**'
+      - 'Telegram/build/docker/**'
       - 'Telegram/Resources/uwp/**'
       - 'Telegram/SourceFiles/platform/linux/**'
       - 'Telegram/SourceFiles/platform/mac/**'
@@ -25,7 +24,6 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
-      - '!docs/building-win.md'
       - 'kotatogram_changes.txt'
       - 'changelog.txt'
       - 'LEGAL'
@@ -34,7 +32,7 @@ on:
       - '!.github/workflows/win.yml'
       - 'lib/xdg/**'
       - 'snap/**'
-      - 'Telegram/build/**'
+      - 'Telegram/build/docker/**'
       - 'Telegram/Resources/uwp/**'
       - 'Telegram/SourceFiles/platform/linux/**'
       - 'Telegram/SourceFiles/platform/mac/**'
@@ -56,6 +54,7 @@ jobs:
     strategy:
       matrix:
         arch: [Win32, x64]
+        generator: ["", "Ninja Multi-Config"]
 
     env:
       UPLOAD_ARTIFACT: "true"
@@ -65,45 +64,33 @@ jobs:
     defaults:
       run:
         shell: cmd
-        working-directory: ${{ github.workspace }}
 
     steps:
       - name: Prepare directories.
         run: |
           mkdir %userprofile%\TBuild\Libraries
-          echo TBUILD=%userprofile%\TBuild>>%GITHUB_ENV%
+          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
+          echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
 
       - name: Get repository name.
         shell: bash
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
-      - uses: ilammy/msvc-dev-cmd@v1.10.0
+      - uses: ilammy/msvc-dev-cmd@v1.12.0
         name: Native Tools Command Prompt.
         with:
           arch: ${{ matrix.arch }}
 
       - name: Clone.
-        uses: LebedevRI/checkout@issue197
+        uses: actions/checkout@v3.1.0
         with:
           submodules: recursive
           path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
 
-      - name: Choco installs.
-        run: |
-          choco install --no-progress -y nasm strawberryperl yasm jom ninja
-          py -m pip install pywin32
-
-      - name: Install msys64.
-        run: |
-          mkdir %TBUILD%\ThirdParty
-          xcopy /E /I C:\msys64 %TBUILD%\ThirdParty\msys64
-
       - name: Set up environment paths.
         shell: bash
         run: |
-          echo "C:\\Strawberry\\perl\\bin\\" >> $GITHUB_PATH
-          echo "C:\\Program Files\\NASM\\" >> $GITHUB_PATH
-          echo "C:\\ProgramData\\chocolatey\\lib\\ninja\\tools\\" >> $GITHUB_PATH
+          echo "CACHE_KEY=$(sha256sum $TBUILD/$REPO_NAME/$PREPARE_PATH | awk '{ print $1 }')" >> $GITHUB_ENV
 
           echo "Configurate git for cherry-picks."
           git config --global user.email "you@example.com"
@@ -116,36 +103,65 @@ jobs:
 
       - name: Libraries cache.
         id: cache-libs
-        uses: actions/cache@v2
+        uses: actions/cache@v3.0.11
         with:
-          path: ${{ env.TBUILD }}/Libraries
-          key: ${{ runner.OS }}-libs
+          path: ${{ env.TBUILD }}\Libraries
+          key: ${{ runner.OS }}-${{ matrix.arch }}-libs-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-${{ matrix.arch }}-libs-
 
       - name: Libraries.
         env:
           GYP_MSVS_OVERRIDE_PATH: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\'
           GYP_MSVS_VERSION: 2022
         run: |
-          C:
           cd %TBUILD%
-          %REPO_NAME%/Telegram/build/prepare/win.bat skip-release silent
+          %REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent
 
-      - name: Read defines.
+      - name: Read configuration matrix.
         shell: bash
         run: |
+          ARTIFACT_NAME="Kotatogram"
+
+          ARCH=""
+          if [ -n "${{ matrix.arch }}" ]; then
+            case "${{ matrix.arch }}" in
+              Win32) ARCH="x86";;
+              *) ARCH="${{ matrix.arch }}";;
+            esac
+            echo "Architecture from matrix: $ARCH"
+            ARTIFACT_NAME="${ARTIFACT_NAME}_${{ matrix.arch }}"
+          fi
+
+          GENERATOR=""
+          if [ -n "${{ matrix.generator }}" ]; then
+            GENERATOR="-G \"${{ matrix.generator }}\""
+            echo "Generator from matrix: $GENERATOR"
+            ARTIFACT_NAME="${ARTIFACT_NAME}_${{ matrix.generator }}"
+          fi
+          echo "TDESKTOP_BUILD_GENERATOR=$GENERATOR" >> $GITHUB_ENV
+
+          [ -n "$GENERATOR" ] && ARCH=""
+          echo "TDESKTOP_BUILD_ARCH=$ARCH" >> $GITHUB_ENV
+
           DEFINE=""
           if [ -n "${{ matrix.defines }}" ]; then
             DEFINE="-D ${{ matrix.defines }}=ON"
-            echo Define from matrix: $DEFINE
-            echo "ARTIFACT_NAME=Kotatogram_${{ matrix.defines }}" >> $GITHUB_ENV
-          else
-            echo "ARTIFACT_NAME=Kotatogram" >> $GITHUB_ENV
+            echo "Define from matrix: $DEFINE"
+            ARTIFACT_NAME="${ARTIFACT_NAME}_${{ matrix.defines }}"
           fi
           echo "TDESKTOP_BUILD_DEFINE=$DEFINE" >> $GITHUB_ENV
 
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
+
+          API="-D TDESKTOP_API_TEST=ON"
+          if [ $GITHUB_REF == 'refs/heads/nightly' ]; then
+            echo "Use the open credentials."
+            API="-D TDESKTOP_API_ID=611335 -D TDESKTOP_API_HASH=d524b414d21f4d37f08684c1df41ac9c"
+          fi
+          echo "TDESKTOP_BUILD_API=$API" >> $GITHUB_ENV
+
       - name: Free up some disk space.
         run: |
-          C:
           cd %TBUILD%
           del /S Libraries\*.pdb
           del /S Libraries\*.pch
@@ -154,33 +170,38 @@ jobs:
       - name: Kotatogram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
-          C:
           cd %TBUILD%\%REPO_NAME%\Telegram
 
           call configure.bat ^
-          ${{ matrix.arch }} ^
-          -D TDESKTOP_API_TEST=ON ^
-          -D DESKTOP_APP_USE_PACKAGED=OFF ^
+          %TDESKTOP_BUILD_GENERATOR% ^
+          %TDESKTOP_BUILD_ARCH% ^
+          %TDESKTOP_BUILD_API% ^
+          -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
           -D DESKTOP_APP_NO_PDB=ON ^
-          %TDESKTOP_BUILD_DEFINE% ^
-          -DCMAKE_SYSTEM_VERSION=%SDK%
+          %TDESKTOP_BUILD_DEFINE%
 
           if "${{ matrix.arch }}" == "x64" (
             cd ..\out64
           ) else (
             cd ..\out
           )
-          msbuild -m Telegram.sln /p:Configuration=Debug,Platform=${{ matrix.arch }},DebugSymbols=false,DebugType=none
+          cmake --build . --config Debug --parallel
 
       - name: Move artifact.
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') || (github.ref == 'refs/heads/nightly')
         run: |
+          if "${{ matrix.arch }}" == "x64" (
+            set OUT=%TBUILD%\%REPO_NAME%\out64\Debug
+          ) else (
+            set OUT=%TBUILD%\%REPO_NAME%\out\Debug
+          )
           mkdir artifact
-          move %TBUILD%\%REPO_NAME%\out\Debug\Kotatogram.exe artifact/
+          move %OUT%\Kotatogram.exe artifact/
+          move %OUT%\Updater.exe artifact/
       - uses: actions/upload-artifact@master
         name: Upload artifact.
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') || (github.ref == 'refs/heads/nightly')
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: artifact\

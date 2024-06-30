@@ -7,18 +7,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/player/media_player_button.h"
 
-#include "styles/style_widgets.h"
+#include "media/media_common.h"
+#include "ui/effects/ripple_animation.h"
+#include "ui/painter.h"
+#include "styles/style_media_player.h"
 
-namespace Media {
-namespace Player {
+#include <QtCore/QtMath>
 
-PlayButtonLayout::PlayButtonLayout(const style::MediaPlayerButton &st, Fn<void()> callback)
+namespace Media::Player {
+namespace {
+
+[[nodiscard]] QString SpeedText(float64 speed) {
+	return QString::number(base::SafeRound(speed * 10) / 10.) + 'X';
+}
+
+} // namespace
+
+PlayButtonLayout::PlayButtonLayout(
+	const style::MediaPlayerButton &st,
+	Fn<void()> callback)
 : _st(st)
 , _callback(std::move(callback)) {
 }
 
 void PlayButtonLayout::setState(State state) {
-	if (_nextState == state) return;
+	if (_nextState == state) {
+		return;
+	}
 
 	_nextState = state;
 	if (!_transformProgress.animating()) {
@@ -42,7 +57,7 @@ void PlayButtonLayout::finishTransform() {
 	if (_callback) _callback();
 }
 
-void PlayButtonLayout::paint(Painter &p, const QBrush &brush) {
+void PlayButtonLayout::paint(QPainter &p, const QBrush &brush) {
 	if (_transformProgress.animating()) {
 		auto from = _oldState, to = _state;
 		auto backward = _transformBackward;
@@ -74,7 +89,7 @@ void PlayButtonLayout::paint(Painter &p, const QBrush &brush) {
 	}
 }
 
-void PlayButtonLayout::paintPlay(Painter &p, const QBrush &brush) {
+void PlayButtonLayout::paintPlay(QPainter &p, const QBrush &brush) {
 	auto playLeft = 0. + _st.playPosition.x();
 	auto playTop = 0. + _st.playPosition.y();
 	auto playWidth = _st.playOuter.width() - 2 * playLeft;
@@ -92,7 +107,7 @@ void PlayButtonLayout::paintPlay(Painter &p, const QBrush &brush) {
 	p.fillPath(pathPlay, brush);
 }
 
-void PlayButtonLayout::paintPlayToPause(Painter &p, const QBrush &brush, float64 progress) {
+void PlayButtonLayout::paintPlayToPause(QPainter &p, const QBrush &brush, float64 progress) {
 	auto playLeft = 0. + _st.playPosition.x();
 	auto playTop = 0. + _st.playPosition.y();
 	auto playWidth = _st.playOuter.width() - 2 * playLeft;
@@ -136,9 +151,7 @@ void PlayButtonLayout::paintPlayToPause(Painter &p, const QBrush &brush, float64
 	p.fillPath(anim::interpolate(pathRightPlay, pathRightPause, progress), brush);
 }
 
-void PlayButtonLayout::paintPlayToCancel(Painter &p, const QBrush &brush, float64 progress) {
-	static const auto sqrt2 = sqrt(2.);
-
+void PlayButtonLayout::paintPlayToCancel(QPainter &p, const QBrush &brush, float64 progress) {
 	auto playLeft = 0. + _st.playPosition.x();
 	auto playTop = 0. + _st.playPosition.y();
 	auto playWidth = _st.playOuter.width() - 2 * playLeft;
@@ -148,7 +161,7 @@ void PlayButtonLayout::paintPlayToCancel(Painter &p, const QBrush &brush, float6
 	auto cancelTop = 0. + _st.cancelPosition.y();
 	auto cancelWidth = _st.cancelOuter.width() - 2 * cancelLeft;
 	auto cancelHeight = _st.cancelOuter.height() - 2 * cancelTop;
-	auto cancelStroke = (0. + _st.cancelStroke) / sqrt2;
+	auto cancelStroke = (0. + _st.cancelStroke) / M_SQRT2;
 
 	p.setPen(Qt::NoPen);
 	PainterHighQualityEnabler hq(p);
@@ -184,9 +197,7 @@ void PlayButtonLayout::paintPlayToCancel(Painter &p, const QBrush &brush, float6
 	p.fillPath(anim::interpolate(pathPlay, pathCancel, progress), brush);
 }
 
-void PlayButtonLayout::paintPauseToCancel(Painter &p, const QBrush &brush, float64 progress) {
-	static const auto sqrt2 = sqrt(2.);
-
+void PlayButtonLayout::paintPauseToCancel(QPainter &p, const QBrush &brush, float64 progress) {
 	auto pauseLeft = 0. + _st.pausePosition.x();
 	auto pauseTop = 0. + _st.pausePosition.y();
 	auto pauseWidth = _st.pauseOuter.width() - 2 * pauseLeft;
@@ -197,7 +208,7 @@ void PlayButtonLayout::paintPauseToCancel(Painter &p, const QBrush &brush, float
 	auto cancelTop = 0. + _st.cancelPosition.y();
 	auto cancelWidth = _st.cancelOuter.width() - 2 * cancelLeft;
 	auto cancelHeight = _st.cancelOuter.height() - 2 * cancelTop;
-	auto cancelStroke = (0. + _st.cancelStroke) / sqrt2;
+	auto cancelStroke = (0. + _st.cancelStroke) / M_SQRT2;
 
 	p.setPen(Qt::NoPen);
 	PainterHighQualityEnabler hq(p);
@@ -241,8 +252,86 @@ void PlayButtonLayout::animationCallback() {
 }
 
 void PlayButtonLayout::startTransform(float64 from, float64 to) {
-	_transformProgress.start([this] { animationCallback(); }, from, to, st::mediaPlayerButtonTransformDuration);
+	_transformProgress.start(
+		[=] { animationCallback(); },
+		from,
+		to,
+		_st.duration);
 }
 
-} // namespace Player
-} // namespace Media
+SpeedButtonLayout::SpeedButtonLayout(
+	const style::MediaSpeedButton &st,
+	Fn<void()> callback,
+	float64 speed)
+: _st(st)
+, _speed(speed)
+, _metrics(_st.font->f)
+, _text(SpeedText(speed))
+, _textWidth(_metrics.horizontalAdvance(_text))
+, _callback(std::move(callback)) {
+}
+
+void SpeedButtonLayout::setSpeed(float64 speed) {
+	speed = base::SafeRound(speed * 10.) / 10.;
+	if (!EqualSpeeds(_speed, speed)) {
+		_speed = speed;
+		_text = SpeedText(_speed);
+		_textWidth = _metrics.horizontalAdvance(_text);
+		if (_callback) _callback();
+	}
+}
+
+void SpeedButtonLayout::paint(QPainter &p, bool over, bool active) {
+	const auto &color = active ? _st.activeFg : over ? _st.overFg : _st.fg;
+	const auto inner = QRect(QPoint(), _st.size).marginsRemoved(_st.padding);
+	_st.icon.paintInCenter(p, inner, color->c);
+
+	p.setPen(color);
+	p.setFont(_st.font);
+
+	p.drawText(
+		QPointF(inner.topLeft()) + QPointF(
+			(inner.width() - _textWidth) / 2.,
+			(inner.height() - _metrics.height()) / 2. + _metrics.ascent()),
+		_text);
+}
+
+SpeedButton::SpeedButton(QWidget *parent, const style::MediaSpeedButton &st)
+: RippleButton(parent, st.ripple)
+, _st(st)
+, _layout(st, [=] { update(); }, 2.)
+, _isDefault(true) {
+	resize(_st.size);
+}
+
+void SpeedButton::setSpeed(float64 speed, anim::type animated) {
+	_isDefault = EqualSpeeds(speed, 1.);
+	_layout.setSpeed(speed);
+	update();
+}
+
+void SpeedButton::paintEvent(QPaintEvent *e) {
+	auto p = QPainter(this);
+
+	paintRipple(
+		p,
+		QPoint(_st.padding.left(), _st.padding.top()),
+		_isDefault ? nullptr : &_st.rippleActiveColor->c);
+	_layout.paint(p, isOver(), !_isDefault);
+}
+
+QPoint SpeedButton::prepareRippleStartPosition() const {
+	const auto inner = rect().marginsRemoved(_st.padding);
+	const auto result = mapFromGlobal(QCursor::pos()) - inner.topLeft();
+	return inner.contains(result)
+		? result
+		: DisabledRippleStartPosition();
+}
+
+QImage SpeedButton::prepareRippleMask() const {
+	return Ui::RippleAnimation::RoundRectMask(
+		rect().marginsRemoved(_st.padding).size(),
+		_st.rippleRadius);
+}
+
+} // namespace Media::Player

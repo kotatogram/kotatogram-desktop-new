@@ -23,8 +23,8 @@ constexpr auto kMaxQueuedPackets = 1024;
 		not_null<AVStream*> stream,
 		Mode mode) {
 	return (mode == Mode::Video || mode == Mode::Inspection)
-		&& stream->codec
-		&& (stream->codec->codec_id == AV_CODEC_ID_VP9)
+		&& stream->codecpar
+		&& (stream->codecpar->codec_id == AV_CODEC_ID_VP9)
 		&& format->iformat
 		&& format->iformat->name
 		&& QString::fromLatin1(
@@ -54,17 +54,18 @@ int64_t File::Context::Seek(void *opaque, int64_t offset, int whence) {
 }
 
 int File::Context::read(bytes::span buffer) {
-	Assert(_size >= _offset);
-	const auto amount = std::min(std::size_t(_size - _offset), buffer.size());
+	Expects(_size >= _offset);
+
+	const auto amount = std::min(_size - _offset, int64(buffer.size()));
 
 	if (unroll()) {
-		return -1;
+		return AVERROR_EXTERNAL;
 	} else if (amount > kMaxSingleReadAmount) {
 		LOG(("Streaming Error: Read callback asked for too much data: %1"
 			).arg(amount));
-		return -1;
+		return AVERROR_EXTERNAL;
 	} else if (!amount) {
-		return amount;
+		return AVERROR_EOF;
 	}
 
 	buffer = buffer.subspan(0, amount);
@@ -86,10 +87,10 @@ int File::Context::read(bytes::span buffer) {
 		}
 		_semaphore.acquire();
 		if (_interrupted) {
-			return -1;
+			return AVERROR_EXTERNAL;
 		} else if (const auto error = _reader->streamingError()) {
 			fail(*error);
-			return -1;
+			return AVERROR_EXTERNAL;
 		}
 	}
 
@@ -102,7 +103,7 @@ int File::Context::read(bytes::span buffer) {
 int64_t File::Context::seek(int64_t offset, int whence) {
 	const auto checkedSeek = [&](int64_t offset) {
 		if (_failed || offset < 0 || offset > _size) {
-			return -1;
+			return int64(-1);
 		}
 		return (_offset = offset);
 	};
@@ -148,7 +149,8 @@ void File::Context::logFatal(
 Stream File::Context::initStream(
 		not_null<AVFormatContext*> format,
 		AVMediaType type,
-		Mode mode) {
+		Mode mode,
+		StartOptions options) {
 	auto result = Stream();
 	const auto index = result.index = av_find_best_stream(
 		format,
@@ -158,7 +160,7 @@ Stream File::Context::initStream(
 		nullptr,
 		0);
 	if (index < 0) {
-		return result;
+		return {};
 	}
 
 	const auto info = format->streams[index];
@@ -167,27 +169,36 @@ Stream File::Context::initStream(
 			// ignore cover streams
 			return Stream();
 		}
+		result.codec = FFmpeg::MakeCodecPointer({
+			.stream = info,
+			.hwAllowed = options.hwAllow,
+		});
+		if (!result.codec) {
+			return result;
+		}
 		result.rotation = FFmpeg::ReadRotationFromMetadata(info);
-		result.aspect = FFmpeg::ValidateAspectRatio(info->sample_aspect_ratio);
+		result.aspect = FFmpeg::ValidateAspectRatio(
+			info->sample_aspect_ratio);
 	} else if (type == AVMEDIA_TYPE_AUDIO) {
 		result.frequency = info->codecpar->sample_rate;
 		if (!result.frequency) {
 			return result;
 		}
+		result.codec = FFmpeg::MakeCodecPointer({ .stream = info });
+		if (!result.codec) {
+			return result;
+		}
 	}
 
-	result.codec = FFmpeg::MakeCodecPointer(info);
-	if (!result.codec) {
-		return result;
-	}
-
-	result.frame = FFmpeg::MakeFramePointer();
-	if (!result.frame) {
+	result.decodedFrame = FFmpeg::MakeFramePointer();
+	if (!result.decodedFrame) {
 		result.codec = nullptr;
 		return result;
 	}
 	result.timeBase = info->time_base;
-	result.duration = (info->duration != AV_NOPTS_VALUE)
+	result.duration = options.durationOverride
+		? options.durationOverride
+		: (info->duration != AV_NOPTS_VALUE)
 		? FFmpeg::PtsToTime(info->duration, result.timeBase)
 		: UnreliableFormatDuration(format, info, mode)
 		? kTimeUnknown
@@ -260,17 +271,19 @@ std::variant<FFmpeg::Packet, FFmpeg::AvErrorWrap> File::Context::readPacket() {
 	return error;
 }
 
-void File::Context::start(crl::time position) {
+void File::Context::start(StartOptions options) {
+	Expects(options.seekable || !options.position);
+
 	auto error = FFmpeg::AvErrorWrap();
 
 	if (unroll()) {
 		return;
 	}
 	auto format = FFmpeg::MakeFormatPointer(
-		static_cast<void *>(this),
+		static_cast<void*>(this),
 		&Context::Read,
 		nullptr,
-		&Context::Seek);
+		options.seekable ? &Context::Seek : nullptr);
 	if (!format) {
 		return fail(Error::OpenFailed);
 	}
@@ -280,12 +293,20 @@ void File::Context::start(crl::time position) {
 	}
 
 	const auto mode = _delegate->fileOpenMode();
-	auto video = initStream(format.get(), AVMEDIA_TYPE_VIDEO, mode);
+	auto video = initStream(
+		format.get(),
+		AVMEDIA_TYPE_VIDEO,
+		mode,
+		options);
 	if (unroll()) {
 		return;
 	}
 
-	auto audio = initStream(format.get(), AVMEDIA_TYPE_AUDIO, mode);
+	auto audio = initStream(
+		format.get(),
+		AVMEDIA_TYPE_AUDIO,
+		mode,
+		options);
 	if (unroll()) {
 		return;
 	}
@@ -294,8 +315,11 @@ void File::Context::start(crl::time position) {
 	if (_reader->isRemoteLoader()) {
 		sendFullInCache(true);
 	}
-	if (video.codec || audio.codec) {
-		seekToPosition(format.get(), video.codec ? video : audio, position);
+	if (options.seekable && (video.codec || audio.codec)) {
+		seekToPosition(
+			format.get(),
+			video.codec ? video : audio,
+			options.position);
 	}
 	if (unroll()) {
 		return;
@@ -425,7 +449,7 @@ File::File(std::shared_ptr<Reader> reader)
 : _reader(std::move(reader)) {
 }
 
-void File::start(not_null<FileDelegate*> delegate, crl::time position) {
+void File::start(not_null<FileDelegate*> delegate, StartOptions options) {
 	stop(true);
 
 	_reader->startStreaming();
@@ -433,7 +457,7 @@ void File::start(not_null<FileDelegate*> delegate, crl::time position) {
 
 	_thread = std::thread([=, context = &*_context] {
 		crl::toggle_fp_exceptions(true);
-		context->start(position);
+		context->start(options);
 		while (!context->finished()) {
 			context->readNextPacket();
 		}

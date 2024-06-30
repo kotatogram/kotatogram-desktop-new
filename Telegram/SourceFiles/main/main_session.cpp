@@ -8,25 +8,30 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 
 #include "apiwrap.h"
+#include "api/api_peer_colors.h"
 #include "api/api_updates.h"
-#include "api/api_send_progress.h"
 #include "api/api_user_privacy.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "main/main_session_settings.h"
+#include "main/main_app_config.h"
 #include "main/session/send_as_peers.h"
 #include "mtproto/mtproto_config.h"
 #include "chat_helpers/stickers_emoji_pack.h"
 #include "chat_helpers/stickers_dice_pack.h"
+#include "chat_helpers/stickers_gift_box_pack.h"
+#include "history/history.h"
+#include "history/history_item.h"
+#include "inline_bots/bot_attach_web_view.h"
 #include "storage/file_download.h"
 #include "storage/download_manager_mtproto.h"
 #include "storage/file_upload.h"
 #include "storage/storage_account.h"
 #include "storage/storage_facade.h"
-#include "storage/storage_account.h"
 #include "data/data_session.h"
 #include "data/data_changes.h"
 #include "data/data_user.h"
+#include "data/data_download_manager.h"
 #include "data/stickers/data_stickers.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
@@ -55,8 +60,8 @@ constexpr auto kTmpPasswordReserveTime = TimeId(10);
 	// Like 'https://telegram.me/' or 'https://t.me/'.
 	const auto &domain = session->serverConfig().internalLinksDomain;
 	const auto prefixes = {
-		qstr("https://"),
-		qstr("http://"),
+		u"https://"_q,
+		u"http://"_q,
 	};
 	for (const auto &prefix : prefixes) {
 		if (domain.startsWith(prefix, Qt::CaseInsensitive)) {
@@ -74,7 +79,8 @@ Session::Session(
 	not_null<Account*> account,
 	const MTPUser &user,
 	std::unique_ptr<SessionSettings> settings)
-: _account(account)
+: _userId(user.c_user().vid())
+, _account(account)
 , _settings(std::move(settings))
 , _changes(std::make_unique<Data::Changes>(this))
 , _api(std::make_unique<ApiWrap>(this))
@@ -84,11 +90,12 @@ Session::Session(
 , _uploader(std::make_unique<Storage::Uploader>(_api.get()))
 , _storage(std::make_unique<Storage::Facade>())
 , _data(std::make_unique<Data::Session>(this))
-, _userId(user.c_user().vid())
 , _user(_data->processUser(user))
 , _emojiStickersPack(std::make_unique<Stickers::EmojiPack>(this))
 , _diceStickersPacks(std::make_unique<Stickers::DicePacks>(this))
+, _giftBoxStickersPacks(std::make_unique<Stickers::GiftBoxPack>(this))
 , _sendAsPeers(std::make_unique<SendAsPeers>(this))
+, _attachWebView(std::make_unique<InlineBots::AttachWebView>(this))
 , _supportHelper(Support::Helper::Create(this))
 , _saveSettingsTimer([=] { saveSettings(); }) {
 	Expects(_settings != nullptr);
@@ -104,8 +111,9 @@ Session::Session(
 		_user,
 		Data::PeerUpdate::Flag::Photo
 	) | rpl::start_with_next([=] {
-		[[maybe_unused]] const auto image = _user->currentUserpic(
-			_selfUserpicView);
+		auto view = Ui::PeerUserpicView{ .cloud = _selfUserpicView };
+		[[maybe_unused]] const auto image = _user->userpicCloudImage(view);
+		_selfUserpicView = view.cloud;
 	}, lifetime());
 
 	crl::on_main(this, [=] {
@@ -129,6 +137,15 @@ Session::Session(
 			}
 		}, _lifetime);
 
+#ifndef OS_MAC_STORE
+		_account->appConfig().value(
+		) | rpl::start_with_next([=] {
+			_premiumPossible = !_account->appConfig().get<bool>(
+				"premium_purchase_blocked",
+				true);
+		}, _lifetime);
+#endif // OS_MAC_STORE
+
 		if (_settings->hadLegacyCallsPeerToPeerNobody()) {
 			api().userPrivacy().save(
 				Api::UserPrivacy::Key::CallsPeer2Peer,
@@ -142,12 +159,16 @@ Session::Session(
 		// So they can't be called during Main::Session construction.
 		local().readInstalledStickers();
 		local().readInstalledMasks();
+		local().readInstalledCustomEmoji();
 		local().readFeaturedStickers();
+		local().readFeaturedCustomEmoji();
 		local().readRecentStickers();
 		local().readRecentMasks();
 		local().readFavedStickers();
 		local().readSavedGifs();
-		data().stickers().notifyUpdated();
+		data().stickers().notifyUpdated(Data::StickersType::Stickers);
+		data().stickers().notifyUpdated(Data::StickersType::Masks);
+		data().stickers().notifyUpdated(Data::StickersType::Emoji);
 		data().stickers().notifySavedGifsUpdated();
 	});
 
@@ -158,6 +179,8 @@ Session::Session(
 	_api->requestNotifySettings(MTP_inputNotifyUsers());
 	_api->requestNotifySettings(MTP_inputNotifyChats());
 	_api->requestNotifySettings(MTP_inputNotifyBroadcasts());
+
+	Core::App().downloadManager().trackSession(this);
 }
 
 void Session::setTmpPassword(const QByteArray &password, TimeId validUntil) {
@@ -176,7 +199,6 @@ QByteArray Session::validTmpPassword() const {
 
 // Can be called only right before ~Session.
 void Session::finishLogout() {
-	updates().updateOnline();
 	unlockTerms();
 	data().clear();
 	data().clearLocalStorage();
@@ -213,10 +235,45 @@ rpl::producer<> Session::downloaderTaskFinished() const {
 	return downloader().taskFinished();
 }
 
+bool Session::premium() const {
+	return _user->isPremium();
+}
+
+bool Session::premiumPossible() const {
+	return premium() || premiumCanBuy();
+}
+
+bool Session::premiumBadgesShown() const {
+	return supportMode() || premiumPossible();
+}
+
+rpl::producer<bool> Session::premiumPossibleValue() const {
+	using namespace rpl::mappers;
+
+	auto premium = _user->flagsValue(
+	) | rpl::filter([=](UserData::Flags::Change change) {
+		return (change.diff & UserDataFlag::Premium);
+	}) | rpl::map([=] {
+		return _user->isPremium();
+	});
+	return rpl::combine(
+		std::move(premium),
+		_premiumPossible.value(),
+		_1 || _2);
+}
+
+bool Session::premiumCanBuy() const {
+	return _premiumPossible.current();
+}
+
+bool Session::isTestMode() const {
+	return mtp().isTestMode();
+}
+
 uint64 Session::uniqueId() const {
 	// See also Account::willHaveSessionUniqueId.
 	return userId().bare
-		| (mtp().isTestMode() ? 0x0100'0000'0000'0000ULL : 0ULL);
+		| (isTestMode() ? 0x0100'0000'0000'0000ULL : 0ULL);
 }
 
 UserId Session::userId() const {
@@ -279,7 +336,9 @@ void Session::unlockTerms() {
 
 void Session::termsDeleteNow() {
 	api().request(MTPaccount_DeleteAccount(
-		MTP_string("Decline ToS update")
+		MTP_flags(0),
+		MTP_string("Decline ToS update"),
+		MTPInputCheckPasswordSRP()
 	)).send();
 }
 
@@ -309,8 +368,8 @@ TextWithEntities Session::createInternalLink(
 		const TextWithEntities &query) const {
 	const auto result = createInternalLinkFull(query);
 	const auto prefixes = {
-		qstr("https://"),
-		qstr("http://"),
+		u"https://"_q,
+		u"http://"_q,
 	};
 	for (auto &prefix : prefixes) {
 		if (result.text.startsWith(prefix, Qt::CaseInsensitive)) {
@@ -347,7 +406,7 @@ void Session::addWindow(not_null<Window::SessionController*> controller) {
 		_windows.remove(controller);
 	});
 	updates().addActiveChat(controller->activeChatChanges(
-	) | rpl::map([=](const Dialogs::Key &chat) {
+	) | rpl::map([=](Dialogs::Key chat) {
 		return chat.peer();
 	}) | rpl::distinct_until_changed());
 }
@@ -357,12 +416,12 @@ bool Session::uploadsInProgress() const {
 }
 
 void Session::uploadsStopWithConfirmation(Fn<void()> done) {
-	const auto window = Core::App().primaryWindow();
-	if (!window) {
-		return;
-	}
 	const auto id = _uploader->currentUploadId();
-	const auto exists = !!data().message(id);
+	const auto message = data().message(id);
+	const auto exists = (message != nullptr);
+	const auto window = message
+		? Core::App().windowFor(message->history()->peer)
+		: Core::App().activePrimaryWindow();
 	auto box = Box([=](not_null<Ui::GenericBox*> box) {
 		box->addRow(
 			object_ptr<Ui::FlatLabel>(
@@ -386,7 +445,7 @@ void Session::uploadsStopWithConfirmation(Fn<void()> done) {
 
 				if (const auto item = data().message(id)) {
 					if (const auto window = tryResolveWindow()) {
-						window->showPeerHistoryAtItem(item);
+						window->showMessage(item);
 					}
 				}
 			});
@@ -412,7 +471,17 @@ Window::SessionController *Session::tryResolveWindow() const {
 			return nullptr;
 		}
 	}
+	for (const auto &window : _windows) {
+		if (window->isPrimary()) {
+			return window;
+		}
+	}
 	return _windows.front();
+}
+
+auto Session::colorIndicesValue()
+-> rpl::producer<Ui::ColorIndicesCompressed> {
+	return api().peerColors().indicesValue();
 }
 
 } // namespace Main

@@ -11,25 +11,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/flat_set.h"
 #include "base/weak_ptr.h"
 #include "base/timer.h"
-
-// Not used for now.
-//
-//class MembersAddButton : public Ui::RippleButton {
-//public:
-//	MembersAddButton(QWidget *parent, const style::TwoIconButton &st);
-//
-//protected:
-//	void paintEvent(QPaintEvent *e) override;
-//
-//	QImage prepareRippleMask() const override;
-//	QPoint prepareRippleStartPosition() const override;
-//
-//private:
-//	const style::TwoIconButton &_st;
-//
-//};
+#include "mtproto/sender.h"
 
 class History;
+
+namespace style {
+struct PeerListItem;
+} // namespace style
+
+namespace Data {
+class Thread;
+class Forum;
+class ForumTopic;
+} // namespace Data
+
+namespace Ui {
+struct OutlineSegment;
+} // namespace Ui
 
 namespace Window {
 class SessionController;
@@ -37,30 +35,22 @@ class SessionController;
 
 [[nodiscard]] object_ptr<Ui::BoxContent> PrepareContactsBox(
 	not_null<Window::SessionController*> sessionController);
+[[nodiscard]] QBrush PeerListStoriesGradient(const style::PeerList &st);
+[[nodiscard]] std::vector<Ui::OutlineSegment> PeerListStoriesSegments(
+	int count,
+	int unread,
+	const QBrush &unreadBrush);
 
 class PeerListRowWithLink : public PeerListRow {
 public:
 	using PeerListRow::PeerListRow;
 
 	void setActionLink(const QString &action);
-	void setActionPlaceholder(const QString &placeholder, bool active = false);
 
 	void lazyInitialize(const style::PeerListItem &st) override;
-	bool hasAction() override;
 
-	void setAdminRank(const QString &rank, bool isCreator = false);
-	int adminRankWidth() const override;
-	void paintAdminRank(
-		Painter &p,
-		int x,
-		int y,
-		int outerWidth,
-		bool selected) override;
-
-private:
-	void refreshActionLink();
+protected:
 	QSize rightActionSize() const override;
-	QSize placeholderSize() const override;
 	QMargins rightActionMargins() const override;
 	void rightActionPaint(
 		Painter &p,
@@ -70,14 +60,12 @@ private:
 		bool selected,
 		bool actionSelected) override;
 
-	QString _action;
-	QString _actionPlaceholder;
-	bool _actionPlaceholderActive = false;
-	int _actionWidth = 0;
-	int _actionPlaceholderWidth = 0;
+private:
+	void refreshActionLink();
 
-	QString _adminRank;
-	bool _isCreator = false;
+	QString _action;
+	int _actionWidth = 0;
+
 };
 
 class PeerListGlobalSearchController : public PeerListSearchController {
@@ -105,18 +93,63 @@ private:
 
 };
 
+struct RecipientPremiumRequiredError {
+	TextWithEntities text;
+};
+
+[[nodiscard]] RecipientPremiumRequiredError WritePremiumRequiredError(
+	not_null<UserData*> user);
+
+class RecipientRow : public PeerListRow {
+public:
+	explicit RecipientRow(
+		not_null<PeerData*> peer,
+		const style::PeerListItem *maybeLockedSt = nullptr,
+		History *maybeHistory = nullptr);
+
+	bool refreshLock(not_null<const style::PeerListItem*> maybeLockedSt);
+
+	[[nodiscard]] static bool ShowLockedError(
+		not_null<PeerListController*> controller,
+		not_null<PeerListRow*> row,
+		Fn<RecipientPremiumRequiredError(not_null<UserData*>)> error);
+
+	[[nodiscard]] History *maybeHistory() const {
+		return _maybeHistory;
+	}
+	[[nodiscard]] bool locked() const {
+		return _lockedSt != nullptr;
+	}
+	void setLocked(const style::PeerListItem *lockedSt) {
+		_lockedSt = lockedSt;
+	}
+	PaintRoundImageCallback generatePaintUserpicCallback(
+		bool forceRound) override;
+
+	void preloadUserpic() override;
+
+private:
+	History *_maybeHistory = nullptr;
+	const style::PeerListItem *_lockedSt = nullptr;
+	bool _resolvePremiumRequired = false;
+
+};
+
+void TrackPremiumRequiredChanges(
+	not_null<PeerListController*> controller,
+	rpl::lifetime &lifetime);
+
 class ChatsListBoxController : public PeerListController {
 public:
-	class Row : public PeerListRow {
+	class Row : public RecipientRow {
 	public:
-		Row(not_null<History*> history);
+		Row(
+			not_null<History*> history,
+			const style::PeerListItem *maybeLockedSt = nullptr);
 
-		not_null<History*> history() const {
-			return _history;
+		[[nodiscard]] not_null<History*> history() const {
+			return maybeHistory();
 		}
-
-	private:
-		not_null<History*> _history;
 
 	};
 
@@ -125,7 +158,8 @@ public:
 		std::unique_ptr<PeerListSearchController> searchController);
 
 	void prepare() override final;
-	std::unique_ptr<PeerListRow> createSearchRow(not_null<PeerData*> peer) override final;
+	std::unique_ptr<PeerListRow> createSearchRow(
+		not_null<PeerData*> peer) override final;
 
 protected:
 	virtual std::unique_ptr<Row> createRow(not_null<History*> history) = 0;
@@ -141,6 +175,41 @@ private:
 
 };
 
+class PeerListStories final {
+public:
+	PeerListStories(
+		not_null<PeerListController*> controller,
+		not_null<Main::Session*> session);
+
+	void prepare(not_null<PeerListDelegate*> delegate);
+
+	void process(not_null<PeerListRow*> row);
+	bool handleClick(not_null<PeerData*> peer);
+
+private:
+	struct Counts {
+		int count = 0;
+		int unread = 0;
+	};
+
+	void updateColors();
+	void updateFor(uint64 id, int count, int unread);
+	void applyForRow(
+		not_null<PeerListRow*> row,
+		int count,
+		int unread,
+		bool force = false);
+
+	const not_null<PeerListController*> _controller;
+	const not_null<Main::Session*> _session;
+	PeerListDelegate *_delegate = nullptr;
+
+	QBrush _unreadBrush;
+	base::flat_map<uint64, Counts> _counts;
+	rpl::lifetime _lifetime;
+
+};
+
 class ContactsBoxController : public PeerListController {
 public:
 	explicit ContactsBoxController(not_null<Main::Session*> session);
@@ -153,12 +222,16 @@ public:
 	[[nodiscard]] std::unique_ptr<PeerListRow> createSearchRow(
 		not_null<PeerData*> peer) override final;
 	void rowClicked(not_null<PeerListRow*> row) override;
+	bool trackSelectedList() override {
+		return !_stories;
+	}
 
 	enum class SortMode {
 		Alphabet,
 		Online,
 	};
 	void setSortMode(SortMode mode);
+	void setStoriesShown(bool shown);
 
 protected:
 	virtual std::unique_ptr<PeerListRow> createRow(not_null<UserData*> user);
@@ -169,7 +242,6 @@ protected:
 
 private:
 	void sort();
-	void sortByName();
 	void sortByOnline();
 	void rebuildRows();
 	void checkForEmptyRows();
@@ -180,38 +252,17 @@ private:
 	base::Timer _sortByOnlineTimer;
 	rpl::lifetime _sortByOnlineLifetime;
 
+	std::unique_ptr<PeerListStories> _stories;
+
 };
 
-class AddBotToGroupBoxController
-	: public ChatsListBoxController
-	, public base::has_weak_ptr {
-public:
-	static void Start(not_null<UserData*> bot);
+struct ChooseRecipientArgs {
+	not_null<Main::Session*> session;
+	FnMut<void(not_null<Data::Thread*>)> callback;
+	Fn<bool(not_null<Data::Thread*>)> filter;
 
-	explicit AddBotToGroupBoxController(not_null<UserData*> bot);
-
-	Main::Session &session() const override;
-	void rowClicked(not_null<PeerListRow*> row) override;
-
-protected:
-	std::unique_ptr<Row> createRow(not_null<History*> history) override;
-	void prepareViewHook() override;
-	QString emptyBoxText() const override;
-
-private:
-	static bool SharingBotGame(not_null<UserData*> bot);
-
-	bool needToCreateRow(not_null<PeerData*> peer) const;
-	bool sharingBotGame() const;
-	QString noResultsText() const;
-	QString descriptionText() const;
-	void updateLabels();
-
-	void shareBotGame(not_null<PeerData*> chat);
-	void addBotToGroup(not_null<PeerData*> chat);
-
-	const not_null<UserData*> _bot;
-
+	using PremiumRequiredError = RecipientPremiumRequiredError;
+	Fn<PremiumRequiredError(not_null<UserData*>)> premiumRequiredError;
 };
 
 class ChooseRecipientBoxController
@@ -220,21 +271,108 @@ class ChooseRecipientBoxController
 public:
 	ChooseRecipientBoxController(
 		not_null<Main::Session*> session,
-		FnMut<void(not_null<PeerData*>)> callback);
+		FnMut<void(not_null<Data::Thread*>)> callback,
+		Fn<bool(not_null<Data::Thread*>)> filter = nullptr);
+	explicit ChooseRecipientBoxController(ChooseRecipientArgs &&args);
 
 	Main::Session &session() const override;
 	void rowClicked(not_null<PeerListRow*> row) override;
 
-	bool respectSavedMessagesChat() const override {
-		return true;
-	}
+	QString savedMessagesChatStatus() const override;
 
 protected:
 	void prepareViewHook() override;
 	std::unique_ptr<Row> createRow(not_null<History*> history) override;
 
+	bool showLockedError(not_null<PeerListRow*> row);
+
 private:
 	const not_null<Main::Session*> _session;
-	FnMut<void(not_null<PeerData*>)> _callback;
+	FnMut<void(not_null<Data::Thread*>)> _callback;
+	Fn<bool(not_null<Data::Thread*>)> _filter;
+	Fn<RecipientPremiumRequiredError(
+		not_null<UserData*>)> _premiumRequiredError;
 
 };
+
+class ChooseTopicSearchController : public PeerListSearchController {
+public:
+	explicit ChooseTopicSearchController(not_null<Data::Forum*> forum);
+
+	void searchQuery(const QString &query) override;
+	bool isLoading() override;
+	bool loadMoreRows() override;
+
+private:
+	void searchOnServer();
+	void searchDone(const MTPcontacts_Found &result, mtpRequestId requestId);
+
+	const not_null<Data::Forum*> _forum;
+	MTP::Sender _api;
+	base::Timer _timer;
+	QString _query;
+	mtpRequestId _requestId = 0;
+	TimeId _offsetDate = 0;
+	MsgId _offsetId = 0;
+	MsgId _offsetTopicId = 0;
+	bool _allLoaded = false;
+
+};
+
+class ChooseTopicBoxController final
+	: public PeerListController
+	, public base::has_weak_ptr {
+public:
+	ChooseTopicBoxController(
+		not_null<Data::Forum*> forum,
+		FnMut<void(not_null<Data::ForumTopic*>)> callback,
+		Fn<bool(not_null<Data::ForumTopic*>)> filter = nullptr);
+
+	Main::Session &session() const override;
+	void rowClicked(not_null<PeerListRow*> row) override;
+
+	void prepare() override;
+	void loadMoreRows() override;
+	std::unique_ptr<PeerListRow> createSearchRow(PeerListRowId id) override;
+
+private:
+	class Row final : public PeerListRow {
+	public:
+		explicit Row(not_null<Data::ForumTopic*> topic);
+
+		[[nodiscard]] not_null<Data::ForumTopic*> topic() const {
+			return _topic;
+		}
+
+		QString generateName() override;
+		QString generateShortName() override;
+		PaintRoundImageCallback generatePaintUserpicCallback(
+			bool forceRound) override;
+
+		auto generateNameFirstLetters() const
+			-> const base::flat_set<QChar> & override;
+		auto generateNameWords() const
+			-> const base::flat_set<QString> & override;
+
+	private:
+		const not_null<Data::ForumTopic*> _topic;
+
+	};
+
+	void refreshRows(bool initial = false);
+	[[nodiscard]] std::unique_ptr<Row> createRow(
+		not_null<Data::ForumTopic*> topic);
+
+	const not_null<Data::Forum*> _forum;
+	FnMut<void(not_null<Data::ForumTopic*>)> _callback;
+	Fn<bool(not_null<Data::ForumTopic*>)> _filter;
+
+};
+
+void PaintPremiumRequiredLock(
+	Painter &p,
+	not_null<const style::PeerListItem*> st,
+	int x,
+	int y,
+	int outerWidth,
+	int size);

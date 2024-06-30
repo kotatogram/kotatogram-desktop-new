@@ -13,16 +13,30 @@ namespace Ui {
 class RpWidget;
 } // namespace Ui
 
+namespace Data {
+class ForumTopic;
+} // namespace Data
+
 namespace Info {
-
 class Controller;
+} // namespace Info
 
-namespace Profile {
+namespace Info::Profile {
+
+extern const char kOptionShowPeerIdBelowAbout[];
+
+struct Origin;
 
 object_ptr<Ui::RpWidget> SetupDetails(
 	not_null<Controller*> controller,
 	not_null<Ui::RpWidget*> parent,
-	not_null<PeerData*> peer);
+	not_null<PeerData*> peer,
+	Origin origin);
+
+object_ptr<Ui::RpWidget> SetupDetails(
+	not_null<Controller*> controller,
+	not_null<Ui::RpWidget*> parent,
+	not_null<Data::ForumTopic*> topic);
 
 object_ptr<Ui::RpWidget> SetupManage(
 	not_null<Controller*> controller,
@@ -39,5 +53,4 @@ object_ptr<Ui::RpWidget> SetupChannelMembers(
 	not_null<Ui::RpWidget*> parent,
 	not_null<PeerData*> peer);
 
-} // namespace Profile
-} // namespace Info
+} // namespace Info::Profile

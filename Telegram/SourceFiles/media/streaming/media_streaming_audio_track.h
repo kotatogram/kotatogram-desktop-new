@@ -79,7 +79,7 @@ private:
 	crl::time _startedPosition = kTimeUnknown;
 
 	// Accessed from the main thread.
-	base::Subscription _subscription;
+	rpl::lifetime _subscription;
 	rpl::event_stream<> _waitingForData;
 	// First set from the same unspecified thread before _ready is called.
 	// After that accessed from the main thread.

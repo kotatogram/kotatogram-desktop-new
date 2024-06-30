@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_specific.h"
 #include "base/parse_helper.h"
 
+#include <QAction>
 #include <QShortcut>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -55,47 +56,55 @@ const auto SupportCommands = base::flat_set<Command>{
 };
 
 const auto CommandByName = base::flat_map<QString, Command>{
-	{ qsl("close_telegram")    , Command::Close },
-	{ qsl("lock_telegram")     , Command::Lock },
-	{ qsl("minimize_telegram") , Command::Minimize },
-	{ qsl("quit_telegram")     , Command::Quit },
+	{ u"close_telegram"_q    , Command::Close },
+	{ u"lock_telegram"_q     , Command::Lock },
+	{ u"minimize_telegram"_q , Command::Minimize },
+	{ u"quit_telegram"_q     , Command::Quit },
 
-	{ qsl("media_play")        , Command::MediaPlay },
-	{ qsl("media_pause")       , Command::MediaPause },
-	{ qsl("media_playpause")   , Command::MediaPlayPause },
-	{ qsl("media_stop")        , Command::MediaStop },
-	{ qsl("media_previous")    , Command::MediaPrevious },
-	{ qsl("media_next")        , Command::MediaNext },
+	{ u"media_play"_q        , Command::MediaPlay },
+	{ u"media_pause"_q       , Command::MediaPause },
+	{ u"media_playpause"_q   , Command::MediaPlayPause },
+	{ u"media_stop"_q        , Command::MediaStop },
+	{ u"media_previous"_q    , Command::MediaPrevious },
+	{ u"media_next"_q        , Command::MediaNext },
 
-	{ qsl("search")            , Command::Search },
+	{ u"search"_q            , Command::Search },
 
-	{ qsl("previous_chat")     , Command::ChatPrevious },
-	{ qsl("next_chat")         , Command::ChatNext },
-	{ qsl("first_chat")        , Command::ChatFirst },
-	{ qsl("last_chat")         , Command::ChatLast },
-	{ qsl("self_chat")         , Command::ChatSelf },
+	{ u"previous_chat"_q     , Command::ChatPrevious },
+	{ u"next_chat"_q         , Command::ChatNext },
+	{ u"first_chat"_q        , Command::ChatFirst },
+	{ u"last_chat"_q         , Command::ChatLast },
+	{ u"self_chat"_q         , Command::ChatSelf },
 
-	{ qsl("previous_folder")   , Command::FolderPrevious },
-	{ qsl("next_folder")       , Command::FolderNext },
-	{ qsl("all_chats")         , Command::ShowAllChats },
+	{ u"previous_folder"_q   , Command::FolderPrevious },
+	{ u"next_folder"_q       , Command::FolderNext },
+	{ u"all_chats"_q         , Command::ShowAllChats },
 
-	{ qsl("folder1")           , Command::ShowFolder1 },
-	{ qsl("folder2")           , Command::ShowFolder2 },
-	{ qsl("folder3")           , Command::ShowFolder3 },
-	{ qsl("folder4")           , Command::ShowFolder4 },
-	{ qsl("folder5")           , Command::ShowFolder5 },
-	{ qsl("folder6")           , Command::ShowFolder6 },
-	{ qsl("last_folder")       , Command::ShowFolderLast },
+	{ u"account1"_q          , Command::ShowAccount1 },
+	{ u"account2"_q          , Command::ShowAccount2 },
+	{ u"account3"_q          , Command::ShowAccount3 },
+	{ u"account4"_q          , Command::ShowAccount4 },
+	{ u"account5"_q          , Command::ShowAccount5 },
+	{ u"account6"_q          , Command::ShowAccount6 },
 
-	{ qsl("show_archive")      , Command::ShowArchive },
-	{ qsl("show_contacts")     , Command::ShowContacts },
+	{ u"folder1"_q           , Command::ShowFolder1 },
+	{ u"folder2"_q           , Command::ShowFolder2 },
+	{ u"folder3"_q           , Command::ShowFolder3 },
+	{ u"folder4"_q           , Command::ShowFolder4 },
+	{ u"folder5"_q           , Command::ShowFolder5 },
+	{ u"folder6"_q           , Command::ShowFolder6 },
+	{ u"last_folder"_q       , Command::ShowFolderLast },
 
-	{ qsl("read_chat")         , Command::ReadChat },
+	{ u"show_archive"_q      , Command::ShowArchive },
+	{ u"show_contacts"_q     , Command::ShowContacts },
+
+	{ u"read_chat"_q         , Command::ReadChat },
 
 	// Shortcuts that have no default values.
-	{ qsl("message")           , Command::JustSendMessage },
-	{ qsl("message_silently")  , Command::SendSilentMessage },
-	{ qsl("message_scheduled") , Command::ScheduleMessage },
+	{ u"message"_q                       , Command::JustSendMessage },
+	{ u"message_silently"_q              , Command::SendSilentMessage },
+	{ u"message_scheduled"_q             , Command::ScheduleMessage },
+	{ u"media_viewer_video_fullscreen"_q , Command::MediaViewerFullscreen },
 	//
 
 	{ qsl("save_draft")        , Command::SaveDraft },
@@ -135,64 +144,72 @@ const auto CommandByName = base::flat_map<QString, Command>{
 };
 
 const auto CommandNames = base::flat_map<Command, QString>{
-	{ Command::Close          , qsl("close_telegram") },
-	{ Command::Lock           , qsl("lock_telegram") },
-	{ Command::Minimize       , qsl("minimize_telegram") },
-	{ Command::Quit           , qsl("quit_telegram") },
+	{ Command::Close          , u"close_telegram"_q },
+	{ Command::Lock           , u"lock_telegram"_q },
+	{ Command::Minimize       , u"minimize_telegram"_q },
+	{ Command::Quit           , u"quit_telegram"_q },
 
-	{ Command::MediaPlay      , qsl("media_play") },
-	{ Command::MediaPause     , qsl("media_pause") },
-	{ Command::MediaPlayPause , qsl("media_playpause") },
-	{ Command::MediaStop      , qsl("media_stop") },
-	{ Command::MediaPrevious  , qsl("media_previous") },
-	{ Command::MediaNext      , qsl("media_next") },
+	{ Command::MediaPlay      , u"media_play"_q },
+	{ Command::MediaPause     , u"media_pause"_q },
+	{ Command::MediaPlayPause , u"media_playpause"_q },
+	{ Command::MediaStop      , u"media_stop"_q },
+	{ Command::MediaPrevious  , u"media_previous"_q },
+	{ Command::MediaNext      , u"media_next"_q },
 
-	{ Command::Search         , qsl("search") },
+	{ Command::Search         , u"search"_q },
 
-	{ Command::ChatPrevious   , qsl("previous_chat") },
-	{ Command::ChatNext       , qsl("next_chat") },
-	{ Command::ChatFirst      , qsl("first_chat") },
-	{ Command::ChatLast       , qsl("last_chat") },
-	{ Command::ChatSelf       , qsl("self_chat") },
+	{ Command::ChatPrevious   , u"previous_chat"_q },
+	{ Command::ChatNext       , u"next_chat"_q },
+	{ Command::ChatFirst      , u"first_chat"_q },
+	{ Command::ChatLast       , u"last_chat"_q },
+	{ Command::ChatSelf       , u"self_chat"_q },
 
-	{ Command::FolderPrevious , qsl("previous_folder") },
-	{ Command::FolderNext     , qsl("next_folder") },
-	{ Command::ShowAllChats   , qsl("all_chats") },
+	{ Command::FolderPrevious , u"previous_folder"_q },
+	{ Command::FolderNext     , u"next_folder"_q },
+	{ Command::ShowAllChats   , u"all_chats"_q },
 
-	{ Command::ShowFolder1    , qsl("folder1") },
-	{ Command::ShowFolder2    , qsl("folder2") },
-	{ Command::ShowFolder3    , qsl("folder3") },
-	{ Command::ShowFolder4    , qsl("folder4") },
-	{ Command::ShowFolder5    , qsl("folder5") },
-	{ Command::ShowFolder6    , qsl("folder6") },
-	{ Command::ShowFolderLast , qsl("last_folder") },
+	{ Command::ShowAccount1   , u"account1"_q },
+	{ Command::ShowAccount2   , u"account2"_q },
+	{ Command::ShowAccount3   , u"account3"_q },
+	{ Command::ShowAccount4   , u"account4"_q },
+	{ Command::ShowAccount5   , u"account5"_q },
+	{ Command::ShowAccount6   , u"account6"_q },
 
-	{ Command::ShowArchive    , qsl("show_archive") },
-	{ Command::ShowContacts   , qsl("show_contacts") },
+	{ Command::ShowFolder1    , u"folder1"_q },
+	{ Command::ShowFolder2    , u"folder2"_q },
+	{ Command::ShowFolder3    , u"folder3"_q },
+	{ Command::ShowFolder4    , u"folder4"_q },
+	{ Command::ShowFolder5    , u"folder5"_q },
+	{ Command::ShowFolder6    , u"folder6"_q },
+	{ Command::ShowFolderLast , u"last_folder"_q },
 
-	{ Command::ReadChat       , qsl("read_chat") },
+	{ Command::ShowArchive    , u"show_archive"_q },
+	{ Command::ShowContacts   , u"show_contacts"_q },
 
-	{ Command::SaveDraft      , qsl("save_draft") },
-	{ Command::JumpToDate     , qsl("jump_to_date") },
-	{ Command::ReloadLang     , qsl("reload_lang") },
-	{ Command::Restart        , qsl("restart_app") },
+	{ Command::ReadChat       , u"read_chat"_q },
 
-	{ Command::ChatPinned1    , qsl("pinned_1") },
-	{ Command::ChatPinned2    , qsl("pinned_2") },
-	{ Command::ChatPinned3    , qsl("pinned_3") },
-	{ Command::ChatPinned4    , qsl("pinned_4") },
-	{ Command::ChatPinned5    , qsl("pinned_5") },
+	{ Command::SaveDraft      , u"save_draft"_q },
+	{ Command::JumpToDate     , u"jump_to_date"_q },
+	{ Command::ReloadLang     , u"reload_lang"_q },
+	{ Command::Restart        , u"restart_app"_q },
 
-	{ Command::ShowAccount1   , qsl("account1") },
-	{ Command::ShowAccount2   , qsl("account2") },
-	{ Command::ShowAccount3   , qsl("account3") },
-	{ Command::ShowAccount4   , qsl("account4") },
-	{ Command::ShowAccount5   , qsl("account5") },
-	{ Command::ShowAccount6   , qsl("account6") },
-	{ Command::ShowAccount7   , qsl("account7") },
-	{ Command::ShowAccount8   , qsl("account8") },
-	{ Command::ShowAccount9   , qsl("account9") },
-	{ Command::ShowAccountLast, qsl("last_account") },
+
+	{ Command::ChatPinned1    , u"pinned_1"_q },
+	{ Command::ChatPinned2    , u"pinned_2"_q },
+	{ Command::ChatPinned3    , u"pinned_3"_q },
+	{ Command::ChatPinned4    , u"pinned_4"_q },
+	{ Command::ChatPinned5    , u"pinned_5"_q },
+
+	{ Command::ShowAccount1   , u"account1"_q },
+	{ Command::ShowAccount2   , u"account2"_q },
+	{ Command::ShowAccount3   , u"account3"_q },
+	{ Command::ShowAccount4   , u"account4"_q },
+	{ Command::ShowAccount5   , u"account5"_q },
+	{ Command::ShowAccount6   , u"account6"_q },
+	{ Command::ShowAccount7   , u"account7"_q },
+	{ Command::ShowAccount8   , u"account8"_q },
+	{ Command::ShowAccount9   , u"account9"_q },
+	{ Command::ShowAccountLast, u"last_account"_q },
 };
 
 class Manager {
@@ -200,11 +217,13 @@ public:
 	void fill();
 	void clear();
 
-	[[nodiscard]] std::vector<Command> lookup(int shortcutId) const;
+	[[nodiscard]] std::vector<Command> lookup(
+		not_null<QObject*> object) const;
 	void toggleMedia(bool toggled);
 	void toggleSupport(bool toggled);
+	void listen(not_null<QWidget*> widget);
 
-	const QStringList &errors() const;
+	[[nodiscard]] const QStringList &errors() const;
 
 private:
 	void fillDefaults();
@@ -213,24 +232,24 @@ private:
 
 	void set(const QString &keys, Command command, bool replace = false);
 	void remove(const QString &keys);
-	void unregister(base::unique_qptr<QShortcut> shortcut);
+	void unregister(base::unique_qptr<QAction> shortcut);
 
 	QStringList _errors;
 
-	base::flat_map<QKeySequence, base::unique_qptr<QShortcut>> _shortcuts;
-	base::flat_multi_map<int, Command> _commandByShortcutId;
+	base::flat_map<QKeySequence, base::unique_qptr<QAction>> _shortcuts;
+	base::flat_multi_map<not_null<QObject*>, Command> _commandByObject;
 
-	base::flat_set<QShortcut*> _mediaShortcuts;
-	base::flat_set<QShortcut*> _supportShortcuts;
+	base::flat_set<QAction*> _mediaShortcuts;
+	base::flat_set<QAction*> _supportShortcuts;
 
 };
 
 QString DefaultFilePath() {
-	return cWorkingDir() + qsl("tdata/shortcuts-default.json");
+	return cWorkingDir() + u"tdata/shortcuts-default.json"_q;
 }
 
 QString CustomFilePath() {
-	return cWorkingDir() + qsl("tdata/shortcuts-custom.json");
+	return cWorkingDir() + u"tdata/shortcuts-custom.json"_q;
 }
 
 bool DefaultFileIsValid() {
@@ -252,7 +271,7 @@ bool DefaultFileIsValid() {
 		return false;
 	}
 	const auto versionObject = (*shortcuts.constBegin()).toObject();
-	const auto version = versionObject.constFind(qsl("version"));
+	const auto version = versionObject.constFind(u"version"_q);
 	if (version == versionObject.constEnd()
 		|| !(*version).isString()
 		|| (*version).toString() != QString::number(AppVersion)) {
@@ -284,7 +303,7 @@ void Manager::fill() {
 void Manager::clear() {
 	_errors.clear();
 	_shortcuts.clear();
-	_commandByShortcutId.clear();
+	_commandByObject.clear();
 	_mediaShortcuts.clear();
 	_supportShortcuts.clear();
 }
@@ -293,11 +312,11 @@ const QStringList &Manager::errors() const {
 	return _errors;
 }
 
-std::vector<Command> Manager::lookup(int shortcutId) const {
+std::vector<Command> Manager::lookup(not_null<QObject*> object) const {
 	auto result = std::vector<Command>();
-	auto i = _commandByShortcutId.findFirst(shortcutId);
-	const auto end = _commandByShortcutId.end();
-	for (; i != end && (i->first == shortcutId); ++i) {
+	auto i = _commandByObject.findFirst(object);
+	const auto end = _commandByObject.end();
+	for (; i != end && (i->first == object); ++i) {
 		result.push_back(i->second);
 	}
 	return result;
@@ -315,6 +334,12 @@ void Manager::toggleSupport(bool toggled) {
 	}
 }
 
+void Manager::listen(not_null<QWidget*> widget) {
+	for (const auto &[keys, shortcut] : _shortcuts) {
+		widget->addAction(shortcut.get());
+	}
+}
+
 bool Manager::readCustomFile() {
 	// read custom shortcuts from file if it exists or write an empty custom shortcuts file
 	QFile file(CustomFilePath());
@@ -323,12 +348,12 @@ bool Manager::readCustomFile() {
 	}
 	const auto guard = gsl::finally([&] {
 		if (!_errors.isEmpty()) {
-			_errors.push_front(qsl("While reading file '%1'..."
+			_errors.push_front((u"While reading file '%1'..."_q
 			).arg(file.fileName()));
 		}
 	});
 	if (!file.open(QIODevice::ReadOnly)) {
-		_errors.push_back(qsl("Could not read the file!"));
+		_errors.push_back(u"Could not read the file!"_q);
 		return true;
 	}
 	auto error = QJsonParseError{ 0, QJsonParseError::NoError };
@@ -338,23 +363,23 @@ bool Manager::readCustomFile() {
 	file.close();
 
 	if (error.error != QJsonParseError::NoError) {
-		_errors.push_back(qsl("Failed to parse! Error: %2"
+		_errors.push_back((u"Failed to parse! Error: %2"_q
 		).arg(error.errorString()));
 		return true;
 	} else if (!document.isArray()) {
-		_errors.push_back(qsl("Failed to parse! Error: array expected"));
+		_errors.push_back(u"Failed to parse! Error: array expected"_q);
 		return true;
 	}
 	const auto shortcuts = document.array();
 	auto limit = kCountLimit;
 	for (auto i = shortcuts.constBegin(), e = shortcuts.constEnd(); i != e; ++i) {
 		if (!(*i).isObject()) {
-			_errors.push_back(qsl("Bad entry! Error: object expected"));
+			_errors.push_back(u"Bad entry! Error: object expected"_q);
 			continue;
 		}
 		const auto entry = (*i).toObject();
-		const auto keys = entry.constFind(qsl("keys"));
-		const auto command = entry.constFind(qsl("command"));
+		const auto keys = entry.constFind(u"keys"_q);
+		const auto command = entry.constFind(u"command"_q);
 		if (keys == entry.constEnd()
 			|| command == entry.constEnd()
 			|| !(*keys).isString()
@@ -376,8 +401,8 @@ bool Manager::readCustomFile() {
 			}
 		}
 		if (!--limit) {
-			_errors.push_back(qsl("Too many entries! Limit is %1"
-			).arg(kCountLimit));
+			_errors.push_back(u"Too many entries! Limit is %1"_q.arg(
+				kCountLimit));
 			break;
 		}
 	}
@@ -385,55 +410,58 @@ bool Manager::readCustomFile() {
 }
 
 void Manager::fillDefaults() {
-	const auto ctrl = Platform::IsMac() ? qsl("meta") : qsl("ctrl");
+	const auto ctrl = Platform::IsMac() ? u"meta"_q : u"ctrl"_q;
 
-	set(qsl("ctrl+w"), Command::Close);
-	set(qsl("ctrl+f4"), Command::Close);
-	set(qsl("ctrl+l"), Command::Lock);
-	set(qsl("ctrl+m"), Command::Minimize);
-	set(qsl("ctrl+q"), Command::Quit);
+	set(u"ctrl+w"_q, Command::Close);
+	set(u"ctrl+f4"_q, Command::Close);
+	set(u"ctrl+l"_q, Command::Lock);
+	set(u"ctrl+m"_q, Command::Minimize);
+	set(u"ctrl+q"_q, Command::Quit);
 
-	set(qsl("media play"), Command::MediaPlay);
-	set(qsl("media pause"), Command::MediaPause);
-	set(qsl("toggle media play/pause"), Command::MediaPlayPause);
-	set(qsl("media stop"), Command::MediaStop);
-	set(qsl("media previous"), Command::MediaPrevious);
-	set(qsl("media next"), Command::MediaNext);
+	set(u"media play"_q, Command::MediaPlay);
+	set(u"media pause"_q, Command::MediaPause);
+	set(u"toggle media play/pause"_q, Command::MediaPlayPause);
+	set(u"media stop"_q, Command::MediaStop);
+	set(u"media previous"_q, Command::MediaPrevious);
+	set(u"media next"_q, Command::MediaNext);
 
-	set(qsl("ctrl+f"), Command::Search);
-	set(qsl("search"), Command::Search);
-	set(qsl("find"), Command::Search);
+	set(u"ctrl+f"_q, Command::Search);
+	set(u"search"_q, Command::Search);
+	set(u"find"_q, Command::Search);
 
-	set(qsl("ctrl+pgdown"), Command::ChatNext);
-	set(qsl("alt+down"), Command::ChatNext);
-	set(qsl("ctrl+pgup"), Command::ChatPrevious);
-	set(qsl("alt+up"), Command::ChatPrevious);
+	set(u"ctrl+pgdown"_q, Command::ChatNext);
+	set(u"alt+down"_q, Command::ChatNext);
+	set(u"ctrl+pgup"_q, Command::ChatPrevious);
+	set(u"alt+up"_q, Command::ChatPrevious);
 
-	set(qsl("%1+tab").arg(ctrl), Command::ChatNext);
-	set(qsl("%1+shift+tab").arg(ctrl), Command::ChatPrevious);
-	set(qsl("%1+backtab").arg(ctrl), Command::ChatPrevious);
+	set(u"%1+tab"_q.arg(ctrl), Command::ChatNext);
+	set(u"%1+shift+tab"_q.arg(ctrl), Command::ChatPrevious);
+	set(u"%1+backtab"_q.arg(ctrl), Command::ChatPrevious);
 
-	set(qsl("ctrl+alt+home"), Command::ChatFirst);
-	set(qsl("ctrl+alt+end"), Command::ChatLast);
+	set(u"ctrl+alt+home"_q, Command::ChatFirst);
+	set(u"ctrl+alt+end"_q, Command::ChatLast);
 
-	set(qsl("f5"), Command::SupportReloadTemplates);
-	set(qsl("ctrl+delete"), Command::SupportToggleMuted);
-	set(qsl("ctrl+insert"), Command::SupportScrollToCurrent);
-	set(qsl("ctrl+shift+x"), Command::SupportHistoryBack);
-	set(qsl("ctrl+shift+c"), Command::SupportHistoryForward);
+	set(u"f5"_q, Command::SupportReloadTemplates);
+	set(u"ctrl+delete"_q, Command::SupportToggleMuted);
+	set(u"ctrl+insert"_q, Command::SupportScrollToCurrent);
+	set(u"ctrl+shift+x"_q, Command::SupportHistoryBack);
+	set(u"ctrl+shift+c"_q, Command::SupportHistoryForward);
 
-	set(qsl("ctrl+1"), Command::ChatPinned1);
-	set(qsl("ctrl+2"), Command::ChatPinned2);
-	set(qsl("ctrl+3"), Command::ChatPinned3);
-	set(qsl("ctrl+4"), Command::ChatPinned4);
-	set(qsl("ctrl+5"), Command::ChatPinned5);
+	set(u"ctrl+1"_q, Command::ChatPinned1);
+	set(u"ctrl+2"_q, Command::ChatPinned2);
+	set(u"ctrl+3"_q, Command::ChatPinned3);
+	set(u"ctrl+4"_q, Command::ChatPinned4);
+	set(u"ctrl+5"_q, Command::ChatPinned5);
+	set(u"ctrl+6"_q, Command::ChatPinned6);
+	set(u"ctrl+7"_q, Command::ChatPinned7);
+	set(u"ctrl+8"_q, Command::ChatPinned8);
 
 	auto &&folders = ranges::views::zip(
 		kShowFolder,
 		ranges::views::ints(1, ranges::unreachable));
 
-	for (const auto [command, index] : folders) {
-		set(qsl("%1+%2").arg(ctrl).arg(index), command);
+	for (const auto &[command, index] : folders) {
+		set(u"%1+%2"_q.arg(ctrl).arg(index), command);
 	}
 
 	auto &&accounts = ranges::views::zip(
@@ -441,22 +469,22 @@ void Manager::fillDefaults() {
 		ranges::views::ints(1, ranges::unreachable));
 
 	for (const auto [command, index] : accounts) {
-		set(qsl("alt+%1").arg(index), command);
+		set(u"alt+%1"_q.arg(index), command);
 	}
 
-	set(qsl("alt+0"), Command::ShowAccountLast);
+	set(u"alt+0"_q, Command::ShowAccountLast);
 
-	set(qsl("%1+shift+down").arg(ctrl), Command::FolderNext);
-	set(qsl("%1+shift+up").arg(ctrl), Command::FolderPrevious);
+	set(u"%1+shift+down"_q.arg(ctrl), Command::FolderNext);
+	set(u"%1+shift+up"_q.arg(ctrl), Command::FolderPrevious);
 
-	set(qsl("ctrl+0"), Command::ChatSelf);
+	set(u"ctrl+0"_q, Command::ChatSelf);
 
-	set(qsl("ctrl+9"), Command::ShowArchive);
-	set(qsl("ctrl+j"), Command::ShowContacts);
+	set(u"ctrl+9"_q, Command::ShowArchive);
+	set(u"ctrl+j"_q, Command::ShowContacts);
 
-	set(qsl("ctrl+r"), Command::ReadChat);
-	set(qsl("ctrl+s"), Command::SaveDraft);
-	set(qsl("ctrl+h"), Command::JumpToDate);
+	set(u"ctrl+r"_q, Command::ReadChat);
+	set(u"ctrl+s"_q, Command::SaveDraft);
+	set(u"ctrl+h"_q, Command::JumpToDate);
 }
 
 void Manager::writeDefaultFile() {
@@ -474,23 +502,35 @@ void Manager::writeDefaultFile() {
 
 	auto shortcuts = QJsonArray();
 	auto version = QJsonObject();
-	version.insert(qsl("version"), QString::number(AppVersion));
+	version.insert(u"version"_q, QString::number(AppVersion));
 	shortcuts.push_back(version);
 
 	for (const auto &[sequence, shortcut] : _shortcuts) {
-		const auto shortcutId = shortcut->id();
-		auto i = _commandByShortcutId.findFirst(shortcutId);
-		const auto end = _commandByShortcutId.end();
-		for (; i != end && i->first == shortcutId; ++i) {
+		const auto object = shortcut.get();
+		auto i = _commandByObject.findFirst(object);
+		const auto end = _commandByObject.end();
+		for (; i != end && i->first == object; ++i) {
 			const auto j = CommandNames.find(i->second);
 			if (j != CommandNames.end()) {
 				QJsonObject entry;
-				entry.insert(qsl("keys"), sequence.toString().toLower());
-				entry.insert(qsl("command"), j->second);
+				entry.insert(u"keys"_q, sequence.toString().toLower());
+				entry.insert(u"command"_q, j->second);
 				shortcuts.append(entry);
 			}
 		}
 	}
+
+	// Commands without a default value.
+	for (const auto command : kShowAccount) {
+		const auto j = CommandNames.find(command);
+		if (j != CommandNames.end()) {
+			QJsonObject entry;
+			entry.insert(u"keys"_q, QJsonValue());
+			entry.insert(u"command"_q, j->second);
+			shortcuts.append(entry);
+		}
+	}
+
 
 	auto document = QJsonDocument();
 	document.setArray(shortcuts);
@@ -504,16 +544,12 @@ void Manager::set(const QString &keys, Command command, bool replace) {
 
 	const auto result = QKeySequence(keys, QKeySequence::PortableText);
 	if (result.isEmpty()) {
-		_errors.push_back(qsl("Could not derive key sequence '%1'!"
-		).arg(keys));
+		_errors.push_back(u"Could not derive key sequence '%1'!"_q.arg(keys));
 		return;
 	}
-	auto shortcut = base::make_unique_q<QShortcut>(
-		result,
-		Core::App().primaryWindow()->widget().get(),
-		nullptr,
-		nullptr,
-		Qt::ApplicationShortcut);
+	auto shortcut = base::make_unique_q<QAction>();
+	shortcut->setShortcut(result);
+	shortcut->setShortcutContext(Qt::ApplicationShortcut);
 	if (!AutoRepeatCommands.contains(command)) {
 		shortcut->setAutoRepeat(false);
 	}
@@ -522,20 +558,16 @@ void Manager::set(const QString &keys, Command command, bool replace) {
 	if (isMediaShortcut || isSupportShortcut) {
 		shortcut->setEnabled(false);
 	}
-	auto id = shortcut->id();
+	auto object = shortcut.get();
 	auto i = _shortcuts.find(result);
 	if (i == end(_shortcuts)) {
 		i = _shortcuts.emplace(result, std::move(shortcut)).first;
 	} else if (replace) {
 		unregister(std::exchange(i->second, std::move(shortcut)));
 	} else {
-		id = i->second->id();
+		object = i->second.get();
 	}
-	if (!id) {
-		_errors.push_back(qsl("Could not create shortcut '%1'!").arg(keys));
-		return;
-	}
-	_commandByShortcutId.emplace(id, command);
+	_commandByObject.emplace(object, command);
 	if (!shortcut && isMediaShortcut) {
 		_mediaShortcuts.emplace(i->second.get());
 	}
@@ -551,8 +583,7 @@ void Manager::remove(const QString &keys) {
 
 	const auto result = QKeySequence(keys, QKeySequence::PortableText);
 	if (result.isEmpty()) {
-		_errors.push_back(qsl("Could not derive key sequence '%1'!"
-		).arg(keys));
+		_errors.push_back(u"Could not derive key sequence '%1'!"_q.arg(keys));
 		return;
 	}
 	const auto i = _shortcuts.find(result);
@@ -562,9 +593,9 @@ void Manager::remove(const QString &keys) {
 	}
 }
 
-void Manager::unregister(base::unique_qptr<QShortcut> shortcut) {
+void Manager::unregister(base::unique_qptr<QAction> shortcut) {
 	if (shortcut) {
-		_commandByShortcutId.erase(shortcut->id());
+		_commandByObject.erase(shortcut.get());
 		_mediaShortcuts.erase(shortcut.get());
 		_supportShortcuts.erase(shortcut.get());
 	}
@@ -628,8 +659,10 @@ const QStringList &Errors() {
 	return Data.errors();
 }
 
-bool HandleEvent(not_null<QShortcutEvent*> event) {
-	return Launch(Data.lookup(event->shortcutId()));
+bool HandleEvent(
+		not_null<QObject*> object,
+		not_null<QShortcutEvent*> event) {
+	return Launch(Data.lookup(object));
 }
 
 void ToggleMediaShortcuts(bool toggled) {
@@ -642,6 +675,10 @@ void ToggleSupportShortcuts(bool toggled) {
 
 void Finish() {
 	Data.clear();
+}
+
+void Listen(not_null<QWidget*> widget) {
+	Data.listen(widget);
 }
 
 } // namespace Shortcuts

@@ -75,6 +75,16 @@ public:
 		_groupStickersSectionHidden.remove(peerId);
 	}
 
+	void setGroupEmojiSectionHidden(PeerId peerId) {
+		_groupEmojiSectionHidden.insert(peerId);
+	}
+	[[nodiscard]] bool isGroupEmojiSectionHidden(PeerId peerId) const {
+		return _groupEmojiSectionHidden.contains(peerId);
+	}
+	void removeGroupEmojiSectionHidden(PeerId peerId) {
+		_groupEmojiSectionHidden.remove(peerId);
+	}
+
 	void setMediaLastPlaybackPosition(DocumentId id, crl::time time);
 	[[nodiscard]] crl::time mediaLastPlaybackPosition(DocumentId id) const;
 
@@ -101,17 +111,13 @@ public:
 		return _hadLegacyCallsPeerToPeerNobody;
 	}
 
-	[[nodiscard]] MsgId hiddenPinnedMessageId(PeerId peerId) const {
-		const auto i = _hiddenPinnedMessages.find(peerId);
-		return (i != end(_hiddenPinnedMessages)) ? i->second : 0;
-	}
-	void setHiddenPinnedMessageId(PeerId peerId, MsgId msgId) {
-		if (msgId) {
-			_hiddenPinnedMessages[peerId] = msgId;
-		} else {
-			_hiddenPinnedMessages.remove(peerId);
-		}
-	}
+	[[nodiscard]] MsgId hiddenPinnedMessageId(
+		PeerId peerId,
+		MsgId topicRootId = 0) const;
+	void setHiddenPinnedMessageId(
+		PeerId peerId,
+		MsgId topicRootId,
+		MsgId msgId);
 
 	[[nodiscard]] bool dialogsFiltersEnabled() const {
 		return _dialogsFiltersEnabled;
@@ -123,21 +129,35 @@ public:
 	[[nodiscard]] bool photoEditorHintShown() const;
 	void incrementPhotoEditorHintShown();
 
+	[[nodiscard]] std::vector<TimeId> mutePeriods() const;
+	void addMutePeriod(TimeId period);
+
 private:
 	static constexpr auto kDefaultSupportChatsLimitSlice = 7 * 24 * 60 * 60;
 	static constexpr auto kPhotoEditorHintMaxShowsCount = 5;
 
+	struct ThreadId {
+		PeerId peerId;
+		MsgId topicRootId;
+
+		friend inline constexpr auto operator<=>(
+			ThreadId,
+			ThreadId) = default;
+	};
+
 	ChatHelpers::SelectorTab _selectorTab; // per-window
 	base::flat_set<PeerId> _groupStickersSectionHidden;
+	base::flat_set<PeerId> _groupEmojiSectionHidden;
 	bool _hadLegacyCallsPeerToPeerNobody = false;
 	Data::AutoDownload::Full _autoDownload;
 	rpl::variable<bool> _archiveCollapsed = false;
 	rpl::variable<bool> _archiveInMainMenu = false;
 	rpl::variable<bool> _skipArchiveInSearch = false;
 	std::vector<std::pair<DocumentId, crl::time>> _mediaLastPlaybackPosition;
-	base::flat_map<PeerId, MsgId> _hiddenPinnedMessages;
+	base::flat_map<ThreadId, MsgId> _hiddenPinnedMessages;
 	bool _dialogsFiltersEnabled = false;
 	int _photoEditorHintShowsCount = 0;
+	std::vector<TimeId> _mutePeriods;
 
 	Support::SwitchSettings _supportSwitch;
 	bool _supportFixChatsOrder = true;

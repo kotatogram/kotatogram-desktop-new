@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localstorage.h"
 #include "lang/lang_keys.h"
 #include "ui/widgets/shadow.h"
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "ui/cached_round_corners.h"
 #include "mainwindow.h"
@@ -35,14 +36,6 @@ constexpr auto kDragAreaEvents = {
 	QEvent::MouseButtonRelease,
 	QEvent::Leave,
 };
-
-inline auto InnerRect(not_null<Ui::RpWidget*> widget) {
-	return QRect(
-		st::dragPadding.left(),
-		st::dragPadding.top(),
-		widget->width() - st::dragPadding.left() - st::dragPadding.right(),
-		widget->height() - st::dragPadding.top() - st::dragPadding.bottom());
-}
 
 } // namespace
 
@@ -205,7 +198,8 @@ DragArea::Areas DragArea::SetupDragAreaToContainer(
 
 		*attachDragState = DragState::None;
 		updateDragAreas();
-		e->acceptProposedAction();
+		e->setDropAction(Qt::CopyAction);
+		e->accept();
 	};
 
 	const auto processDragEvents = [=](not_null<QEvent*> event) {
@@ -262,7 +256,7 @@ bool DragArea::overlaps(const QRect &globalRect) {
 		return false;
 	}
 
-	const auto inner = InnerRect(this);
+	const auto inner = rect() - st::dragPadding;
 	const auto testRect = QRect(
 		mapFromGlobal(globalRect.topLeft()),
 		globalRect.size());
@@ -278,11 +272,11 @@ void DragArea::mouseMoveEvent(QMouseEvent *e) {
 		return;
 	}
 
-	setIn(InnerRect(this).contains(e->pos()));
+	setIn((rect() - st::dragPadding).contains(e->pos()));
 }
 
 void DragArea::dragMoveEvent(QDragMoveEvent *e) {
-	setIn(InnerRect(this).contains(e->pos()));
+	setIn((rect() - st::dragPadding).contains(e->pos()));
 	e->setDropAction(_in ? Qt::CopyAction : Qt::IgnoreAction);
 	e->accept();
 }
@@ -312,7 +306,7 @@ void DragArea::paintEvent(QPaintEvent *e) {
 		return;
 	}
 	p.setOpacity(opacity);
-	const auto inner = InnerRect(this);
+	const auto inner = rect() - st::dragPadding;
 
 	if (!_cache.isNull()) {
 		p.drawPixmapLeft(
@@ -383,7 +377,7 @@ void DragArea::hideStart() {
 	if (_cache.isNull()) {
 		_cache = Ui::GrabWidget(
 			this,
-			InnerRect(this).marginsAdded(st::boxRoundShadow.extend));
+			rect() - st::dragPadding + st::boxRoundShadow.extend);
 	}
 	_hiding = true;
 	setIn(false);
@@ -408,7 +402,7 @@ void DragArea::showStart() {
 	if (_cache.isNull()) {
 		_cache = Ui::GrabWidget(
 			this,
-			InnerRect(this).marginsAdded(st::boxRoundShadow.extend));
+			rect() - st::dragPadding + st::boxRoundShadow.extend);
 	}
 	show();
 	_a_opacity.start(

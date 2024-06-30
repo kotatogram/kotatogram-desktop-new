@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_text_entities.h"
 #include "base/random.h"
 #include "base/unixtime.h"
+#include "data/business/data_shortcut_messages.h"
 #include "data/data_document.h"
 #include "data/data_photo.h"
 #include "data/data_location.h"
@@ -21,7 +22,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/stickers/data_stickers.h"
 #include "history/history.h"
-#include "history/history_message.h" // NewMessageFlags.
+#include "history/history_item.h"
+#include "history/history_item_helpers.h" // NewMessageFlags.
 #include "chat_helpers/message_field.h" // ConvertTextTagsToEntities.
 #include "chat_helpers/stickers_dice_pack.h" // DicePacks::kDiceString.
 #include "ui/text/text_entity.h" // TextWithEntities.
@@ -42,6 +44,9 @@ void InnerFillMessagePostFlags(
 		not_null<PeerData*> peer,
 		MessageFlags &flags) {
 	const auto anonymousPost = peer->amAnonymous();
+	if (ShouldSendSilent(peer, options)) {
+		flags |= MessageFlag::Silent;
+	}
 	if (!anonymousPost || options.sendAs) {
 		flags |= MessageFlag::HasFromId;
 		return;
@@ -65,6 +70,7 @@ void SendExistingMedia(
 		not_null<MediaData*> media,
 		Fn<MTPInputMedia()> inputMedia,
 		Data::FileOrigin origin,
+		std::optional<MsgId> localMessageId,
 		Fn<void()> doneCallback = nullptr,
 		bool forwarding = false) {
 	const auto history = message.action.history;
@@ -78,22 +84,25 @@ void SendExistingMedia(
 
 	const auto newId = FullMsgId(
 		peer->id,
-		session->data().nextLocalMessageId());
+		localMessageId
+			? (*localMessageId)
+			: session->data().nextLocalMessageId());
 	const auto randomId = base::RandomValue<uint64>();
+	const auto &action = message.action;
 
 	auto flags = NewMessageFlags(peer);
 	auto sendFlags = MTPmessages_SendMedia::Flags(0);
-	if (message.action.replyTo) {
+	if (action.replyTo) {
 		flags |= MessageFlag::HasReplyInfo;
-		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to_msg_id;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to;
 	}
 	const auto anonymousPost = peer->amAnonymous();
-	const auto silentPost = ShouldSendSilent(peer, message.action.options);
-	InnerFillMessagePostFlags(message.action.options, peer, flags);
+	const auto silentPost = ShouldSendSilent(peer, action.options);
+	InnerFillMessagePostFlags(action.options, peer, flags);
 	if (silentPost) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_silent;
 	}
-	const auto sendAs = message.action.options.sendAs;
+	const auto sendAs = action.options.sendAs;
 	const auto messageFromId = sendAs
 		? sendAs->id
 		: anonymousPost
@@ -103,7 +112,7 @@ void SendExistingMedia(
 		sendFlags |= MTPmessages_SendMedia::Flag::f_send_as;
 	}
 	const auto messagePostAuthor = peer->isBroadcast()
-		? session->user()->name
+		? session->user()->name()
 		: QString();
 
 	auto caption = TextWithEntities{
@@ -118,74 +127,69 @@ void SendExistingMedia(
 	if (!sentEntities.v.isEmpty()) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_entities;
 	}
-	const auto replyTo = message.action.replyTo;
 	const auto captionText = caption.text;
 
-	if (message.action.options.scheduled) {
+	if (action.options.scheduled) {
 		flags |= MessageFlag::IsOrWasScheduled;
 		sendFlags |= MTPmessages_SendMedia::Flag::f_schedule_date;
+	}
+	if (action.options.shortcutId) {
+		flags |= MessageFlag::ShortcutMessage;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_quick_reply_shortcut;
 	}
 
 	session->data().registerMessageRandomId(randomId, newId);
 
-	const auto viaBotId = UserId();
-	history->addNewLocalMessage(
-		newId.msg,
-		flags,
-		viaBotId,
-		replyTo,
-		HistoryItem::NewMessageDate(message.action.options.scheduled),
-		messageFromId,
-		messagePostAuthor,
-		media,
-		caption,
-		HistoryMessageMarkupData());
+	history->addNewLocalMessage({
+		.id = newId.msg,
+		.flags = flags,
+		.from = messageFromId,
+		.replyTo = action.replyTo,
+		.date = HistoryItem::NewMessageDate(action.options),
+		.shortcutId = action.options.shortcutId,
+		.postAuthor = messagePostAuthor,
+	}, media, caption);
 
-	auto performRequest = [=](const auto &repeatRequest) -> void {
+	const auto performRequest = [=](const auto &repeatRequest) -> void {
 		auto &histories = history->owner().histories();
-		const auto requestType = Data::Histories::RequestType::Send;
-		histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
-			history->sendRequestId = api->request(MTPmessages_SendMedia(
+		const auto session = &history->session();
+		histories.sendPreparedMessage(
+			history,
+			action.replyTo,
+			randomId,
+			Data::Histories::PrepareMessage<MTPmessages_SendMedia>(
 				MTP_flags(sendFlags),
 				peer->input,
-				MTP_int(replyTo),
+				Data::Histories::ReplyToPlaceholder(),
 				inputMedia(),
 				MTP_string(captionText),
 				MTP_long(randomId),
 				MTPReplyMarkup(),
 				sentEntities,
-				MTP_int(message.action.options.scheduled),
-				(sendAs ? sendAs->input : MTP_inputPeerEmpty())
-			)).done([=](const MTPUpdates &result, mtpRequestId requestId) {
-				api->applyUpdates(result, randomId);
-				if (doneCallback) {
-					doneCallback();
-				}
-				finish();
-			}).fail([=](const MTP::Error &error) {
-				if (error.code() == 400
-					&& error.type().startsWith(qstr("FILE_REFERENCE_"))) {
-					const auto usedFileReference = media->fileReference();
-					api->refreshFileReference(origin, [=](const auto &result) {
-						if (media->fileReference() != usedFileReference) {
-							repeatRequest(repeatRequest);
-						} else {
-							api->sendMessageFail(error, peer, randomId, newId);
-						}
-						});
-				} else {
-					api->sendMessageFail(error, peer, randomId, newId);
-				}
-				finish();
-			}).afterRequest(history->sendRequestId
-			).send();
-			return history->sendRequestId;
+				MTP_int(action.options.scheduled),
+				(sendAs ? sendAs->input : MTP_inputPeerEmpty()),
+				Data::ShortcutIdToMTP(session, action.options.shortcutId)
+			), [=](const MTPUpdates &result, const MTP::Response &response) {
+		}, [=](const MTP::Error &error, const MTP::Response &response) {
+			if (error.code() == 400
+				&& error.type().startsWith(u"FILE_REFERENCE_"_q)) {
+				const auto usedFileReference = media->fileReference();
+				api->refreshFileReference(origin, [=](const auto &result) {
+					if (media->fileReference() != usedFileReference) {
+						repeatRequest(repeatRequest);
+					} else {
+						api->sendMessageFail(error, peer, randomId, newId);
+					}
+				});
+			} else {
+				api->sendMessageFail(error, peer, randomId, newId);
+			}
 		});
 	};
 	performRequest(performRequest);
 
 	if (!forwarding) {
-		api->finishForwarding(message.action);
+		api->finishForwarding(action);
 	}
 }
 
@@ -194,6 +198,7 @@ void SendExistingMedia(
 void SendWebDocument(
 		Api::MessageToSend &&message,
 		not_null<DocumentData*> document,
+		std::optional<MsgId> localMessageId,
 		Fn<void()> doneCallback,
 		bool forwarding) {
 	const auto inputMedia = [=] {
@@ -207,6 +212,7 @@ void SendWebDocument(
 		document,
 		inputMedia,
 		document->stickerOrGifOrigin(),
+		std::move(localMessageId),
 		(doneCallback ? std::move(doneCallback) : nullptr),
 		forwarding);
 }
@@ -214,6 +220,7 @@ void SendWebDocument(
 void SendExistingDocument(
 		MessageToSend &&message,
 		not_null<DocumentData*> document,
+		std::optional<MsgId> localMessageId,
 		Fn<void()> doneCallback,
 		bool forwarding) {
 	const auto inputMedia = [=] {
@@ -228,6 +235,7 @@ void SendExistingDocument(
 		document,
 		inputMedia,
 		document->stickerOrGifOrigin(),
+		std::move(localMessageId),
 		(doneCallback ? std::move(doneCallback) : nullptr),
 		forwarding);
 
@@ -239,6 +247,7 @@ void SendExistingDocument(
 void SendExistingPhoto(
 		MessageToSend &&message,
 		not_null<PhotoData*> photo,
+		std::optional<MsgId> localMessageId,
 		Fn<void()> doneCallback,
 		bool forwarding) {
 	const auto inputMedia = [=] {
@@ -252,6 +261,7 @@ void SendExistingPhoto(
 		photo,
 		inputMedia,
 		Data::FileOrigin(),
+		std::move(localMessageId),
 		(doneCallback ? std::move(doneCallback) : nullptr),
 		forwarding);
 }
@@ -263,7 +273,8 @@ bool SendDice(
 	const auto full = QStringView(message.textWithTags.text).trimmed();
 	auto length = 0;
 	if (!Ui::Emoji::Find(full.data(), full.data() + full.size(), &length)
-		|| length != full.size()) {
+		|| length != full.size()
+		|| !message.textWithTags.tags.isEmpty()) {
 		return false;
 	}
 	auto &account = message.action.history->session().account();
@@ -291,7 +302,10 @@ bool SendDice(
 	message.textWithTags = TextWithTags();
 	message.action.clearDraft = false;
 	message.action.generateLocal = true;
-	api->sendAction(message.action);
+
+
+	const auto &action = message.action;
+	api->sendAction(action);
 
 	const auto newId = FullMsgId(
 		peer->id,
@@ -301,18 +315,17 @@ bool SendDice(
 	auto &histories = history->owner().histories();
 	auto flags = NewMessageFlags(peer);
 	auto sendFlags = MTPmessages_SendMedia::Flags(0);
-	if (message.action.replyTo) {
+	if (action.replyTo) {
 		flags |= MessageFlag::HasReplyInfo;
-		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to_msg_id;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to;
 	}
-	const auto replyHeader = NewMessageReplyHeader(message.action);
 	const auto anonymousPost = peer->amAnonymous();
-	const auto silentPost = ShouldSendSilent(peer, message.action.options);
-	InnerFillMessagePostFlags(message.action.options, peer, flags);
+	const auto silentPost = ShouldSendSilent(peer, action.options);
+	InnerFillMessagePostFlags(action.options, peer, flags);
 	if (silentPost) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_silent;
 	}
-	const auto sendAs = message.action.options.sendAs;
+	const auto sendAs = action.options.sendAs;
 	const auto messageFromId = sendAs
 		? sendAs->id
 		: anonymousPost
@@ -322,58 +335,53 @@ bool SendDice(
 		sendFlags |= MTPmessages_SendMedia::Flag::f_send_as;
 	}
 	const auto messagePostAuthor = peer->isBroadcast()
-		? session->user()->name
+		? session->user()->name()
 		: QString();
-	const auto replyTo = message.action.replyTo;
 
-	if (message.action.options.scheduled) {
+	if (action.options.scheduled) {
 		flags |= MessageFlag::IsOrWasScheduled;
 		sendFlags |= MTPmessages_SendMedia::Flag::f_schedule_date;
+	}
+	if (action.options.shortcutId) {
+		flags |= MessageFlag::ShortcutMessage;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_quick_reply_shortcut;
 	}
 
 	session->data().registerMessageRandomId(randomId, newId);
 
-	const auto viaBotId = UserId();
-	history->addNewLocalMessage(
-		newId.msg,
-		flags,
-		viaBotId,
-		message.action.replyTo,
-		HistoryItem::NewMessageDate(message.action.options.scheduled),
-		messageFromId,
-		messagePostAuthor,
-		TextWithEntities(),
-		MTP_messageMediaDice(MTP_int(0), MTP_string(emoji)),
-		HistoryMessageMarkupData());
-
-	const auto requestType = Data::Histories::RequestType::Send;
-	histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
-		history->sendRequestId = api->request(MTPmessages_SendMedia(
+	history->addNewLocalMessage({
+		.id = newId.msg,
+		.flags = flags,
+		.from = messageFromId,
+		.replyTo = action.replyTo,
+		.date = HistoryItem::NewMessageDate(action.options),
+		.shortcutId = action.options.shortcutId,
+		.postAuthor = messagePostAuthor,
+	}, TextWithEntities(), MTP_messageMediaDice(
+		MTP_int(0),
+		MTP_string(emoji)));
+	histories.sendPreparedMessage(
+		history,
+		action.replyTo,
+		randomId,
+		Data::Histories::PrepareMessage<MTPmessages_SendMedia>(
 			MTP_flags(sendFlags),
 			peer->input,
-			MTP_int(replyTo),
+			Data::Histories::ReplyToPlaceholder(),
 			MTP_inputMediaDice(MTP_string(emoji)),
 			MTP_string(),
 			MTP_long(randomId),
 			MTPReplyMarkup(),
 			MTP_vector<MTPMessageEntity>(),
-			MTP_int(message.action.options.scheduled),
-			(sendAs ? sendAs->input : MTP_inputPeerEmpty())
-		)).done([=](const MTPUpdates &result, mtpRequestId requestId) {
-			api->applyUpdates(result, randomId);
-			if (doneCallback) {
-				doneCallback(result, requestId);
-			}
-			finish();
-		}).fail([=](const MTP::Error &error) {
-			api->sendMessageFail(error, peer, randomId, newId);
-			finish();
-		}).afterRequest(history->sendRequestId
-		).send();
-		return history->sendRequestId;
+			MTP_int(action.options.scheduled),
+			(sendAs ? sendAs->input : MTP_inputPeerEmpty()),
+			Data::ShortcutIdToMTP(session, action.options.shortcutId)
+		), [=](const MTPUpdates &result, const MTP::Response &response) {
+	}, [=](const MTP::Error &error, const MTP::Response &response) {
+		api->sendMessageFail(error, peer, randomId, newId);
 	});
 	if (!forwarding) {
-		api->finishForwarding(message.action);
+		api->finishForwarding(action);
 	}
 	return true;
 }
@@ -392,9 +400,9 @@ void SendConfirmedFile(
 		&& (file->to.replaceMediaOf != 0);
 	const auto newId = FullMsgId(
 		file->to.peer,
-		isEditing
+		(isEditing
 			? file->to.replaceMediaOf
-			: session->data().nextLocalMessageId());
+			: session->data().nextLocalMessageId()));
 	const auto groupId = file->album ? file->album->groupId : uint64(0);
 	if (file->album) {
 		const auto proj = [](const SendingAlbum::Item &item) {
@@ -405,19 +413,30 @@ void SendConfirmedFile(
 
 		it->msgId = newId;
 	}
-	session->uploader().upload(newId, file);
 
 	const auto itemToEdit = isEditing
 		? session->data().message(newId)
 		: nullptr;
-
 	const auto history = session->data().history(file->to.peer);
 	const auto peer = history->peer;
+
+	if (!isEditing) {
+		const auto histories = &session->data().histories();
+		file->to.replyTo.messageId = histories->convertTopicReplyToId(
+			history,
+			file->to.replyTo.messageId);
+		file->to.replyTo.topicRootId = histories->convertTopicReplyToId(
+			history,
+			file->to.replyTo.topicRootId);
+	}
+
+	session->uploader().upload(newId, file);
 
 	auto action = SendAction(history, file->to.options);
 	action.clearDraft = false;
 	action.replyTo = file->to.replyTo;
 	action.generateLocal = true;
+	action.replaceMediaOf = file->to.replaceMediaOf;
 	session->api().sendAction(action);
 
 	auto caption = TextWithEntities{
@@ -434,17 +453,18 @@ void SendConfirmedFile(
 	if (file->to.replyTo) {
 		flags |= MessageFlag::HasReplyInfo;
 	}
-	const auto replyHeader = NewMessageReplyHeader(action);
 	const auto anonymousPost = peer->amAnonymous();
-	const auto silentPost = ShouldSendSilent(peer, file->to.options);
 	FillMessagePostFlags(action, peer, flags);
-	if (silentPost) {
-		flags |= MessageFlag::Silent;
-	}
 	if (file->to.options.scheduled) {
 		flags |= MessageFlag::IsOrWasScheduled;
 
-		// Scheduled messages have no the 'edited' badge.
+		// Scheduled messages have no 'edited' badge.
+		flags |= MessageFlag::HideEdited;
+	}
+	if (file->to.options.shortcutId) {
+		flags |= MessageFlag::ShortcutMessage;
+
+		// Shortcut messages have no 'edited' badge.
 		flags |= MessageFlag::HideEdited;
 	}
 	if (file->type == SendMediaType::Audio) {
@@ -453,65 +473,86 @@ void SendConfirmedFile(
 		}
 	}
 
-	const auto messageFromId =
-		file->to.options.sendAs
+	const auto messageFromId = file->to.options.sendAs
 		? file->to.options.sendAs->id
 		: anonymousPost
 		? PeerId()
 		: session->userPeerId();
 	const auto messagePostAuthor = peer->isBroadcast()
-		? session->user()->name
+		? session->user()->name()
 		: QString();
 
 	const auto media = MTPMessageMedia([&] {
 		if (file->type == SendMediaType::Photo) {
+			using Flag = MTPDmessageMediaPhoto::Flag;
 			return MTP_messageMediaPhoto(
-				MTP_flags(MTPDmessageMediaPhoto::Flag::f_photo),
+				MTP_flags(Flag::f_photo
+					| (file->spoiler ? Flag::f_spoiler : Flag())),
 				file->photo,
 				MTPint());
 		} else if (file->type == SendMediaType::File) {
+			using Flag = MTPDmessageMediaDocument::Flag;
 			return MTP_messageMediaDocument(
-				MTP_flags(MTPDmessageMediaDocument::Flag::f_document),
+				MTP_flags(Flag::f_document
+					| (file->spoiler ? Flag::f_spoiler : Flag())),
 				file->document,
+				MTPDocument(), // alt_document
 				MTPint());
 		} else if (file->type == SendMediaType::Audio) {
+			const auto ttlSeconds = file->to.options.ttlSeconds;
+			const auto isVoice = [&] {
+				return file->document.match([](const MTPDdocumentEmpty &d) {
+					return false;
+				}, [](const MTPDdocument &d) {
+					return ranges::any_of(d.vattributes().v, [&](
+							const MTPDocumentAttribute &attribute) {
+						using Att = MTPDdocumentAttributeAudio;
+						return attribute.match([](const Att &data) -> bool {
+							return data.vflags().v & Att::Flag::f_voice;
+						}, [](const auto &) {
+							return false;
+						});
+					});
+				});
+			}();
+			using Flag = MTPDmessageMediaDocument::Flag;
 			return MTP_messageMediaDocument(
-				MTP_flags(MTPDmessageMediaDocument::Flag::f_document),
+				MTP_flags(Flag::f_document
+					| (isVoice ? Flag::f_voice : Flag())
+					| (ttlSeconds ? Flag::f_ttl_seconds : Flag())),
 				file->document,
-				MTPint());
+				MTPDocument(), // alt_document
+				MTP_int(ttlSeconds));
 		} else {
 			Unexpected("Type in sendFilesConfirmed.");
 		}
 	}());
 
 	if (itemToEdit) {
-		itemToEdit->savePreviousMedia();
 		auto edition = HistoryMessageEdition();
 		edition.isEditHide = (flags & MessageFlag::HideEdited);
 		edition.editDate = 0;
-		edition.views = 0;
-		edition.forwards = 0;
 		edition.ttl = 0;
 		edition.mtpMedia = &media;
 		edition.textWithEntities = caption;
+		edition.useSameViews = true;
+		edition.useSameForwards = true;
 		edition.useSameMarkup = true;
 		edition.useSameReplies = true;
 		edition.useSameReactions = true;
+		edition.savePreviousMedia = true;
 		itemToEdit->applyEdition(std::move(edition));
 	} else {
-		const auto viaBotId = UserId();
-		history->addNewLocalMessage(
-			newId.msg,
-			flags,
-			viaBotId,
-			file->to.replyTo,
-			HistoryItem::NewMessageDate(file->to.options.scheduled),
-			messageFromId,
-			messagePostAuthor,
-			caption,
-			media,
-			HistoryMessageMarkupData(),
-			groupId);
+		history->addNewLocalMessage({
+			.id = newId.msg,
+			.flags = flags,
+			.from = messageFromId,
+			.replyTo = file->to.replyTo,
+			.date = HistoryItem::NewMessageDate(file->to.options),
+			.shortcutId = file->to.options.shortcutId,
+			.postAuthor = messagePostAuthor,
+			.groupedId = groupId,
+		}, caption, media);
 	}
 
 	if (isEditing) {
@@ -541,20 +582,22 @@ void SendLocationPoint(
 
 	auto sendFlags = MTPmessages_SendMedia::Flags(0);
 	if (action.replyTo) {
-		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to_msg_id;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to;
 	}
+	const auto topicRootId = action.replyTo.messageId
+		? action.replyTo.topicRootId
+		: 0;
 	if (action.clearDraft) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_clear_draft;
-		history->clearLocalDraft();
-		history->clearCloudDraft();
+		history->clearLocalDraft(topicRootId);
+		history->clearCloudDraft(topicRootId);
 	}
 	const auto sendAs = action.options.sendAs;
 
 	if (sendAs) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_send_as;
 	}
-	const auto silentPost = action.options.silent
-		|| (peer->isBroadcast() && session->data().notifySilentPosts(peer));
+	const auto silentPost = ShouldSendSilent(peer, action.options);
 	if (silentPost) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_silent;
 	}
@@ -564,11 +607,10 @@ void SendLocationPoint(
 	auto &histories = history->owner().histories();
 	const auto requestType = Data::Histories::RequestType::Send;
 	histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
-		const auto replyTo = action.replyTo;
 		history->sendRequestId = api->request(MTPmessages_SendMedia(
 			MTP_flags(sendFlags),
 			peer->input,
-			MTP_int(replyTo),
+			action.mtpReplyTo(),
 			MTP_inputMediaGeoPoint(
 				MTP_inputGeoPoint(
 					MTP_flags(0),
@@ -580,7 +622,8 @@ void SendLocationPoint(
 			MTPReplyMarkup(),
 			MTPVector<MTPMessageEntity>(),
 			MTP_int(action.options.scheduled),
-			(sendAs ? sendAs->input : MTP_inputPeerEmpty())
+			(sendAs ? sendAs->input : MTP_inputPeerEmpty()),
+			MTPInputQuickReplyShortcut()
 		)).done([=](const MTPUpdates &result) mutable {
 			api->applyUpdates(result);
 			done();

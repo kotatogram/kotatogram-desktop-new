@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer.h"
 #include "data/data_user.h"
 #include "data/data_session.h"
+#include "ui/controls/peer_list_dummy.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
 #include "ui/wrap/vertical_layout.h"
@@ -36,21 +37,6 @@ constexpr auto kFirstPage = 15;
 constexpr auto kPerPage = 50;
 constexpr auto kLeavePreloaded = 5;
 
-class PeerListDummy final : public Ui::RpWidget {
-public:
-	PeerListDummy(QWidget *parent, int count, const style::PeerList &st);
-
-protected:
-	void paintEvent(QPaintEvent *e) override;
-
-private:
-	const style::PeerList &_st;
-	int _count = 0;
-
-	std::vector<Ui::Animations::Simple> _animations;
-
-};
-
 class ListDelegate final : public PeerListContentDelegate {
 public:
 	void peerListSetTitle(rpl::producer<QString> title) override;
@@ -65,83 +51,9 @@ public:
 	void peerListFinishSelectedRowsBunch() override;
 	void peerListSetDescription(
 		object_ptr<Ui::FlatLabel> description) override;
+	std::shared_ptr<Main::SessionShow> peerListUiShow() override;
 
 };
-
-PeerListDummy::PeerListDummy(
-	QWidget *parent,
-	int count,
-	const style::PeerList &st)
-: _st(st)
-, _count(count) {
-	resize(width(), _count * _st.item.height);
-}
-
-void PeerListDummy::paintEvent(QPaintEvent *e) {
-	QPainter p(this);
-
-	PainterHighQualityEnabler hq(p);
-
-	const auto fill = e->rect();
-	const auto bottom = fill.top() + fill.height();
-	const auto from = floorclamp(fill.top(), _st.item.height, 0, _count);
-	const auto till = ceilclamp(bottom, _st.item.height, 0, _count);
-	p.translate(0, _st.item.height * from);
-	p.setPen(Qt::NoPen);
-	for (auto i = from; i != till; ++i) {
-		p.setBrush(st::windowBgOver);
-		switch (KotatoImageRoundRadius()) {
-			case ImageRoundRadius::None:
-				p.drawRoundedRect(QRect{
-						_st.item.photoPosition.x(),
-						_st.item.photoPosition.y(),
-						_st.item.photoSize,
-						_st.item.photoSize }, 0, 0);
-				break;
-
-			case ImageRoundRadius::Small:
-				p.drawRoundedRect(QRect{
-						_st.item.photoPosition.x(),
-						_st.item.photoPosition.y(),
-						_st.item.photoSize,
-						_st.item.photoSize },
-					st::buttonRadius, st::buttonRadius);
-				break;
-
-			case ImageRoundRadius::Large:
-				p.drawRoundedRect(QRect{
-						_st.item.photoPosition.x(),
-						_st.item.photoPosition.y(),
-						_st.item.photoSize,
-						_st.item.photoSize },
-					st::dateRadius, st::dateRadius);
-				break;
-
-			default:
-				p.drawEllipse(_st.item.photoPosition.x(),
-						_st.item.photoPosition.y(),
-						_st.item.photoSize,
-						_st.item.photoSize);
-		}
-
-		const auto small = int(1.5 * _st.item.photoSize);
-		const auto large = 2 * small;
-		const auto second = (i % 2) ? large : small;
-		const auto height = _st.item.nameStyle.font->height / 2;
-		const auto radius = height / 2;
-		const auto left = _st.item.namePosition.x();
-		const auto top = _st.item.namePosition.y()
-			+ (_st.item.nameStyle.font->height - height) / 2;
-		const auto skip = _st.item.namePosition.x()
-			- _st.item.photoPosition.x()
-			- _st.item.photoSize;
-		const auto next = left + small + skip;
-		p.drawRoundedRect(left, top, small, height, radius, radius);
-		p.drawRoundedRect(next, top, second, height, radius, radius);
-
-		p.translate(0, _st.item.height);
-	}
-}
 
 void ListDelegate::peerListSetTitle(rpl::producer<QString> title) {
 }
@@ -174,6 +86,10 @@ void ListDelegate::peerListFinishSelectedRowsBunch() {
 void ListDelegate::peerListSetDescription(
 		object_ptr<Ui::FlatLabel> description) {
 	description.destroy();
+}
+
+std::shared_ptr<Main::SessionShow> ListDelegate::peerListUiShow() {
+	Unexpected("...ListDelegate::peerListUiShow");
 }
 
 } // namespace
@@ -215,12 +131,12 @@ private:
 		QString loadForOffset;
 		int leftToLoad = 0;
 		int fullCount = 0;
-		std::vector<not_null<UserData*>> preloaded;
+		std::vector<not_null<PeerData*>> preloaded;
 		bool wasLoading = false;
 	};
 
-	bool appendRow(not_null<UserData*> user);
-	std::unique_ptr<PeerListRow> createRow(not_null<UserData*> user) const;
+	bool appendRow(not_null<PeerData*> peer);
+	std::unique_ptr<PeerListRow> createRow(not_null<PeerData*> peer) const;
 	void addPreloaded();
 	bool addPreloadedPage();
 	void preloadedAdded();
@@ -235,7 +151,7 @@ private:
 	QString _offset;
 	mtpRequestId _loadRequestId = 0;
 	QString _loadForOffset;
-	std::vector<not_null<UserData*>> _preloaded;
+	std::vector<not_null<PeerData*>> _preloaded;
 	rpl::variable<int> _count = 0;
 	rpl::variable<int> _fullCount;
 	rpl::variable<int> _leftToLoad;
@@ -299,16 +215,17 @@ void ListController::loadMoreRows() {
 			_offset = data.vnext_offset().value_or_empty();
 			auto &owner = session().data();
 			owner.processUsers(data.vusers());
+			owner.processChats(data.vchats());
 			auto add = limit - kLeavePreloaded;
 			for (const auto &vote : data.vvotes().v) {
 				vote.match([&](const auto &data) {
-					const auto user = owner.user(data.vuser_id().v);
-					if (user->isMinimalLoaded()) {
+					const auto peer = owner.peer(peerFromMTP(data.vpeer()));
+					if (peer->isMinimalLoaded()) {
 						if (add) {
-							appendRow(user);
+							appendRow(peer);
 							--add;
 						} else {
-							_preloaded.push_back(user);
+							_preloaded.push_back(peer);
 						}
 					}
 				});
@@ -455,27 +372,24 @@ void ListController::restoreState(std::unique_ptr<PeerListState> state) {
 
 std::unique_ptr<PeerListRow> ListController::createRestoredRow(
 		not_null<PeerData*> peer) {
-	if (const auto user = peer->asUser()) {
-		return createRow(user);
-	}
-	return nullptr;
+	return createRow(peer);
 }
 
 void ListController::rowClicked(not_null<PeerListRow*> row) {
 	_showPeerInfoRequests.fire(row->peer());
 }
 
-bool ListController::appendRow(not_null<UserData*> user) {
-	if (delegate()->peerListFindRow(user->id.value)) {
+bool ListController::appendRow(not_null<PeerData*> peer) {
+	if (delegate()->peerListFindRow(peer->id.value)) {
 		return false;
 	}
-	delegate()->peerListAppendRow(createRow(user));
+	delegate()->peerListAppendRow(createRow(peer));
 	return true;
 }
 
 std::unique_ptr<PeerListRow> ListController::createRow(
-		not_null<UserData*> user) const {
-	auto row = std::make_unique<PeerListRow>(user);
+		not_null<PeerData*> peer) const {
+	auto row = std::make_unique<PeerListRow>(peer);
 	row->setCustomStatus(QString());
 	return row;
 }
@@ -707,7 +621,7 @@ void InnerWidget::setupContent() {
 			st::boxRowPadding.right(),
 			st::boxMediumSkip });
 	for (const auto &answer : _poll->answers) {
-		const auto session = &_controller->parentController()->session();
+		const auto session = &_controller->session();
 		const auto controller = CreateAnswerRows(
 			_content,
 			_visibleTop.value(),

@@ -9,21 +9,34 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "chat_helpers/tabbed_panel.h"
 #include "chat_helpers/tabbed_selector.h"
+#include "window/window_session_controller.h" // Window::GifPauseReason
+
 #include "styles/style_chat_helpers.h"
+#include "styles/style_media_view.h"
 
 namespace Editor {
 
 StickersPanelController::StickersPanelController(
 	not_null<Ui::RpWidget*> panelContainer,
-	not_null<Window::SessionController*> controller)
+	std::shared_ptr<ChatHelpers::Show> show)
 : _stickersPanel(
 	base::make_unique_q<ChatHelpers::TabbedPanel>(
 		panelContainer,
-		controller,
-		object_ptr<ChatHelpers::TabbedSelector>(
-			nullptr,
-			controller,
-			ChatHelpers::TabbedSelector::Mode::MediaEditor))) {
+		ChatHelpers::TabbedPanelDescriptor{
+			.ownedSelector = object_ptr<ChatHelpers::TabbedSelector>(
+				nullptr,
+				ChatHelpers::TabbedSelectorDescriptor{
+					.show = show,
+					.st = st::storiesComposeControls.tabbed,
+					.level = Window::GifPauseReason::Layer,
+					.mode = ChatHelpers::TabbedSelector::Mode::MediaEditor,
+					.features = {
+						.megagroupSet = false,
+						.stickersSettings = false,
+						.openStickerSets = false,
+					},
+				}),
+		})) {
 	_stickersPanel->setDesiredHeightValues(
 		1.,
 		st::emojiPanMinHeight / 2,
@@ -34,7 +47,7 @@ StickersPanelController::StickersPanelController(
 auto StickersPanelController::stickerChosen() const
 -> rpl::producer<not_null<DocumentData*>> {
 	return _stickersPanel->selector()->fileChosen(
-	) | rpl::map([](const ChatHelpers::TabbedSelector::FileChosen &data) {
+	) | rpl::map([](const ChatHelpers::FileChosen &data) {
 		return data.document;
 	});
 }

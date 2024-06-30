@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/text/text_utilities.h"
 #include "base/platform/base_platform_info.h"
+#include "core/file_utilities.h"
 #include "core/click_handler_types.h"
 #include "core/update_checker.h"
 #include "core/application.h"
@@ -84,7 +85,7 @@ AboutBox::AboutBox(QWidget *parent)
 }
 
 void AboutBox::prepare() {
-	setTitle(rpl::single(qsl("Kotatogram Desktop")));
+	setTitle(rpl::single(u"Kotatogram Desktop"_q));
 
 	addButton(tr::lng_close(), [this] { closeBox(); });
 
@@ -115,27 +116,30 @@ void AboutBox::resizeEvent(QResizeEvent *e) {
 void AboutBox::showVersionHistory() {
 	/*
 	if (cRealAlphaVersion()) {
-		auto url = qsl("https://tdesktop.com/");
+		auto url = u"https://tdesktop.com/"_q;
 		if (Platform::IsWindows32Bit()) {
-			url += qsl("win/%1.zip");
+			url += u"win/%1.zip"_q;
 		} else if (Platform::IsWindows64Bit()) {
-			url += qsl("win64/%1.zip");
+			url += u"win64/%1.zip"_q;
 		} else if (Platform::IsMac()) {
-			url += qsl("mac/%1.zip");
+			url += u"mac/%1.zip"_q;
 		} else if (Platform::IsLinux()) {
-			url += qsl("linux/%1.tar.xz");
+			url += u"linux/%1.tar.xz"_q;
 		} else {
 			Unexpected("Platform value.");
 		}
-		url = url.arg(qsl("talpha%1_%2").arg(cRealAlphaVersion()).arg(Core::countAlphaVersionSignature(cRealAlphaVersion())));
+		url = url.arg(u"talpha%1_%2"_q.arg(cRealAlphaVersion()).arg(Core::countAlphaVersionSignature(cRealAlphaVersion())));
 
 		QGuiApplication::clipboard()->setText(url);
 
-		Ui::show(Box<Ui::InformBox>("The link to the current private alpha "
-			"version of Telegram Desktop was copied to the clipboard."));
+		getDelegate()->show(
+			Ui::MakeInformBox(
+				"The link to the current private alpha "
+				"version of Telegram Desktop was copied to the clipboard."),
+			Ui::LayerOption::CloseOther);
 	} else {
 	*/
-		UrlClickHandler::Open(Core::App().changelogLink());
+		File::OpenUrl(Core::App().changelogLink());
 	/*
 	}
 	*/
@@ -150,7 +154,7 @@ void AboutBox::keyPressEvent(QKeyEvent *e) {
 }
 
 QString telegramFaqLink() {
-	const auto result = qsl("https://telegram.org/faq");
+	const auto result = u"https://telegram.org/faq"_q;
 	const auto langpacked = [&](const char *language) {
 		return result + '/' + language;
 	};
@@ -160,7 +164,7 @@ QString telegramFaqLink() {
 			return langpacked(language);
 		}
 	}
-	if (current.startsWith(qstr("pt-br"))) {
+	if (current.startsWith(u"pt-br"_q)) {
 		return langpacked("br");
 	}
 	return result;
@@ -169,7 +173,7 @@ QString telegramFaqLink() {
 QString currentVersionText() {
 	auto result = QString::fromLatin1(AppKotatoVersionStr);
 	if (cAlphaVersion()) {
-		result += qsl("-%1.%2").arg(AppKotatoTestBranch).arg(AppKotatoTestVersion);
+		result += u"-%1.%2"_q.arg(AppKotatoTestBranch).arg(AppKotatoTestVersion);
 	} else if (AppKotatoBetaVersion) {
 		result += " beta";
 	}

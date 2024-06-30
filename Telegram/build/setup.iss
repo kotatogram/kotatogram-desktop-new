@@ -4,6 +4,7 @@
 #define MyAppURL "https://kotatogram.github.io"
 #define MyAppExeName "Kotatogram.exe"
 #define MyAppId "C4A4AE8F-B9F7-4CC7-8A6C-BF7EEE87ACA5"
+#define CurrentYear GetDateTimeString('yyyy','','')
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application.
@@ -12,6 +13,7 @@
 AppId={{{#MyAppId}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+AppCopyright={#MyAppPublisher} 2014-{#CurrentYear}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
@@ -31,29 +33,32 @@ VersionInfoVersion={#MyAppVersion}.0
 CloseApplications=force
 DisableDirPage=no
 DisableProgramGroupPage=no
+WizardStyle=modern
 
 #if MyBuildTarget == "win64"
-ArchitecturesAllowed="x64 arm64"
-ArchitecturesInstallIn64BitMode="x64 arm64"
-OutputBaseFilename=ksetup-x64.{#MyAppVersionFull}
-#define ArchModulesFolder "x64"
+  ArchitecturesAllowed="x64 arm64"
+  ArchitecturesInstallIn64BitMode="x64 arm64"
+  OutputBaseFilename=ksetup-x64.{#MyAppVersionFull}
+  #define ArchModulesFolder "x64"
+  AppVerName={#MyAppName} {#MyAppVersion} 64bit
 #else
-OutputBaseFilename=ksetup.{#MyAppVersionFull}
-#define ArchModulesFolder "x86"
+  OutputBaseFilename=ksetup.{#MyAppVersionFull}
+  #define ArchModulesFolder "x86"
+  AppVerName={#MyAppName} {#MyAppVersion} 32bit
 #endif
 
 #define ModulesFolder "modules\" + ArchModulesFolder
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
-Name: "it"; MessagesFile: "compiler:Languages\Italian.isl"
-Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
-Name: "de"; MessagesFile: "compiler:Languages\German.isl"
-Name: "nl"; MessagesFile: "compiler:Languages\Dutch.isl"
-Name: "pt_BR"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
-Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
-Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
-Name: "ua"; MessagesFile: "compiler:Languages\Ukrainian.isl"
+Name: "it";      MessagesFile: "compiler:Languages\Italian.isl"
+Name: "es";      MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "de";      MessagesFile: "compiler:Languages\German.isl"
+Name: "nl";      MessagesFile: "compiler:Languages\Dutch.isl"
+Name: "pt_BR";   MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+Name: "ru";      MessagesFile: "compiler:Languages\Russian.isl"
+Name: "fr";      MessagesFile: "compiler:Languages\French.isl"
+Name: "ua";      MessagesFile: "compiler:Languages\Ukrainian.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"

@@ -14,6 +14,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QTimer>
 
+namespace style {
+struct ComposeIcons;
+} // namespace style
+
 namespace Api {
 struct SendOptions;
 } // namespace Api
@@ -28,6 +32,7 @@ class Result;
 namespace Ui {
 class PopupMenu;
 class RoundButton;
+class TabbedSearch;
 } // namespace Ui
 
 namespace Window {
@@ -38,22 +43,40 @@ namespace SendMenu {
 enum class Type;
 } // namespace SendMenu
 
+namespace Data {
+class StickersSet;
+} // namespace Data
+
 namespace ChatHelpers {
 
 void AddGifAction(
 	Fn<void(QString, Fn<void()> &&, const style::icon*)> callback,
-	not_null<DocumentData*> document);
+	std::shared_ptr<Show> show,
+	not_null<DocumentData*> document,
+	const style::ComposeIcons *iconsOverride = nullptr);
 
-class GifsListWidget
+class StickersListFooter;
+struct StickerIcon;
+struct GifSection;
+
+struct GifsListDescriptor {
+	std::shared_ptr<Show> show;
+	Fn<bool()> paused;
+	const style::EmojiPan *st = nullptr;
+};
+
+class GifsListWidget final
 	: public TabbedSelector::Inner
 	, public InlineBots::Layout::Context {
 public:
-	using InlineChosen = TabbedSelector::InlineChosen;
+	GifsListWidget(
+		QWidget *parent,
+		not_null<Window::SessionController*> controller,
+		PauseReason level);
+	GifsListWidget(QWidget *parent, GifsListDescriptor &&descriptor);
 
-	GifsListWidget(QWidget *parent, not_null<Window::SessionController*> controller);
-
-	rpl::producer<TabbedSelector::FileChosen> fileChosen() const;
-	rpl::producer<TabbedSelector::PhotoChosen> photoChosen() const;
+	rpl::producer<FileChosen> fileChosen() const;
+	rpl::producer<PhotoChosen> photoChosen() const;
 	rpl::producer<InlineChosen> inlineResultChosen() const;
 
 	void refreshRecent() override;
@@ -78,8 +101,7 @@ public:
 	void cancelled();
 	rpl::producer<> cancelRequests() const;
 
-	void fillContextMenu(
-		not_null<Ui::PopupMenu*> menu,
+	base::unique_qptr<Ui::PopupMenu> fillContextMenu(
 		SendMenu::Type type) override;
 
 	~GifsListWidget();
@@ -107,7 +129,6 @@ private:
 		Inlines,
 		Gifs,
 	};
-	class Footer;
 
 	using InlineResult = InlineBots::Result;
 	using InlineResults = std::vector<std::unique_ptr<InlineResult>>;
@@ -118,6 +139,7 @@ private:
 		InlineResults results;
 	};
 
+	void setupSearch();
 	void clearHeavyData();
 	void cancelGifsSearch();
 	void switchToSavedGifs();
@@ -131,29 +153,15 @@ private:
 
 	void updateSelected();
 	void paintInlineItems(Painter &p, QRect clip);
+	void refreshIcons();
+	[[nodiscard]] std::vector<StickerIcon> fillIcons();
 
 	void updateInlineItems();
 	void repaintItems(crl::time now = 0);
 	void showPreview();
 
-	MTP::Sender _api;
-
-	Section _section = Section::Gifs;
-	crl::time _lastScrolledAt = 0;
-	crl::time _lastUpdatedAt = 0;
-	base::Timer _updateInlineItems;
-	bool _inlineWithThumb = false;
-
 	void clearInlineRows(bool resultsDeleted);
-
-	std::map<
-		not_null<DocumentData*>,
-		std::unique_ptr<LayoutItem>> _gifLayouts;
 	LayoutItem *layoutPrepareSavedGif(not_null<DocumentData*> document);
-
-	std::map<
-		not_null<InlineResult*>,
-		std::unique_ptr<LayoutItem>> _inlineLayouts;
 	LayoutItem *layoutPrepareInlineResult(not_null<InlineResult*> result);
 
 	void deleteUnusedGifLayouts();
@@ -166,7 +174,28 @@ private:
 		Api::SendOptions options,
 		bool forceSend = false);
 
-	Footer *_footer = nullptr;
+	const std::shared_ptr<Show> _show;
+	std::unique_ptr<Ui::TabbedSearch> _search;
+
+	MTP::Sender _api;
+
+	Section _section = Section::Gifs;
+	crl::time _lastScrolledAt = 0;
+	crl::time _lastUpdatedAt = 0;
+	base::Timer _updateInlineItems;
+	bool _inlineWithThumb = false;
+
+	std::map<
+		not_null<DocumentData*>,
+		std::unique_ptr<LayoutItem>> _gifLayouts;
+	std::map<
+		not_null<InlineResult*>,
+		std::unique_ptr<LayoutItem>> _inlineLayouts;
+
+	StickersListFooter *_footer = nullptr;
+	std::vector<GifSection> _sections;
+	base::flat_map<uint64, std::unique_ptr<Data::StickersSet>> _fakeSets;
+	uint64 _chosenSetId = 0;
 
 	Mosaic::Layout::MosaicLayout<LayoutItem> _mosaic;
 
@@ -186,8 +215,8 @@ private:
 	QString _inlineQuery, _inlineNextQuery, _inlineNextOffset;
 	mtpRequestId _inlineRequestId = 0;
 
-	rpl::event_stream<TabbedSelector::FileChosen> _fileChosen;
-	rpl::event_stream<TabbedSelector::PhotoChosen> _photoChosen;
+	rpl::event_stream<FileChosen> _fileChosen;
+	rpl::event_stream<PhotoChosen> _photoChosen;
 	rpl::event_stream<InlineChosen> _inlineResultChosen;
 	rpl::event_stream<> _cancelled;
 

@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "base/observer.h"
-#include "base/timer.h"
 #include "base/binary_guard.h"
 #include "base/weak_ptr.h"
 
@@ -54,11 +52,22 @@ struct StorageImageSaved {
 
 class FileLoader : public base::has_weak_ptr {
 public:
+	enum class FailureReason {
+		NoFailure,
+		FileWriteFailure,
+		OtherFailure,
+	};
+
+	struct Error {
+		FailureReason failureReason = FailureReason::NoFailure;
+		bool started = false;
+	};
+
 	FileLoader(
 		not_null<Main::Session*> session,
 		const QString &toFile,
-		int loadSize,
-		int fullSize,
+		int64 loadSize,
+		int64 fullSize,
 		LocationType locationType,
 		LoadToCacheSetting toCache,
 		LoadFromCloudSetting fromCloud,
@@ -88,17 +97,17 @@ public:
 	// Used in MainWidget::documentLoadFailed.
 	[[nodiscard]] virtual Data::FileOrigin fileOrigin() const;
 	[[nodiscard]] float64 currentProgress() const;
-	[[nodiscard]] virtual int currentOffset() const;
-	[[nodiscard]] int fullSize() const {
+	[[nodiscard]] virtual int64 currentOffset() const;
+	[[nodiscard]] int64 fullSize() const {
 		return _fullSize;
 	}
-	[[nodiscard]] int loadSize() const {
+	[[nodiscard]] int64 loadSize() const {
 		return _loadSize;
 	}
 
 	bool setFileName(const QString &filename); // set filename for loaders to cache
 	void permitLoadFromCloud();
-	void increaseLoadSize(int size, bool autoLoading);
+	void increaseLoadSize(int64 size, bool autoLoading);
 
 	void start();
 	void cancel();
@@ -115,7 +124,7 @@ public:
 		const QByteArray &imageFormat,
 		const QImage &imageData);
 
-	[[nodiscard]] rpl::producer<rpl::empty_value, bool> updates() const {
+	[[nodiscard]] rpl::producer<rpl::empty_value, Error> updates() const {
 		return _updates.events();
 	}
 
@@ -144,13 +153,13 @@ protected:
 		startLoading();
 	}
 
-	void cancel(bool failed);
+	void cancel(FailureReason failed);
 
 	void notifyAboutProgress();
 
-	bool writeResultPart(int offset, bytes::const_span buffer);
+	bool writeResultPart(int64 offset, bytes::const_span buffer);
 	bool finalizeResult();
-	[[nodiscard]] QByteArray readLoadedPartBack(int offset, int size);
+	[[nodiscard]] QByteArray readLoadedPartBack(int64 offset, int size);
 
 	const not_null<Main::Session*> _session;
 
@@ -169,9 +178,9 @@ protected:
 
 	QByteArray _data;
 
-	int _loadSize = 0;
-	int _fullSize = 0;
-	int _skippedBytes = 0;
+	int64 _loadSize = 0;
+	int64 _fullSize = 0;
+	int64 _skippedBytes = 0;
 	LocationType _locationType = LocationType();
 
 	base::binary_guard _localLoading;
@@ -179,7 +188,7 @@ protected:
 	mutable QImage _imageData;
 
 	rpl::lifetime _lifetime;
-	rpl::event_stream<rpl::empty_value, bool> _updates;
+	rpl::event_stream<rpl::empty_value, Error> _updates;
 
 };
 
@@ -188,8 +197,8 @@ protected:
 	const DownloadLocation &location,
 	Data::FileOrigin origin,
 	const QString &toFile,
-	int loadSize,
-	int fullSize,
+	int64 loadSize,
+	int64 fullSize,
 	LocationType locationType,
 	LoadToCacheSetting toCache,
 	LoadFromCloudSetting fromCloud,

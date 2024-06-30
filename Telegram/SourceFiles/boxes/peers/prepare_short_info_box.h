@@ -11,6 +11,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class PeerData;
 
+namespace style {
+struct ShortInfoCover;
+struct ShortInfoBox;
+} // namespace style
+
 namespace Ui {
 class BoxContent;
 } // namespace Ui
@@ -29,14 +34,21 @@ struct PreparedShortInfoUserpic {
 [[nodiscard]] object_ptr<Ui::BoxContent> PrepareShortInfoBox(
 	not_null<PeerData*> peer,
 	Fn<void()> open,
-	Fn<bool()> videoPaused);
+	Fn<bool()> videoPaused,
+	const style::ShortInfoBox *stOverride = nullptr);
 
 [[nodiscard]] object_ptr<Ui::BoxContent> PrepareShortInfoBox(
 	not_null<PeerData*> peer,
-	not_null<Window::SessionNavigation*> navigation);
+	not_null<Window::SessionNavigation*> navigation,
+	const style::ShortInfoBox *stOverride = nullptr);
 
 [[nodiscard]] rpl::producer<QString> PrepareShortInfoStatus(
 	not_null<PeerData*> peer);
 
 [[nodiscard]] PreparedShortInfoUserpic PrepareShortInfoUserpic(
-	not_null<PeerData*> peer);
+	not_null<PeerData*> peer,
+	const style::ShortInfoCover &st);
+
+[[nodiscard]] PreparedShortInfoUserpic PrepareShortInfoFallbackUserpic(
+	not_null<PeerData*> peer,
+	const style::ShortInfoCover &st);

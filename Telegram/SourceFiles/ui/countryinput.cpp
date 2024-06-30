@@ -12,13 +12,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/multi_select.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/boxes/country_select_box.h"
+#include "ui/painter.h"
 #include "countries/countries_instance.h"
+#include "window/window_session_controller.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 #include "styles/style_intro.h"
+#include "styles/style_widgets.h"
 
-CountryInput::CountryInput(QWidget *parent, const style::InputField &st)
+CountryInput::CountryInput(
+	QWidget *parent,
+	std::shared_ptr<Ui::Show> show,
+	const style::InputField &st)
 : RpWidget(parent)
+, _show(show)
 , _st(st)
 , _text(tr::lng_country_code(tr::now)) {
 	resize(_st.width, _st.heightMin);
@@ -37,7 +44,7 @@ CountryInput::CountryInput(QWidget *parent, const style::InputField &st)
 }
 
 void CountryInput::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 
 	QRect r(rect().intersected(e->rect()));
 	if (_st.textBg->c.alphaF() > 0.) {
@@ -112,7 +119,9 @@ void CountryInput::mouseMoveEvent(QMouseEvent *e) {
 void CountryInput::mousePressEvent(QMouseEvent *e) {
 	mouseMoveEvent(e);
 	if (_active) {
-		const auto box = Ui::show(Box<Ui::CountrySelectBox>());
+		auto object = Box<Ui::CountrySelectBox>();
+		const auto box = Ui::MakeWeak(object.data());
+		_show->showBox(std::move(object), Ui::LayerOption::CloseOther);
 		box->entryChosen(
 		) | rpl::start_with_next([=](
 				const Ui::CountrySelectBox::Entry &entry) {
@@ -153,7 +162,7 @@ void CountryInput::leaveEventHook(QEvent *e) {
 }
 
 void CountryInput::onChooseCode(const QString &code) {
-	Ui::hideLayer();
+	_show->hideLayer();
 	_chosenIso = QString();
 	if (code.length()) {
 		const auto &byCode = Countries::Instance().byCode();

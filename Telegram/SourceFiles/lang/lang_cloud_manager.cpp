@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h"
 #include "core/file_utilities.h"
 #include "core/click_handler_types.h"
+#include "boxes/abstract_box.h" // Ui::hideLayer().
 #include "styles/style_layers.h"
 
 namespace Lang {
@@ -155,18 +156,18 @@ Language ParseLanguage(const MTPLangPackLanguage &data) {
 
 CloudManager::CloudManager(Instance &langpack)
 : _langpack(langpack) {
+	const auto mtpLifetime = _lifetime.make_state<rpl::lifetime>();
 	Core::App().domain().activeValue(
-	) | rpl::map([=](Main::Account *account) {
-		if (!account) {
-			_api.reset();
-		}
-		return account
-			? account->mtpMainSessionValue()
-			: rpl::never<not_null<MTP::Instance*>>();
-	}) | rpl::flatten_latest(
-	) | rpl::start_with_next([=](not_null<MTP::Instance*> instance) {
-		_api.emplace(instance);
-		resendRequests();
+	) | rpl::filter([=](Main::Account *account) {
+		return (account != nullptr);
+	}) | rpl::start_with_next_done([=](Main::Account *account) {
+		*mtpLifetime = account->mtpMainSessionValue(
+		) | rpl::start_with_next([=](not_null<MTP::Instance*> instance) {
+			_api.emplace(instance);
+			resendRequests();
+		});
+	}, [=] {
+		_api.reset();
 	}, _lifetime);
 }
 
@@ -365,14 +366,14 @@ bool CloudManager::showOfferSwitchBox() {
 		Local::writeLangPack();
 	};
 	Ui::show(
-		Box<Ui::ConfirmBox>(
-			"Do you want to switch your language to "
+		Ui::MakeConfirmBox({
+			.text = QString("Do you want to switch your language to ")
 			+ language.nativeName
-			+ "? You can always change your language in Settings.",
-			"Change",
-			tr::lng_cancel(tr::now),
-			confirm,
-			cancel),
+			+ QString("? You can always change your language in Settings."),
+			.confirmed = confirm,
+			.cancelled = cancel,
+			.confirmText = QString("Change"),
+		}),
 		Ui::LayerOption::KeepOther);
 	return true;
 }
@@ -393,7 +394,7 @@ void CloudManager::applyLangPackData(
 }
 
 bool CloudManager::canApplyWithoutRestart(const QString &id) const {
-	if (id == qstr("#TEST_X") || id == qstr("#TEST_0")) {
+	if (id == u"#TEST_X"_q || id == u"#TEST_0"_q) {
 		return true;
 	}
 	return Core::App().canApplyLangPackWithoutRestart();
@@ -417,9 +418,9 @@ void CloudManager::requestLanguageAndSwitch(
 	Expects(!id.isEmpty());
 
 	if (LanguageIdOrDefault(_langpack.id()) == id) {
-		Ui::show(Box<Ui::InformBox>(tr::lng_language_already(tr::now)));
+		Ui::show(Ui::MakeInformBox(tr::lng_language_already()));
 		return;
-	} else if (id == qstr("#custom")) {
+	} else if (id == u"#custom"_q) {
 		performSwitchToCustom();
 		return;
 	}
@@ -463,20 +464,20 @@ void CloudManager::sendSwitchingToLanguageRequest() {
 	}).fail([=](const MTP::Error &error) {
 		_switchingToLanguageRequest = 0;
 		if (error.type() == "LANG_CODE_NOT_SUPPORTED") {
-			Ui::show(Box<Ui::InformBox>(tr::lng_language_not_found(tr::now)));
+			Ui::show(Ui::MakeInformBox(tr::lng_language_not_found()));
 		}
 	}).send();
 }
 
 void CloudManager::switchToLanguage(const Language &data) {
-	if (_langpack.id() == data.id && data.id != qstr("#custom")) {
+	if (_langpack.id() == data.id && data.id != u"#custom"_q) {
 		return;
 	} else if (!_api) {
 		return;
 	}
 
 	_api->request(base::take(_getKeysForSwitchRequestId)).cancel();
-	if (data.id == qstr("#custom")) {
+	if (data.id == u"#custom"_q) {
 		performSwitchToCustom();
 	} else if (canApplyWithoutRestart(data.id)) {
 		performSwitchAndAddToRecent(data);
@@ -502,11 +503,11 @@ void CloudManager::switchToLanguage(const Language &data) {
 				+ "\n\n"
 				+ getValue(tr::lng_sure_save_language.base);
 			Ui::show(
-				Box<Ui::ConfirmBox>(
-					text,
-					tr::lng_box_ok(tr::now),
-					tr::lng_cancel(tr::now),
-					[=] { performSwitchAndRestart(data); }),
+				Ui::MakeConfirmBox({
+					.text = text,
+					.confirmed = [=] { performSwitchAndRestart(data); },
+					.confirmText = tr::lng_box_ok(),
+				}),
 				Ui::LayerOption::KeepOther);
 		}).fail([=] {
 			_getKeysForSwitchRequestId = 0;
@@ -515,8 +516,8 @@ void CloudManager::switchToLanguage(const Language &data) {
 }
 
 void CloudManager::performSwitchToCustom() {
-	auto filter = qsl("Language files (*.strings)");
-	auto title = qsl("Choose language .strings file");
+	auto filter = u"Language files (*.strings)"_q;
+	auto title = u"Choose language .strings file"_q;
 	FileDialog::GetOpenPath(Core::App().getFileDialogParent(), title, filter, [=, weak = base::make_weak(this)](const FileDialog::OpenResult &result) {
 		if (!weak || result.paths.isEmpty()) {
 			return;
@@ -532,7 +533,7 @@ void CloudManager::performSwitchToCustom() {
 					base::take(_switchingToLanguageRequest)
 				).cancel();
 			}
-			if (canApplyWithoutRestart(qsl("#custom"))) {
+			if (canApplyWithoutRestart(u"#custom"_q)) {
 				_langpack.switchToCustomFile(filePath);
 				Kotato::Lang::Load(Lang::GetInstance().baseId(), Lang::GetInstance().id());
 			} else {
@@ -551,16 +552,16 @@ void CloudManager::performSwitchToCustom() {
 					Core::Restart();
 				};
 				Ui::show(
-					Box<Ui::ConfirmBox>(
-						text,
-						tr::lng_box_ok(tr::now),
-						tr::lng_cancel(tr::now),
-						change),
+					Ui::MakeConfirmBox({
+						.text = text,
+						.confirmed = change,
+						.confirmText = tr::lng_box_ok(),
+					}),
 					Ui::LayerOption::KeepOther);
 			}
 		} else {
 			Ui::show(
-				Box<Ui::InformBox>(
+				Ui::MakeInformBox(
 					"Custom lang failed :(\n\nError: " + loader.errors()),
 				Ui::LayerOption::KeepOther);
 		}
@@ -568,9 +569,9 @@ void CloudManager::performSwitchToCustom() {
 }
 
 void CloudManager::switchToTestLanguage() {
-	const auto testLanguageId = (_langpack.id() == qstr("#TEST_X"))
-		? qsl("#TEST_0")
-		: qsl("#TEST_X");
+	const auto testLanguageId = (_langpack.id() == u"#TEST_X"_q)
+		? u"#TEST_0"_q
+		: u"#TEST_X"_q;
 	performSwitch({ testLanguageId });
 }
 

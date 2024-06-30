@@ -16,7 +16,13 @@ namespace {
 
 constexpr auto kVersion = 1;
 
+} // namespace
+
+QString ConfigDefaultReactionEmoji() {
+	static const auto result = QString::fromUtf8("\xf0\x9f\x91\x8d");
+	return result;
 }
+
 Config::Config(Environment environment) : _dcOptions(environment) {
 	_fields.webFileDcId = _dcOptions.isTestMode() ? 2 : 4;
 	_fields.txtDomainString = _dcOptions.isTestMode()
@@ -31,11 +37,15 @@ Config::Config(const Config &other)
 
 QByteArray Config::serialize() const {
 	auto options = _dcOptions.serialize();
-	auto size = sizeof(qint32) * 2; // version + environment
-	size += Serialize::bytearraySize(options);
-	size += 28 * sizeof(qint32);
-	size += Serialize::stringSize(_fields.internalLinksDomain);
-	size += Serialize::stringSize(_fields.txtDomainString);
+	auto size = sizeof(qint32) * 2 // version + environment
+		+ Serialize::bytearraySize(options)
+		+ 19 * sizeof(qint32)
+		+ Serialize::stringSize(_fields.internalLinksDomain)
+		+ 6 * sizeof(qint32)
+		+ Serialize::stringSize(_fields.txtDomainString)
+		+ 3 * sizeof(qint32)
+		+ Serialize::stringSize(_fields.reactionDefaultEmoji)
+		+ sizeof(quint64);
 
 	auto result = QByteArray();
 	result.reserve(size);
@@ -58,15 +68,15 @@ QByteArray Config::serialize() const {
 			<< qint32(_fields.onlineCloudTimeout)
 			<< qint32(_fields.notifyCloudDelay)
 			<< qint32(_fields.notifyDefaultDelay)
-			<< qint32(_fields.savedGifsLimit)
+			<< qint32(0) // legacy savedGifsLimit
 			<< qint32(_fields.editTimeLimit)
 			<< qint32(_fields.revokeTimeLimit)
 			<< qint32(_fields.revokePrivateTimeLimit)
 			<< qint32(_fields.revokePrivateInbox ? 1 : 0)
 			<< qint32(_fields.stickersRecentLimit)
-			<< qint32(_fields.stickersFavedLimit)
-			<< qint32(_fields.pinnedDialogsCountMax.current())
-			<< qint32(_fields.pinnedDialogsInFolderMax.current())
+			<< qint32(0) // legacy stickersFavedLimit
+			<< qint32(0) // legacy pinnedDialogsCountMax
+			<< qint32(0) // legacy pinnedDialogsInFolderMax
 			<< _fields.internalLinksDomain
 			<< qint32(_fields.channelsReadMediaPeriod)
 			<< qint32(_fields.callReceiveTimeoutMs)
@@ -75,9 +85,11 @@ QByteArray Config::serialize() const {
 			<< qint32(_fields.callPacketTimeoutMs)
 			<< qint32(_fields.webFileDcId)
 			<< _fields.txtDomainString
-			<< qint32(_fields.phoneCallsEnabled.current() ? 1 : 0)
+			<< qint32(1) // legacy phoneCallsEnabled
 			<< qint32(_fields.blockedMode ? 1 : 0)
-			<< qint32(_fields.captionLengthMax);
+			<< qint32(_fields.captionLengthMax)
+			<< _fields.reactionDefaultEmoji
+			<< quint64(_fields.reactionDefaultCustom);
 	}
 	return result;
 }
@@ -109,11 +121,20 @@ std::unique_ptr<Config> Config::FromSerialized(const QByteArray &serialized) {
 	}
 
 	auto dcOptionsSerialized = QByteArray();
+	auto legacySavedGifsLimit = int();
+	auto legacyStickersFavedLimit = int();
+	auto legacyPinnedDialogsCountMax = 0;
+	auto legacyPinnedDialogsInFolderMax = 0;
+	auto legacyPhoneCallsEnabled = rpl::variable<bool>();
 	const auto read = [&](auto &field) {
 		using Type = std::remove_reference_t<decltype(field)>;
 		if constexpr (std::is_same_v<Type, int>
 			|| std::is_same_v<Type, rpl::variable<int>>) {
 			auto value = qint32();
+			stream >> value;
+			field = value;
+		} else if constexpr (std::is_same_v<Type, uint64>) {
+			auto value = quint64();
 			stream >> value;
 			field = value;
 		} else if constexpr (std::is_same_v<Type, bool>
@@ -140,15 +161,15 @@ std::unique_ptr<Config> Config::FromSerialized(const QByteArray &serialized) {
 	read(raw->_fields.onlineCloudTimeout);
 	read(raw->_fields.notifyCloudDelay);
 	read(raw->_fields.notifyDefaultDelay);
-	read(raw->_fields.savedGifsLimit);
+	read(legacySavedGifsLimit);
 	read(raw->_fields.editTimeLimit);
 	read(raw->_fields.revokeTimeLimit);
 	read(raw->_fields.revokePrivateTimeLimit);
 	read(raw->_fields.revokePrivateInbox);
 	read(raw->_fields.stickersRecentLimit);
-	read(raw->_fields.stickersFavedLimit);
-	read(raw->_fields.pinnedDialogsCountMax);
-	read(raw->_fields.pinnedDialogsInFolderMax);
+	read(legacyStickersFavedLimit);
+	read(legacyPinnedDialogsCountMax);
+	read(legacyPinnedDialogsInFolderMax);
 	read(raw->_fields.internalLinksDomain);
 	read(raw->_fields.channelsReadMediaPeriod);
 	read(raw->_fields.callReceiveTimeoutMs);
@@ -157,9 +178,13 @@ std::unique_ptr<Config> Config::FromSerialized(const QByteArray &serialized) {
 	read(raw->_fields.callPacketTimeoutMs);
 	read(raw->_fields.webFileDcId);
 	read(raw->_fields.txtDomainString);
-	read(raw->_fields.phoneCallsEnabled);
+	read(legacyPhoneCallsEnabled);
 	read(raw->_fields.blockedMode);
 	read(raw->_fields.captionLengthMax);
+	if (!stream.atEnd()) {
+		read(raw->_fields.reactionDefaultEmoji);
+		read(raw->_fields.reactionDefaultCustom);
+	}
 
 	if (stream.status() != QDataStream::Ok
 		|| !raw->_dcOptions.constructFromSerialized(dcOptionsSerialized)) {
@@ -199,17 +224,11 @@ void Config::apply(const MTPDconfig &data) {
 	_fields.onlineCloudTimeout = data.vonline_cloud_timeout_ms().v;
 	_fields.notifyCloudDelay = data.vnotify_cloud_delay_ms().v;
 	_fields.notifyDefaultDelay = data.vnotify_default_delay_ms().v;
-	_fields.savedGifsLimit = data.vsaved_gifs_limit().v;
 	_fields.editTimeLimit = data.vedit_time_limit().v;
 	_fields.revokeTimeLimit = data.vrevoke_time_limit().v;
 	_fields.revokePrivateTimeLimit = data.vrevoke_pm_time_limit().v;
 	_fields.revokePrivateInbox = data.is_revoke_pm_inbox();
 	_fields.stickersRecentLimit = data.vstickers_recent_limit().v;
-	_fields.stickersFavedLimit = data.vstickers_faved_limit().v;
-	_fields.pinnedDialogsCountMax =
-		std::max(data.vpinned_dialogs_count_max().v, 1);
-	_fields.pinnedDialogsInFolderMax =
-		std::max(data.vpinned_infolder_count_max().v, 1);
 	_fields.internalLinksDomain = qs(data.vme_url_prefix());
 	_fields.channelsReadMediaPeriod = data.vchannels_read_media_period().v;
 	_fields.webFileDcId = data.vwebfile_dc_id().v;
@@ -217,9 +236,19 @@ void Config::apply(const MTPDconfig &data) {
 	_fields.callRingTimeoutMs = data.vcall_ring_timeout_ms().v;
 	_fields.callConnectTimeoutMs = data.vcall_connect_timeout_ms().v;
 	_fields.callPacketTimeoutMs = data.vcall_packet_timeout_ms().v;
-	_fields.phoneCallsEnabled = data.is_phonecalls_enabled();
 	_fields.blockedMode = data.is_blocked_mode();
 	_fields.captionLengthMax = data.vcaption_length_max().v;
+	_fields.reactionDefaultEmoji = ConfigDefaultReactionEmoji();
+	_fields.reactionDefaultCustom = 0;
+	if (const auto reaction = data.vreactions_default()) {
+		reaction->match([&](const MTPDreactionEmpty &) {
+		}, [&](const MTPDreactionEmoji &data) {
+			_fields.reactionDefaultEmoji = qs(data.vemoticon());
+		}, [&](const MTPDreactionCustomEmoji &data) {
+			_fields.reactionDefaultCustom = data.vdocument_id().v;
+		});
+	}
+	_fields.autologinToken = qs(data.vautologin_token().value_or_empty());
 
 	if (data.vdc_options().v.empty()) {
 		LOG(("MTP Error: config with empty dc_options received!"));
@@ -238,16 +267,8 @@ void Config::setChatSizeMax(int value) {
 	_fields.chatSizeMax = value;
 }
 
-void Config::setSavedGifsLimit(int value) {
-	_fields.savedGifsLimit = value;
-}
-
 void Config::setStickersRecentLimit(int value) {
 	_fields.stickersRecentLimit = value;
-}
-
-void Config::setStickersFavedLimit(int value) {
-	_fields.stickersFavedLimit = value;
 }
 
 void Config::setMegagroupSizeMax(int value) {

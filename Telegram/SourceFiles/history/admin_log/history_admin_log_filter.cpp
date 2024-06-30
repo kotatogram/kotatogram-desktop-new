@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/widgets/checkbox.h"
 #include "ui/effects/ripple_animation.h"
+#include "ui/text/text_options.h"
+#include "ui/painter.h"
 #include "lang/lang_keys.h"
 #include "data/data_peer_values.h"
 #include "data/data_channel.h"
@@ -16,10 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
-
-namespace Data {
-class CloudImageView;
-} // namespace Data
+#include "styles/style_chat.h"
 
 namespace AdminLog {
 namespace {
@@ -61,7 +60,8 @@ private:
 	QRect _checkRect;
 
 	const not_null<UserData*> _user;
-	std::shared_ptr<Data::CloudImageView> _userpic;
+	Ui::PeerUserpicView _userpic;
+	Ui::Text::String _name;
 	QString _statusText;
 	bool _statusOnline = false;
 
@@ -113,11 +113,14 @@ void UserCheckbox::paintEvent(QPaintEvent *e) {
 	auto userpicTop = 0;
 	_user->paintUserpicLeft(p, _userpic, userpicLeft, userpicTop, width(), st::contactsPhotoSize);
 
+	if (_name.isEmpty()) {
+		_name.setText(st::msgNameStyle, _user->name(), Ui::NameTextOptions());
+	}
 	auto nameLeft = userpicLeft + st::contactsPhotoSize + st::contactsPadding.left();
 	auto nameTop = userpicTop + st::contactsNameTop;
 	auto nameWidth = width() - nameLeft - st::contactsPadding.right();
 	p.setPen(st::contactsNameFg);
-	_user->nameText().drawLeftElided(p, nameLeft, nameTop, nameWidth, width());
+	_name.drawLeftElided(p, nameLeft, nameTop, nameWidth, width());
 
 	auto statusLeft = nameLeft;
 	auto statusTop = userpicTop + st::contactsStatusTop;
@@ -298,6 +301,9 @@ void FilterBox::Inner::createActionsCheckboxes(const FilterValue &filter) {
 	}
 	addFlag(Flag::Invites, tr::lng_admin_log_filter_invite_links(tr::now));
 	addFlag(Flag::Leave, tr::lng_admin_log_filter_members_removed(tr::now));
+	if (isGroup) {
+		addFlag(Flag::Topics, tr::lng_admin_log_filter_topics(tr::now));
+	}
 }
 
 void FilterBox::Inner::createAllUsersCheckbox(const FilterValue &filter) {

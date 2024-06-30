@@ -9,11 +9,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/widgets/buttons.h"
 
+namespace style {
+struct SendButton;
+} // namespace style
+
 namespace Ui {
 
 class SendButton final : public RippleButton {
 public:
-	explicit SendButton(QWidget *parent);
+	SendButton(QWidget *parent, const style::SendButton &st);
 
 	static constexpr auto kSlowmodeDelayLimit = 100 * 60;
 
@@ -42,12 +46,14 @@ private:
 	[[nodiscard]] QPixmap grabContent();
 	[[nodiscard]] bool isSlowmode() const;
 
-	void paintRecord(Painter &p, bool over);
-	void paintSave(Painter &p, bool over);
-	void paintCancel(Painter &p, bool over);
-	void paintSend(Painter &p, bool over);
-	void paintSchedule(Painter &p, bool over);
-	void paintSlowmode(Painter &p);
+	void paintRecord(QPainter &p, bool over);
+	void paintSave(QPainter &p, bool over);
+	void paintCancel(QPainter &p, bool over);
+	void paintSend(QPainter &p, bool over);
+	void paintSchedule(QPainter &p, bool over);
+	void paintSlowmode(QPainter &p);
+
+	const style::SendButton &_st;
 
 	Type _type = Type::Send;
 	Type _afterSlowmodeType = Type::Send;

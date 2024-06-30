@@ -34,7 +34,7 @@ public:
 
 		// For FileLoader
 		const QString &toFile,
-		int32 size,
+		int64 size,
 		LocationType locationType,
 		LoadToCacheSetting toCache,
 		LoadFromCloudSetting fromCloud,
@@ -45,7 +45,7 @@ public:
 	uint64 objId() const override;
 	Data::FileOrigin fileOrigin() const override;
 
-	QByteArray readLoadedPart(int offset);
+	QByteArray readLoadedPart(int64 offset);
 
 private:
 	void startLoading() override;

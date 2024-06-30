@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QVector>
 #include <QtCore/QString>
 #include <QtCore/QByteArray>
+#include <range/v3/range/conversion.hpp>
 #include <gsl/gsl>
 
 using mtpPrime = int32;
@@ -28,6 +29,9 @@ using mtpPingId = uint64;
 
 using mtpBuffer = QVector<mtpPrime>;
 using mtpTypeId = uint32;
+
+struct NotSingleDataTypePlaceholder {
+};
 
 namespace MTP {
 
@@ -43,6 +47,7 @@ constexpr auto kUpdaterDcShift = 0x03;
 constexpr auto kExportDcShift = 0x04;
 constexpr auto kExportMediaDcShift = 0x05;
 constexpr auto kGroupCallStreamDcShift = 0x06;
+constexpr auto kStatsDcShift = 0x07;
 constexpr auto kMaxMediaDcCount = 0x10;
 constexpr auto kBaseDownloadDcShift = 0x10;
 constexpr auto kBaseUploadDcShift = 0x20;
@@ -73,6 +78,7 @@ enum {
 	mtpc_vector = tl::id_vector,
 	mtpc_bytes = tl::id_bytes,
 	mtpc_flags = tl::id_flags,
+	mtpc_flags64 = tl::id_flags64,
 
 	// layers
 	mtpc_invokeWithLayer1 = 0x53835315,
@@ -237,6 +243,18 @@ inline MTPvector<T> MTP_vector(QVector<T> &&v) {
 template <typename T>
 inline MTPvector<T> MTP_vector() {
 	return tl::make_vector<T>();
+}
+
+// ranges::to<QVector> doesn't work with Qt 6 in Clang,
+// because QVector is a type alias for QList there.
+template <typename Rng>
+inline auto MTP_vector_from_range(Rng &&range) {
+	using T = std::remove_cvref_t<decltype(*ranges::begin(range))>;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0 ,0)
+	return MTP_vector<T>(std::forward<Rng>(range) | ranges::to<QList>());
+#else // QT_VERSION >= 6.0
+	return MTP_vector<T>(std::forward<Rng>(range) | ranges::to<QVector>());
+#endif // QT_VERSION < 6.0
 }
 
 namespace tl {

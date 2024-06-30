@@ -52,6 +52,22 @@ function ShowMentionName() {
     return false;
 }
 
+function ShowNotLoadedEmoji() {
+    ShowToast("This custom emoji is not included, change data exporting settings to download.");
+    return false;
+}
+
+function ShowNotAvailableEmoji() {
+    ShowToast("This custom emoji is not available.");
+    return false;
+}
+
+function ShowTextCopied(content) {
+    navigator.clipboard.writeText(content);
+    ShowToast("Text copied to clipboard.");
+    return false;
+}
+
 function ShowSpoiler(target) {
     if (target.classList.contains("hidden")) {
         target.classList.toggle("hidden");

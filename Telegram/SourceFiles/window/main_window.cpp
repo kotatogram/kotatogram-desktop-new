@@ -8,47 +8,75 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/main_window.h"
 
 #include "kotato/kotato_settings.h"
+#include "api/api_updates.h"
 #include "storage/localstorage.h"
 #include "platform/platform_specific.h"
 #include "ui/platform/ui_platform_window.h"
 #include "platform/platform_window_title.h"
-#include "base/platform/base_platform_info.h"
 #include "history/history.h"
 #include "window/window_session_controller.h"
 #include "window/window_lock_widgets.h"
-#include "window/window_outdated_bar.h"
 #include "window/window_controller.h"
 #include "main/main_account.h" // Account::sessionValue.
+#include "main/main_domain.h"
 #include "core/application.h"
 #include "core/sandbox.h"
+#include "core/shortcuts.h"
 #include "lang/lang_keys.h"
 #include "data/data_session.h"
+#include "data/data_forum_topic.h"
+#include "data/data_user.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
+#include "base/options.h"
+#include "base/call_delayed.h"
 #include "base/crc32hash.h"
 #include "ui/toast/toast.h"
 #include "ui/widgets/shadow.h"
-#include "ui/ui_utility.h"
+#include "ui/controls/window_outdated_bar.h"
+#include "ui/painter.h"
 #include "apiwrap.h"
-#include "mainwindow.h"
 #include "mainwidget.h" // session->content()->windowShown().
-#include "facades.h"
-#include "styles/style_widgets.h"
+#include "tray.h"
 #include "styles/style_window.h"
+#include "styles/style_dialogs.h" // ChildSkip().x() for new child windows.
 
 #include <QtCore/QMimeData>
-#include <QtCore/QDir>
-#include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>
 #include <QtGui/QScreen>
 #include <QtGui/QDrag>
+
+#include <kurlmimedata.h>
 
 namespace Window {
 namespace {
 
 constexpr auto kSaveWindowPositionTimeout = crl::time(1000);
 
-} // namespace
+using Core::WindowPosition;
+
+[[nodiscard]] QPoint ChildSkip() {
+	const auto skipx = st::defaultDialogRow.padding.left()
+		+ st::defaultDialogRow.photoSize
+		+ st::defaultDialogRow.padding.left();
+	const auto skipy = st::windowTitleHeight;
+	return { skipx, skipy };
+}
+
+[[nodiscard]] QImage &OverridenIcon() {
+	static auto result = QImage();
+	return result;
+}
+
+base::options::toggle OptionNewWindowsSizeAsFirst({
+	.id = kOptionNewWindowsSizeAsFirst,
+	.name = "Adjust size of new chat windows.",
+	.description = "Open new windows with a size of the main window.",
+});
+
+} // namespace.
+
+const char kOptionNewWindowsSizeAsFirst[] = "new-windows-size-as-first";
 
 const QImage &Logo(int variant) {
 	static const auto result = QImage(u":/gui/art/logo_256.png"_q);
@@ -135,15 +163,22 @@ void ConvertIconToBlack(QImage &image) {
 	}
 }
 
+void OverrideApplicationIcon(QImage image) {
+	OverridenIcon() = std::move(image);
+}
+
 QIcon CreateOfficialIcon(Main::Session *session) {
 	const auto support = (session && session->supportMode());
 	if (!support) {
 		return QIcon();
 	}
 	const auto customIcon = QImage(cWorkingDir() + "tdata/icon.png");
+	auto overriden = OverridenIcon();
 
 	auto image = customIcon.isNull()
-		? Logo(::Kotato::JsonSettings::GetInt("custom_app_icon"))
+		? overriden.isNull()
+			? Logo(::Kotato::JsonSettings::GetInt("custom_app_icon"))
+			: overriden
 		: customIcon;
 
 	ConvertIconToBlack(image);
@@ -158,7 +193,6 @@ QIcon CreateIcon(Main::Session *session, bool returnNullIfDefault) {
 
 	auto result = QIcon(Ui::PixmapFromImage(base::duplicate(Logo())));
 
-#if defined Q_OS_UNIX && !defined Q_OS_MAC
 	if ((session && session->supportMode())
 		|| (::Kotato::JsonSettings::GetInt("custom_app_icon") != 0)
 		|| QFileInfo::exists(cWorkingDir() + "tdata/icon.png")) {
@@ -166,7 +200,7 @@ QIcon CreateIcon(Main::Session *session, bool returnNullIfDefault) {
 	}
 
 	const auto iconFromTheme = QIcon::fromTheme(
-		Platform::GetIconName(),
+		base::IconName(),
 		result);
 
 	result = QIcon();
@@ -202,7 +236,6 @@ QIcon CreateIcon(Main::Session *session, bool returnNullIfDefault) {
 
 		result.addPixmap(iconPixmap);
 	}
-#endif
 
 	return result;
 }
@@ -255,7 +288,10 @@ QImage GenerateCounterLayer(CounterLayerArgs &&args) {
 		}
 	}();
 
-	auto result = QImage(d.size, d.size, QImage::Format_ARGB32);
+	auto result = QImage(
+		QSize(d.size, d.size) * args.devicePixelRatio,
+		QImage::Format_ARGB32);
+	result.setDevicePixelRatio(args.devicePixelRatio);
 	result.fill(Qt::transparent);
 
 	auto p = QPainter(&result);
@@ -295,31 +331,12 @@ QImage WithSmallCounter(QImage image, CounterLayerArgs &&args) {
 		int delta = 0;
 		int radius = 0;
 	};
-	const auto d = [&]() -> Dimensions {
-		switch (args.size.value()) {
-		case 16:
-			return {
-				.size = 16,
-				.font = 8,
-				.delta = ((textSize < 2) ? 2 : 1),
-				.radius = ((textSize < 2) ? 4 : 3),
-			};
-		case 32:
-			return {
-				.size = 32,
-				.font = 12,
-				.delta = ((textSize < 2) ? 5 : 2),
-				.radius = ((textSize < 2) ? 8 : 7),
-			};
-		default:
-			return {
-				.size = 64,
-				.font = 22,
-				.delta = ((textSize < 2) ? 9 : 4),
-				.radius = ((textSize < 2) ? 16 : 14),
-			};
-		}
-	}();
+	const auto d = Dimensions{
+		.size = args.size.value(),
+		.font = args.size.value() / 2,
+		.delta = args.size.value() / ((textSize < 2) ? 8 : 16),
+		.radius = args.size.value() / ((textSize < 2) ? 4 : 5),
+	};
 
 	auto p = QPainter(&image);
 	auto hq = PainterHighQualityEnabler(p);
@@ -348,7 +365,7 @@ QImage WithSmallCounter(QImage image, CounterLayerArgs &&args) {
 MainWindow::MainWindow(not_null<Controller*> controller)
 : _controller(controller)
 , _positionUpdatedTimer([=] { savePosition(); })
-, _outdated(CreateOutdatedBar(body()))
+, _outdated(Ui::CreateOutdatedBar(body(), cWorkingDir()))
 , _body(body()) {
 	style::PaletteChanged(
 	) | rpl::start_with_next([=] {
@@ -357,7 +374,9 @@ MainWindow::MainWindow(not_null<Controller*> controller)
 
 	Core::App().unreadBadgeChanges(
 	) | rpl::start_with_next([=] {
-		updateUnreadCounter();
+		updateTitle();
+		unreadCounterChangedHook();
+		Core::App().tray().updateIconCounters();
 	}, lifetime());
 
 	Core::App().settings().workModeChanges(
@@ -365,7 +384,9 @@ MainWindow::MainWindow(not_null<Controller*> controller)
 		workmodeUpdated(mode);
 	}, lifetime());
 
-	Ui::Toast::SetDefaultParent(_body.data());
+	if (isPrimary()) {
+		Ui::Toast::SetDefaultParent(_body.data());
+	}
 
 	body()->sizeValue(
 	) | rpl::start_with_next([=](QSize size) {
@@ -374,15 +395,15 @@ MainWindow::MainWindow(not_null<Controller*> controller)
 
 	if (_outdated) {
 		_outdated->heightValue(
-		) | rpl::filter([=] {
-			return window()->windowHandle() != nullptr;
-		}) | rpl::start_with_next([=](int height) {
+		) | rpl::start_with_next([=](int height) {
 			if (!height) {
 				crl::on_main(this, [=] { _outdated.destroy(); });
 			}
 			updateControlsGeometry();
 		}, _outdated->lifetime());
 	}
+
+	Shortcuts::Listen(this);
 }
 
 Main::Account &MainWindow::account() const {
@@ -410,13 +431,13 @@ bool MainWindow::hideNoQuit() {
 		|| workMode == Core::Settings::WorkMode::WindowAndTray) {
 		if (minimizeToTray()) {
 			if (const auto controller = sessionController()) {
-				Ui::showChatsList(&controller->session());
+				controller->clearSectionStack();
 			}
 			return true;
 		}
 	}
-	if (Platform::IsMac() || Core::App().settings().closeToTaskbar()) {
-		if (Platform::IsMac()) {
+	if (Platform::RunInBackground() || Core::App().settings().closeToTaskbar()) {
+		if (Platform::RunInBackground()) {
 			closeWithoutDestroy();
 		} else {
 			setWindowState(window()->windowState() | Qt::WindowMinimized);
@@ -424,7 +445,7 @@ bool MainWindow::hideNoQuit() {
 		controller().updateIsActiveBlur();
 		updateGlobalMenu();
 		if (const auto controller = sessionController()) {
-			Ui::showChatsList(&controller->session());
+			controller->clearSectionStack();
 		}
 		return true;
 	}
@@ -440,26 +461,11 @@ void MainWindow::updateIsActive() {
 	const auto isActive = computeIsActive();
 	if (_isActive != isActive) {
 		_isActive = isActive;
-		activeChangedHook();
 	}
 }
 
 bool MainWindow::computeIsActive() const {
 	return isActiveWindow() && isVisible() && !(windowState() & Qt::WindowMinimized);
-}
-
-void MainWindow::updateWindowIcon() {
-	const auto session = sessionController()
-		? &sessionController()->session()
-		: nullptr;
-	const auto supportIcon = session && session->supportMode();
-	const auto customAppIcon = ::Kotato::JsonSettings::GetInt("custom_app_icon");
-	if (supportIcon != _usingSupportIcon || _icon.isNull() || _customIconId != customAppIcon) {
-		_icon = CreateIcon(session);
-		_usingSupportIcon = supportIcon;
-		_customIconId = customAppIcon;
-	}
-	setWindowIcon(_icon);
 }
 
 QRect MainWindow::desktopRect() const {
@@ -475,7 +481,6 @@ void MainWindow::init() {
 	createWinId();
 
 	initHook();
-	updateWindowIcon();
 
 	// Non-queued activeChanged handlers must use QtSignalProducer.
 	connect(
@@ -506,8 +511,8 @@ void MainWindow::init() {
 	}
 	refreshTitleWidget();
 
-	initGeometry();
-	updateUnreadCounter();
+	updateTitle();
+	updateWindowIcon();
 }
 
 void MainWindow::handleStateChanged(Qt::WindowState state) {
@@ -528,12 +533,13 @@ void MainWindow::handleStateChanged(Qt::WindowState state) {
 }
 
 void MainWindow::handleActiveChanged() {
+	checkActivation();
 	if (isActiveWindow()) {
-		Core::App().checkMediaViewActivation();
+		Core::App().windowActivated(&controller());
 	}
-	InvokeQueued(this, [=] {
-		handleActiveChangedHook();
-	});
+	if (const auto controller = sessionController()) {
+		controller->session().updates().updateOnline();
+	}
 }
 
 void MainWindow::handleVisibleChanged(bool visible) {
@@ -554,7 +560,8 @@ void MainWindow::showFromTray() {
 		updateGlobalMenu();
 	});
 	activate();
-	updateUnreadCounter();
+	unreadCounterChangedHook();
+	Core::App().tray().updateIconCounters();
 }
 
 void MainWindow::quitFromTray() {
@@ -565,7 +572,7 @@ void MainWindow::activate() {
 	bool wasHidden = !isVisible();
 	setWindowState(windowState() & ~Qt::WindowMinimized);
 	setVisible(true);
-	psActivateProcess();
+	Platform::ActivateThisProcess();
 	raise();
 	activateWindow();
 	controller().updateIsActiveFocus();
@@ -623,8 +630,7 @@ void MainWindow::refreshTitleWidget() {
 }
 
 void MainWindow::updateMinimumSize() {
-	setMinimumWidth(computeMinWidth());
-	setMinimumHeight(computeMinHeight());
+	setMinimumSize(QSize(computeMinWidth(), computeMinHeight()));
 }
 
 void MainWindow::recountGeometryConstraints() {
@@ -633,34 +639,49 @@ void MainWindow::recountGeometryConstraints() {
 	fixOrder();
 }
 
-Core::WindowPosition MainWindow::positionFromSettings() const {
-	auto position = Core::App().settings().windowPosition();
-	DEBUG_LOG(("Window Pos: Initializing first %1, %2, %3, %4 "
-		"(scale %5%, maximized %6)")
-		.arg(position.x)
-		.arg(position.y)
-		.arg(position.w)
-		.arg(position.h)
-		.arg(position.scale)
-		.arg(Logs::b(position.maximized)));
-
-	if (!position.scale) {
-		return position;
-	}
-	const auto scaleFactor = cScale() / float64(position.scale);
-	if (scaleFactor != 1.) {
-		// Change scale while keeping the position center in place.
-		position.x += position.w / 2;
-		position.y += position.h / 2;
-		position.w *= scaleFactor;
-		position.h *= scaleFactor;
-		position.x -= position.w / 2;
-		position.y -= position.h / 2;
-	}
-	return position;
+WindowPosition MainWindow::initialPosition() const {
+	const auto active = Core::App().activeWindow();
+	return (!active || active == &controller())
+		? Core::AdjustToScale(
+			Core::App().settings().windowPosition(),
+			u"Window"_q)
+		: active->widget()->nextInitialChildPosition(isPrimary());
 }
 
-QRect MainWindow::countInitialGeometry(Core::WindowPosition position) {
+WindowPosition MainWindow::nextInitialChildPosition(bool primary) {
+	const auto rect = geometry().marginsRemoved(frameMargins());
+	const auto position = rect.topLeft();
+	const auto adjust = [&](int value) {
+		return primary ? value : (value * 3 / 4);
+	};
+	const auto width = OptionNewWindowsSizeAsFirst.value()
+		? Core::App().settings().windowPosition().w
+		: adjust(st::windowDefaultWidth);
+	const auto height = OptionNewWindowsSizeAsFirst.value()
+		? Core::App().settings().windowPosition().h
+		: adjust(st::windowDefaultHeight);
+	const auto skip = ChildSkip();
+	const auto delta = _lastChildIndex
+		? (_lastMyChildCreatePosition - position)
+		: skip;
+	if (qAbs(delta.x()) >= skip.x() || qAbs(delta.y()) >= skip.y()) {
+		_lastChildIndex = 1;
+	} else {
+		++_lastChildIndex;
+	}
+
+	_lastMyChildCreatePosition = position;
+	const auto use = position + (skip * _lastChildIndex);
+	return withScreenInPosition({
+		.scale = cScale(),
+		.x = use.x(),
+		.y = use.y(),
+		.w = width,
+		.h = height,
+	});
+}
+
+QRect MainWindow::countInitialGeometry(WindowPosition position) {
 	const auto primaryScreen = QGuiApplication::primaryScreen();
 	const auto primaryAvailable = primaryScreen
 		? primaryScreen->availableGeometry()
@@ -671,28 +692,38 @@ QRect MainWindow::countInitialGeometry(Core::WindowPosition position) {
 	const auto initialHeight = Core::Settings::ThirdColumnByDefault()
 		? st::windowBigDefaultHeight
 		: st::windowDefaultHeight;
-	const auto initial = QRect(
-		primaryAvailable.x() + std::max(
-			(primaryAvailable.width() - initialWidth) / 2,
-			0),
-		primaryAvailable.y() + std::max(
-			(primaryAvailable.height() - initialHeight) / 2,
-			0),
-		initialWidth,
-		initialHeight);
+	const auto initial = WindowPosition{
+		.x = (primaryAvailable.x()
+			+ std::max((primaryAvailable.width() - initialWidth) / 2, 0)),
+		.y = (primaryAvailable.y()
+			+ std::max((primaryAvailable.height() - initialHeight) / 2, 0)),
+		.w = initialWidth,
+		.h = initialHeight,
+	};
+	return countInitialGeometry(
+		position,
+		initial,
+		{ st::windowMinWidth, st::windowMinHeight });
+}
+
+QRect MainWindow::countInitialGeometry(
+		WindowPosition position,
+		WindowPosition initial,
+		QSize minSize) const {
 	if (!position.w || !position.h) {
-		return initial;
+		return initial.rect();
 	}
 	const auto screen = [&]() -> QScreen* {
 		for (const auto screen : QGuiApplication::screens()) {
-			if (position.moncrc == screenNameChecksum(screen->name())) {
+			const auto sum = Platform::ScreenNameChecksum(screen->name());
+			if (position.moncrc == sum) {
 				return screen;
 			}
 		}
 		return nullptr;
 	}();
 	if (!screen) {
-		return initial;
+		return initial.rect();
 	}
 	const auto frame = frameMargins();
 	const auto screenGeometry = screen->geometry();
@@ -726,7 +757,7 @@ QRect MainWindow::countInitialGeometry(Core::WindowPosition position) {
 	const auto w = spaceForInner.width();
 	const auto h = spaceForInner.height();
 	if (w < st::windowMinWidth || h < st::windowMinHeight) {
-		return initial;
+		return initial.rect();
 	}
 	if (position.x < x) position.x = x;
 	if (position.y < y) position.y = y;
@@ -766,55 +797,38 @@ QRect MainWindow::countInitialGeometry(Core::WindowPosition position) {
 		> screenGeometry.x() + screenGeometry.width())
 		|| (position.y + st::windowMinHeight
 			> screenGeometry.y() + screenGeometry.height())) {
-		return initial;
+		return initial.rect();
 	}
 	DEBUG_LOG(("Window Pos: Resulting geometry is %1, %2, %3, %4"
 		).arg(position.x
 		).arg(position.y
 		).arg(position.w
 		).arg(position.h));
-	return QRect(position.x, position.y, position.w, position.h);
+	return position.rect();
 }
 
-void MainWindow::initGeometry() {
+void MainWindow::firstShow() {
 	updateMinimumSize();
 	if (initGeometryFromSystem()) {
+		show();
 		return;
 	}
-	// #TODO windows
-	const auto geometry = countInitialGeometry(isPrimary()
-		? positionFromSettings()
-		: Core::WindowPosition());
+	const auto geometry = countInitialGeometry(initialPosition());
 	DEBUG_LOG(("Window Pos: Setting first %1, %2, %3, %4"
 		).arg(geometry.x()
 		).arg(geometry.y()
 		).arg(geometry.width()
 		).arg(geometry.height()));
 	setGeometry(geometry);
+	show();
 }
 
 void MainWindow::positionUpdated() {
 	_positionUpdatedTimer.callOnce(kSaveWindowPositionTimeout);
 }
 
-int32 MainWindow::screenNameChecksum(const QString &name) const {
-	const auto bytes = name.toUtf8();
-	return base::crc32(bytes.constData(), bytes.size());
-}
-
 void MainWindow::setPositionInited() {
 	_positionInited = true;
-}
-
-void MainWindow::attachToTrayIcon(not_null<QSystemTrayIcon*> icon) {
-	const auto workdir = QDir::toNativeSeparators(QDir::cleanPath(cWorkingDir()));
-	icon->setToolTip(AppName.utf16()+"\n"+workdir);
-	connect(icon, &QSystemTrayIcon::activated, this, [=](
-			QSystemTrayIcon::ActivationReason reason) {
-		Core::Sandbox::Instance().customEnterFromEventLoop([&] {
-			handleTrayIconActication(reason);
-		});
-	});
 }
 
 rpl::producer<> MainWindow::leaveEvents() const {
@@ -846,19 +860,52 @@ void MainWindow::updateControlsGeometry() {
 	_body->setGeometry(bodyLeft, bodyTop, bodyWidth, inner.height() - (bodyTop - inner.y()));
 }
 
-void MainWindow::updateUnreadCounter() {
+void MainWindow::updateTitle() {
 	if (Core::Quitting()) {
 		return;
 	}
 
-	const auto counter = Core::App().unreadBadge();
-	setTitle((counter > 0) ? qsl("Kotatogram (%1)").arg(counter) : qsl("Kotatogram"));
-
-	unreadCounterChangedHook();
+	const auto settings = Core::App().settings().windowTitleContent();
+	const auto locked = Core::App().passcodeLocked();
+	const auto counter = settings.hideTotalUnread
+		? 0
+		: Core::App().unreadBadge();
+	const auto added = (counter > 0) ? u" (%1)"_q.arg(counter) : QString();
+	const auto session = locked ? nullptr : _controller->sessionController();
+	const auto user = (session
+		&& !settings.hideAccountName
+		&& Core::App().domain().accountsAuthedCount() > 1)
+		? session->authedName()
+		: QString();
+	const auto key = (session && !settings.hideChatName)
+		? session->activeChatCurrent()
+		: Dialogs::Key();
+	const auto thread = key ? key.thread() : nullptr;
+	if (!thread) {
+		setTitle((user.isEmpty() ? u"Kotatogram"_q : user) + added);
+		return;
+	}
+	const auto history = thread->owningHistory();
+	const auto topic = thread->asTopic();
+	const auto name = topic
+		? topic->title()
+		: history->peer->isSelf()
+		? tr::lng_saved_messages(tr::now)
+		: history->peer->name();
+	const auto threadCounter = thread->chatListBadgesState().unreadCounter;
+	const auto primary = (threadCounter > 0)
+		? u"(%1) %2"_q.arg(threadCounter).arg(name)
+		: name;
+	const auto middle = !user.isEmpty()
+		? (u" @ "_q + user)
+		: !added.isEmpty()
+		? u" \u2013"_q
+		: QString();
+	setTitle(primary + middle + added);
 }
 
 QRect MainWindow::computeDesktopRect() const {
-	return (screen() ? screen() : QApplication::primaryScreen())->availableGeometry();
+	return screen()->availableGeometry();
 }
 
 void MainWindow::savePosition(Qt::WindowState state) {
@@ -868,7 +915,7 @@ void MainWindow::savePosition(Qt::WindowState state) {
 
 	if (state == Qt::WindowMinimized
 		|| !isVisible()
-		|| !isPrimary() // #TODO windows
+		|| !Core::App().savingPositionFor(&controller())
 		|| !positionInited()) {
 		return;
 	}
@@ -890,30 +937,7 @@ void MainWindow::savePosition(Qt::WindowState state) {
 		realPosition.moncrc = 0;
 
 		DEBUG_LOG(("Window Pos: Saving non-maximized position: %1, %2, %3, %4").arg(realPosition.x).arg(realPosition.y).arg(realPosition.w).arg(realPosition.h));
-
-		auto centerX = realPosition.x + realPosition.w / 2;
-		auto centerY = realPosition.y + realPosition.h / 2;
-		int minDelta = 0;
-		QScreen *chosen = nullptr;
-		const auto screens = QGuiApplication::screens();
-		for (auto screen : screens) {
-			auto delta = (screen->geometry().center() - QPoint(centerX, centerY)).manhattanLength();
-			if (!chosen || delta < minDelta) {
-				minDelta = delta;
-				chosen = screen;
-			}
-		}
-		if (chosen) {
-			auto screenGeometry = chosen->geometry();
-			DEBUG_LOG(("Window Pos: Screen found, geometry: %1, %2, %3, %4"
-				).arg(screenGeometry.x()
-				).arg(screenGeometry.y()
-				).arg(screenGeometry.width()
-				).arg(screenGeometry.height()));
-			realPosition.x -= screenGeometry.x();
-			realPosition.y -= screenGeometry.y();
-			realPosition.moncrc = screenNameChecksum(chosen->name());
-		}
+		realPosition = withScreenInPosition(realPosition);
 	}
 	if (realPosition.w >= st::windowMinWidth && realPosition.h >= st::windowMinHeight) {
 		if (realPosition.x != savedPosition.x
@@ -936,20 +960,30 @@ void MainWindow::savePosition(Qt::WindowState state) {
 	}
 }
 
+WindowPosition MainWindow::withScreenInPosition(
+		WindowPosition position) const {
+	return PositionWithScreen(
+		position,
+		this,
+		{ st::windowMinWidth, st::windowMinHeight });
+}
+
 bool MainWindow::minimizeToTray() {
-	if (Core::Quitting() || !hasTrayIcon()) {
+	if (Core::Quitting() || !Core::App().tray().has()) {
 		return false;
 	}
 
 	closeWithoutDestroy();
 	controller().updateIsActiveBlur();
 	updateGlobalMenu();
-	showTrayTooltip();
 	return true;
 }
 
 void MainWindow::reActivateWindow() {
-#if defined Q_OS_UNIX && !defined Q_OS_MAC
+	// X11 is the only platform with unreliable activate requests
+	if (!Platform::IsX11()) {
+		return;
+	}
 	const auto weak = Ui::MakeWeak(this);
 	const auto reActivate = [=] {
 		if (const auto w = weak.data()) {
@@ -965,7 +999,6 @@ void MainWindow::reActivateWindow() {
 	};
 	crl::on_main(this, reActivate);
 	base::call_delayed(200, this, reActivate);
-#endif // Q_OS_UNIX && !Q_OS_MAC
 }
 
 void MainWindow::showRightColumn(object_ptr<TWidget> widget) {
@@ -984,7 +1017,7 @@ void MainWindow::showRightColumn(object_ptr<TWidget> widget) {
 	const auto nowMinimumWidth = computeMinWidth();
 	const auto firstResize = (nowMinimumWidth < wasMinimumWidth);
 	if (firstResize) {
-		setMinimumWidth(nowMinimumWidth);
+		updateMinimumSize();
 	}
 	if (!isMaximized()) {
 		tryToExtendWidthBy(wasWidth + nowRightWidth - wasRightWidth - width());
@@ -992,17 +1025,17 @@ void MainWindow::showRightColumn(object_ptr<TWidget> widget) {
 		updateControlsGeometry();
 	}
 	if (!firstResize) {
-		setMinimumWidth(nowMinimumWidth);
+		updateMinimumSize();
 	}
 }
 
 int MainWindow::maximalExtendBy() const {
-	auto desktop = (screen() ? screen() : QApplication::primaryScreen())->availableGeometry();
+	auto desktop = screen()->availableGeometry();
 	return std::max(desktop.width() - body()->width(), 0);
 }
 
 bool MainWindow::canExtendNoMove(int extendBy) const {
-	auto desktop = (screen() ? screen() : QApplication::primaryScreen())->availableGeometry();
+	auto desktop = screen()->availableGeometry();
 	auto inner = body()->mapToGlobal(body()->rect());
 	auto innerRight = (inner.x() + inner.width() + extendBy);
 	auto desktopRight = (desktop.x() + desktop.width());
@@ -1010,7 +1043,7 @@ bool MainWindow::canExtendNoMove(int extendBy) const {
 }
 
 int MainWindow::tryToExtendWidthBy(int addToWidth) {
-	auto desktop = (screen() ? screen() : QApplication::primaryScreen())->availableGeometry();
+	auto desktop = screen()->availableGeometry();
 	auto inner = body()->mapToGlobal(body()->rect());
 	accumulate_min(
 		addToWidth,
@@ -1033,6 +1066,7 @@ void MainWindow::launchDrag(
 	// Qt destroys this QDrag automatically after the drag is finished
 	// We must not delete this at the end of this function, as this breaks DnD on Linux
 	auto drag = new QDrag(this);
+	KUrlMimeData::exportUrlsToPortal(data.get());
 	drag->setMimeData(data.release());
 	drag->exec(Qt::CopyAction);
 
@@ -1052,6 +1086,54 @@ MainWindow::~MainWindow() {
 	// QMetaObject::activate
 	// Window::MainWindow::handleVisibleChanged on a destroyed MainWindow.
 	hide();
+}
+
+int32 DefaultScreenNameChecksum(const QString &name) {
+	const auto bytes = name.toUtf8();
+	return base::crc32(bytes.constData(), bytes.size());
+}
+
+WindowPosition PositionWithScreen(
+		WindowPosition position,
+		const QScreen *chosen,
+		QSize minimal) {
+	if (!chosen) {
+		return position;
+	}
+	const auto available = chosen->availableGeometry();
+	if (available.width() < minimal.width()
+		|| available.height() < minimal.height()) {
+		return position;
+	}
+	accumulate_min(position.w, available.width());
+	accumulate_min(position.h, available.height());
+	if (position.x + position.w > available.x() + available.width()) {
+		position.x = available.x() + available.width() - position.w;
+	}
+	if (position.y + position.h > available.y() + available.height()) {
+		position.y = available.y() + available.height() - position.h;
+	}
+	const auto geometry = chosen->geometry();
+	DEBUG_LOG(("Window Pos: Screen found, geometry: %1, %2, %3, %4"
+		).arg(geometry.x()
+		).arg(geometry.y()
+		).arg(geometry.width()
+		).arg(geometry.height()));
+	position.x -= geometry.x();
+	position.y -= geometry.y();
+	position.moncrc = Platform::ScreenNameChecksum(chosen->name());
+	return position;
+}
+
+WindowPosition PositionWithScreen(
+		WindowPosition position,
+		not_null<const QWidget*> widget,
+		QSize minimal) {
+	const auto screen = widget->screen();
+	return PositionWithScreen(
+		position,
+		screen ? screen : QGuiApplication::primaryScreen(),
+		minimal);
 }
 
 } // namespace Window

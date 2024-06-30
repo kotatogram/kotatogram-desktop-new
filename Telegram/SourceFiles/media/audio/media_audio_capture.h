@@ -19,11 +19,7 @@ struct Update {
 	ushort level = 0;
 };
 
-struct Result {
-	QByteArray bytes;
-	VoiceWaveform waveform;
-	int samples = 0;
-};
+struct Result;
 
 void Start();
 void Finish();
@@ -42,19 +38,23 @@ public:
 		return _updates.events();
 	}
 
+	[[nodiscard]] bool started() const {
+		return _started.current();
+	}
 	[[nodiscard]] rpl::producer<bool> startedChanges() const {
 		return _started.changes();
 	}
 
 	void start();
 	void stop(Fn<void(Result&&)> callback = nullptr);
+	void pause(bool value, Fn<void(Result&&)> callback);
 
 private:
 	class Inner;
 	friend class Inner;
 
 	bool _available = false;
-	rpl::variable<bool> _started = false;;
+	rpl::variable<bool> _started = false;
 	rpl::event_stream<Update, rpl::empty_error> _updates;
 	QThread _thread;
 	std::unique_ptr<Inner> _inner;

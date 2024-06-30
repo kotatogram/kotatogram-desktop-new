@@ -7,6 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "ui/widgets/level_meter.h"
 
+#include "ui/painter.h"
+#include "styles/style_widgets.h"
+
 namespace Ui {
 
 LevelMeter::LevelMeter(QWidget *parent, const style::LevelMeter &st)
@@ -20,7 +23,7 @@ void LevelMeter::setValue(float value) {
 }
 
 void LevelMeter::paintEvent(QPaintEvent* event) {
-	Painter p(this);
+	auto p = QPainter(this);
 	PainterHighQualityEnabler hq(p);
 
 	p.setPen(Qt::NoPen);

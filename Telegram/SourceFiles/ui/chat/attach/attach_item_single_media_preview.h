@@ -32,6 +32,7 @@ class ItemSingleMediaPreview final : public AbstractSingleMediaPreview {
 public:
 	ItemSingleMediaPreview(
 		QWidget *parent,
+		const style::ComposeControls &st,
 		Fn<bool()> gifPaused,
 		not_null<HistoryItem*> item,
 		AttachControls::Type type);
@@ -39,8 +40,9 @@ public:
 	std::shared_ptr<::Data::PhotoMedia> sharedPhotoMedia() const;
 
 protected:
+	bool supportsSpoilers() const override;
 	bool drawBackground() const override;
-	bool tryPaintAnimation(Painter &p) override;
+	bool tryPaintAnimation(QPainter &p) override;
 	bool isAnimatedPreviewReady() const override;
 
 private:

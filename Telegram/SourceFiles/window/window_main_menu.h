@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/object_ptr.h"
 #include "base/binary_guard.h"
 #include "ui/rp_widget.h"
+#include "ui/unread_badge.h"
 #include "ui/layers/layer_widget.h"
 
 namespace Ui {
@@ -20,15 +21,17 @@ class UserpicButton;
 class PopupMenu;
 class ScrollArea;
 class VerticalLayout;
-class VerticalLayoutReorder;
 class RippleButton;
 class PlainShadow;
+class SettingsButton;
 template <typename Widget>
 class SlideWrap;
-namespace Menu {
-class Menu;
-} // namespace Menu
 } // namespace Ui
+
+namespace Info::Profile {
+class Badge;
+class EmojiStatusPanel;
+} // namespace Info::Profile
 
 namespace Main {
 class Account;
@@ -41,8 +44,10 @@ class SessionController;
 class MainMenu final : public Ui::LayerWidget {
 public:
 	MainMenu(QWidget *parent, not_null<SessionController*> controller);
+	~MainMenu();
 
 	void parentResized() override;
+	void showFinished() override;
 
 protected:
 	void paintEvent(QPaintEvent *e) override;
@@ -53,56 +58,48 @@ protected:
 	}
 
 private:
-	class AccountButton;
 	class ToggleAccountsButton;
 	class ResetScaleButton;
 
-	void setupArchiveButton();
-	void setupCloudButton();
+	void moveBadge();
 	void setupUserpicButton();
 	void setupAccounts();
 	void setupAccountsToggle();
-	[[nodiscard]] not_null<Ui::SlideWrap<Ui::RippleButton>*> setupAddAccount(
-		not_null<Ui::VerticalLayout*> container);
-	void rebuildAccounts();
+	void setupSetEmojiStatus();
+	void setupArchive();
+	void setupMenu();
 	void updateControlsGeometry();
 	void updateInnerControlsGeometry();
-	void updatePhone();
 	void initResetScaleButton();
-	void refreshMenu();
-	void refreshBackground();
 	void toggleAccounts();
+	void chooseEmojiStatus();
+
+	void drawName(Painter &p);
 
 	const not_null<SessionController*> _controller;
 	object_ptr<Ui::UserpicButton> _userpicButton;
+	Ui::Text::String _name;
+	int _nameVersion = 0;
 	object_ptr<ToggleAccountsButton> _toggleAccounts;
-	object_ptr<Ui::IconButton> _archiveButton;
-	object_ptr<Ui::IconButton> _cloudButton;
+	object_ptr<Ui::FlatLabel> _setEmojiStatus;
+	std::unique_ptr<Info::Profile::EmojiStatusPanel> _emojiStatusPanel;
+	std::unique_ptr<Info::Profile::Badge> _badge;
 	object_ptr<ResetScaleButton> _resetScaleButton = { nullptr };
 	object_ptr<Ui::ScrollArea> _scroll;
 	not_null<Ui::VerticalLayout*> _inner;
-	base::flat_map<
-		not_null<Main::Account*>,
-		base::unique_qptr<AccountButton>> _watched;
+	not_null<Ui::RpWidget*> _topShadowSkip;
 	not_null<Ui::SlideWrap<Ui::VerticalLayout>*> _accounts;
-	int _accountsCount = 0;
-	Ui::SlideWrap<Ui::RippleButton> *_addAccount = nullptr;
 	not_null<Ui::SlideWrap<Ui::PlainShadow>*> _shadow;
-	not_null<Ui::Menu::Menu*> _menu;
+	not_null<Ui::VerticalLayout*> _menu;
 	not_null<Ui::RpWidget*> _footer;
 	not_null<Ui::FlatLabel*> _telegram;
 	not_null<Ui::FlatLabel*> _version;
-	std::shared_ptr<QPointer<QAction>> _nightThemeAction;
+	QPointer<Ui::SettingsButton> _nightThemeToggle;
+	rpl::event_stream<bool> _nightThemeSwitches;
 	base::Timer _nightThemeSwitch;
 	base::unique_qptr<Ui::PopupMenu> _contextMenu;
 
-	std::unique_ptr<Ui::VerticalLayoutReorder> _reorder;
-	int _reordering = 0;
-
-	base::binary_guard _accountSwitchGuard;
-
-	QString _phoneText;
-	QImage _background;
+	rpl::variable<bool> _showFinished = false;
 
 };
 

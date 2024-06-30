@@ -7,50 +7,55 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/abstract_box.h"
 #include "data/data_chat_participant_status.h"
+#include "base/object_ptr.h"
+
+namespace style {
+struct SettingsButton;
+} // namespace style
 
 namespace Ui {
+class GenericBox;
 class RoundButton;
+class RpWidget;
 class VerticalLayout;
 } // namespace Ui
 
+namespace PowerSaving {
+enum Flag : uint32;
+using Flags = base::flags<Flag>;
+} // namespace PowerSaving
+
+template <typename Object>
+class object_ptr;
+
 namespace Window {
+class SessionController;
 class SessionNavigation;
 } // namespace Window
 
-class EditPeerPermissionsBox : public Ui::BoxContent {
-public:
-	EditPeerPermissionsBox(
-		QWidget*,
-		not_null<Window::SessionNavigation*> navigation,
-		not_null<PeerData*> peer);
-
-	struct Result {
-		ChatRestrictions rights;
-		int slowmodeSeconds = 0;
-	};
-
-	rpl::producer<Result> saveEvents() const;
-
-protected:
-	void prepare() override;
-
-private:
-	Fn<int()> addSlowmodeSlider(not_null<Ui::VerticalLayout*> container);
-	void addSlowmodeLabels(not_null<Ui::VerticalLayout*> container);
-	void addSuggestGigagroup(not_null<Ui::VerticalLayout*> container);
-	void addBannedButtons(not_null<Ui::VerticalLayout*> container);
-
-	const not_null<Window::SessionNavigation*> _navigation;
-	const not_null<PeerData*> _peer;
-	Ui::RoundButton *_save = nullptr;
-	Fn<Result()> _value;
-
+struct EditPeerPermissionsBoxResult final {
+	ChatRestrictions rights;
+	int slowmodeSeconds = 0;
+	int boostsUnrestrict = 0;
 };
 
+void ShowEditPeerPermissionsBox(
+	not_null<Ui::GenericBox*> box,
+	not_null<Window::SessionNavigation*> navigation,
+	not_null<PeerData*> channelOrGroup,
+	Fn<void(EditPeerPermissionsBoxResult)> done);
+
 [[nodiscard]] Fn<void()> AboutGigagroupCallback(
-	not_null<ChannelData*> channel);
+	not_null<ChannelData*> channel,
+	not_null<Window::SessionController*> controller);
+
+template <typename Flags>
+struct EditFlagsLabel {
+	Flags flags;
+	QString label;
+	const style::icon *icon = nullptr;
+};
 
 template <typename Flags>
 struct EditFlagsControl {
@@ -59,20 +64,54 @@ struct EditFlagsControl {
 	rpl::producer<Flags> changes;
 };
 
-EditFlagsControl<ChatRestrictions> CreateEditRestrictions(
+template <typename Flags>
+struct NestedEditFlagsLabels {
+	std::optional<rpl::producer<QString>> nestingLabel;
+	std::vector<EditFlagsLabel<Flags>> nested;
+};
+
+template <typename Flags>
+struct EditFlagsDescriptor {
+	rpl::producer<QString> header;
+	std::vector<NestedEditFlagsLabels<Flags>> labels;
+	base::flat_map<Flags, QString> disabledMessages;
+	const style::SettingsButton *st = nullptr;
+	rpl::producer<QString> forceDisabledMessage;
+};
+
+using RestrictionLabel = EditFlagsLabel<ChatRestrictions>;
+[[nodiscard]] std::vector<RestrictionLabel> RestrictionLabels(
+	Data::RestrictionsSetOptions options);
+
+using AdminRightLabel = EditFlagsLabel<ChatAdminRights>;
+[[nodiscard]] std::vector<AdminRightLabel> AdminRightLabels(
+	Data::AdminRightsSetOptions options);
+
+[[nodiscard]] auto CreateEditRestrictions(
 	QWidget *parent,
 	rpl::producer<QString> header,
 	ChatRestrictions restrictions,
-	std::map<ChatRestrictions, QString> disabledMessages);
+	base::flat_map<ChatRestrictions, QString> disabledMessages,
+	Data::RestrictionsSetOptions options)
+-> EditFlagsControl<ChatRestrictions>;
 
-EditFlagsControl<ChatAdminRights> CreateEditAdminRights(
+[[nodiscard]] auto CreateEditAdminRights(
 	QWidget *parent,
 	rpl::producer<QString> header,
 	ChatAdminRights rights,
-	std::map<ChatAdminRights, QString> disabledMessages,
-	bool isGroup,
-	bool anyoneCanAddMembers);
+	base::flat_map<ChatAdminRights, QString> disabledMessages,
+	Data::AdminRightsSetOptions options)
+-> EditFlagsControl<ChatAdminRights>;
 
-ChatAdminRights DisabledByDefaultRestrictions(not_null<PeerData*> peer);
-ChatRestrictions FixDependentRestrictions(ChatRestrictions restrictions);
-ChatAdminRights AdminRightsForOwnershipTransfer(bool isGroup);
+[[nodiscard]] ChatAdminRights DisabledByDefaultRestrictions(
+	not_null<PeerData*> peer);
+[[nodiscard]] ChatRestrictions FixDependentRestrictions(
+	ChatRestrictions restrictions);
+[[nodiscard]] ChatAdminRights AdminRightsForOwnershipTransfer(
+	Data::AdminRightsSetOptions options);
+
+[[nodiscard]] auto CreateEditPowerSaving(
+	QWidget *parent,
+	PowerSaving::Flags flags,
+	rpl::producer<QString> forceDisabledMessage
+) -> EditFlagsControl<PowerSaving::Flags>;

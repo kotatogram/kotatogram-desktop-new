@@ -24,12 +24,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "base/platform/base_platform_info.h"
 #include "base/power_save_blocker.h"
+#include "base/event_filter.h"
 #include "ui/platform/ui_platform_utility.h"
+#include "ui/platform/ui_platform_window_title.h"
 #include "ui/widgets/buttons.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/widgets/shadow.h"
 #include "ui/text/format_values.h"
 #include "ui/gl/gl_surface.h"
+#include "ui/painter.h"
 #include "window/window_controller.h"
 #include "styles/style_widgets.h"
 #include "styles/style_window.h"
@@ -46,16 +49,19 @@ namespace {
 constexpr auto kPipLoaderPriority = 2;
 constexpr auto kMsInSecond = 1000;
 
-[[nodiscard]] bool IsWindowControlsOnLeft() {
-	return Platform::IsMac();
-}
-
 [[nodiscard]] QRect ScreenFromPosition(QPoint point) {
 	const auto screen = QGuiApplication::screenAt(point);
 	const auto use = screen ? screen : QGuiApplication::primaryScreen();
 	return use
 		? use->availableGeometry()
 		: QRect(0, 0, st::windowDefaultWidth, st::windowDefaultHeight);
+}
+
+[[nodiscard]] QSize MaxAllowedSizeForScreen(QSize screenSize) {
+	// Each side should be less than screen side - 3 * st::pipBorderSkip,
+	// That way it won't try to snap to both opposite sides of the screen.
+	const auto skip = 3 * st::pipBorderSkip;
+	return { screenSize.width() - skip, screenSize.height() - skip };
 }
 
 [[nodiscard]] QPoint ClampToEdges(QRect screen, QRect inner) {
@@ -354,6 +360,41 @@ void PipPanel::init() {
 		// Workaround Qt's forced transient parent.
 		Ui::Platform::ClearTransientParent(widget());
 	}, rp()->lifetime());
+
+	QObject::connect(
+		widget()->windowHandle(),
+		&QWindow::screenChanged,
+		[=](QScreen *screen) {
+			handleScreenChanged(screen);
+		});
+
+	if (Platform::IsWayland()) {
+		rp()->sizeValue(
+		) | rpl::start_with_next([=](QSize size) {
+			handleWaylandResize(size);
+		}, rp()->lifetime());
+
+		base::install_event_filter(widget(), [=](not_null<QEvent*> event) {
+			if (event->type() == QEvent::Resize && _inHandleWaylandResize) {
+				return base::EventFilterResult::Cancel;
+			}
+			return base::EventFilterResult::Continue;
+		});
+
+		base::install_event_filter(widget()->windowHandle(), [=](not_null<QEvent*> event) {
+			if (event->type() == QEvent::Resize) {
+				if (_inHandleWaylandResize) {
+					return base::EventFilterResult::Cancel;
+				}
+				const auto newSize = static_cast<QResizeEvent*>(event.get())->size();
+				if (_suggestedWaylandSize == newSize) {
+					handleWaylandResize(newSize);
+					return base::EventFilterResult::Cancel;
+				}
+			}
+			return base::EventFilterResult::Continue;
+		});
+	}
 }
 
 not_null<QWidget*> PipPanel::widget() const {
@@ -372,6 +413,7 @@ void PipPanel::setAspectRatio(QSize ratio) {
 	if (_ratio.isEmpty()) {
 		_ratio = QSize(1, 1);
 	}
+	Ui::Platform::DisableSystemWindowResize(widget(), _ratio);
 	if (!widget()->size().isEmpty()) {
 		setPosition(countPosition());
 	}
@@ -417,10 +459,7 @@ rpl::producer<> PipPanel::saveGeometryRequests() const {
 }
 
 QScreen *PipPanel::myScreen() const {
-	if (const auto window = widget()->windowHandle()) {
-		return window->screen();
-	}
-	return nullptr;
+	return widget()->screen();
 }
 
 PipPanel::Position PipPanel::countPosition() const {
@@ -463,24 +502,27 @@ PipPanel::Position PipPanel::countPosition() const {
 
 void PipPanel::setPositionDefault() {
 	const auto widgetScreen = [&](auto &&widget) -> QScreen* {
-		if (auto handle = widget ? widget->windowHandle() : nullptr) {
-			return handle->screen();
+		if (!widget) {
+			return nullptr;
 		}
-		return nullptr;
+		if (!Platform::IsWayland()) {
+			if (const auto screen = QGuiApplication::screenAt(
+				widget->geometry().center())) {
+				return screen;
+			}
+		}
+		return widget->screen();
 	};
 	const auto parentScreen = widgetScreen(_parent);
-	const auto myScreen = widgetScreen(widget());
-	if (parentScreen && myScreen && myScreen != parentScreen) {
+	const auto myScreen = widget()->screen();
+	if (parentScreen && myScreen != parentScreen) {
 		widget()->windowHandle()->setScreen(parentScreen);
 	}
-	const auto screen = parentScreen
-		? parentScreen
-		: QGuiApplication::primaryScreen();
 	auto position = Position();
 	position.snapped = RectPart::Top | RectPart::Left;
-	position.screen = screen->geometry();
+	position.screen = parentScreen->geometry();
 	position.geometry = QRect(0, 0, st::pipDefaultSize, st::pipDefaultSize);
-	setPositionOnScreen(position, screen->availableGeometry());
+	setPositionOnScreen(position, parentScreen->availableGeometry());
 }
 
 void PipPanel::setPositionOnScreen(Position position, QRect available) {
@@ -493,10 +535,10 @@ void PipPanel::setPositionOnScreen(Position position, QRect available) {
 		? QSize(max, max * _ratio.height() / _ratio.width())
 		: QSize(max * _ratio.width() / _ratio.height(), max);
 
-	// At least one side should not be greater than half of screen size.
-	const auto byWidth = (scaled.width() * screen.height())
-		> (scaled.height() * screen.width());
-	const auto fit = QSize(screen.width() / 2, screen.height() / 2);
+	// Apply maximum size.
+	const auto fit = MaxAllowedSizeForScreen(screen.size());
+	const auto byWidth = (scaled.width() * fit.height())
+		> (scaled.height() * fit.width());
 	const auto normalized = (byWidth && scaled.width() > fit.width())
 		? QSize(fit.width(), fit.width() * scaled.height() / scaled.width())
 		: (!byWidth && scaled.height() > fit.height())
@@ -515,7 +557,7 @@ void PipPanel::setPositionOnScreen(Position position, QRect available) {
 		std::max(normalized.height(), minimalSize.height()));
 
 	// Apply maximal size.
-	const auto maximalSize = (_ratio.width() > _ratio.height())
+	const auto maximalSize = byWidth
 		? QSize(fit.width(), fit.width() * _ratio.height() / _ratio.width())
 		: QSize(fit.height() * _ratio.width() / _ratio.height(), fit.height());
 
@@ -565,6 +607,47 @@ void PipPanel::update() {
 
 void PipPanel::setGeometry(QRect geometry) {
 	widget()->setGeometry(geometry);
+}
+
+void PipPanel::handleWaylandResize(QSize size) {
+	_inHandleWaylandResize = true;
+	_suggestedWaylandSize = size;
+
+	// Apply aspect ratio.
+	const auto max = std::max(size.width(), size.height());
+	const auto scaled = (_ratio.width() > _ratio.height())
+		? QSize(max, max * _ratio.height() / _ratio.width())
+		: QSize(max * _ratio.width() / _ratio.height(), max);
+
+	// Buffer can't be bigger than the configured
+	// (suggested by compositor) size.
+	const auto byWidth = (scaled.width() * size.height())
+		> (scaled.height() * size.width());
+	const auto normalized = (byWidth && scaled.width() > size.width())
+		? QSize(size.width(), size.width() * scaled.height() / scaled.width())
+		: (!byWidth && scaled.height() > size.height())
+		? QSize(
+			size.height() * scaled.width() / scaled.height(),
+			size.height())
+		: scaled;
+
+	widget()->resize(normalized);
+	_inHandleWaylandResize = false;
+}
+
+void PipPanel::handleScreenChanged(QScreen *screen) {
+	const auto screenGeometry = screen->availableGeometry();
+	const auto minimalSize = _ratio.scaled(
+		st::pipMinimalSize,
+		st::pipMinimalSize,
+		Qt::KeepAspectRatioByExpanding);
+	const auto maximalSize = _ratio.scaled(
+		MaxAllowedSizeForScreen(screenGeometry.size()),
+		Qt::KeepAspectRatio);
+	widget()->setMinimumSize(minimalSize);
+	widget()->setMaximumSize(
+		std::max(minimalSize.width(), maximalSize.width()),
+		std::max(minimalSize.height(), maximalSize.height()));
 }
 
 void PipPanel::handleMousePress(QPoint position, Qt::MouseButton button) {
@@ -678,6 +761,11 @@ void PipPanel::startSystemDrag() {
 	} else {
 		widget()->windowHandle()->startSystemMove();
 	}
+
+	Ui::SendSynteticMouseEvent(
+		widget().get(),
+		QEvent::MouseButtonRelease,
+		Qt::LeftButton);
 }
 
 void PipPanel::processDrag(QPoint point) {
@@ -697,8 +785,7 @@ void PipPanel::processDrag(QPoint point) {
 		st::pipMinimalSize,
 		Qt::KeepAspectRatioByExpanding);
 	const auto maximalSize = _ratio.scaled(
-		screen.width() / 2,
-		screen.height() / 2,
+		MaxAllowedSizeForScreen(screen.size()),
 		Qt::KeepAspectRatio);
 	const auto geometry = Transformed(
 		_dragStartGeometry,
@@ -716,6 +803,10 @@ void PipPanel::processDrag(QPoint point) {
 	const auto clamped = (dragPart == RectPart::Center)
 		? ClampToEdges(screen, valid)
 		: valid.topLeft();
+	widget()->setMinimumSize(minimalSize);
+	widget()->setMaximumSize(
+		std::max(minimalSize.width(), maximalSize.width()),
+		std::max(minimalSize.height(), maximalSize.height()));
 	if (clamped != valid.topLeft()) {
 		moveAnimated(clamped);
 	} else {
@@ -795,8 +886,7 @@ void PipPanel::updateDecorations() {
 		}
 	});
 	const auto position = countPosition();
-	const auto center = position.geometry.center();
-	const auto use = Ui::Platform::TranslucentWindowsSupported(center);
+	const auto use = Ui::Platform::TranslucentWindowsSupported();
 	const auto full = use ? st::callShadow.extend : style::margins();
 	const auto padding = style::margins(
 		(position.attached & RectPart::Left) ? 0 : full.left(),
@@ -819,13 +909,11 @@ void PipPanel::updateDecorations() {
 Pip::Pip(
 	not_null<Delegate*> delegate,
 	not_null<DocumentData*> data,
-	FullMsgId contextId,
 	std::shared_ptr<Streaming::Document> shared,
 	FnMut<void()> closeAndContinue,
 	FnMut<void()> destroy)
 : _delegate(delegate)
 , _data(data)
-, _contextId(contextId)
 , _instance(std::move(shared), [=] { waitingAnimationCallback(); })
 , _panel(
 	_delegate->pipParentWidget(),
@@ -1008,9 +1096,6 @@ void Pip::handleMousePress(QPoint position, Qt::MouseButton button) {
 }
 
 void Pip::handleMouseRelease(QPoint position, Qt::MouseButton button) {
-	Expects(1 && _delegate->pipPlaybackSpeed() >= 0.5
-		&& _delegate->pipPlaybackSpeed() <= 2.); // Debugging strange crash.
-
 	const auto weak = Ui::MakeWeak(_panel.widget());
 	const auto guard = gsl::finally([&] {
 		if (weak) {
@@ -1022,21 +1107,11 @@ void Pip::handleMouseRelease(QPoint position, Qt::MouseButton button) {
 	}
 	seekUpdate(position);
 
-	Assert(2 && _delegate->pipPlaybackSpeed() >= 0.5
-		&& _delegate->pipPlaybackSpeed() <= 2.); // Debugging strange crash.
-
 	volumeControllerUpdate(position);
-
-	Assert(3 && _delegate->pipPlaybackSpeed() >= 0.5
-		&& _delegate->pipPlaybackSpeed() <= 2.); // Debugging strange crash.
 
 	const auto pressed = base::take(_pressed);
 	if (pressed && *pressed == OverState::Playback) {
 		_panel.setDragDisabled(false);
-
-		Assert(4 && _delegate->pipPlaybackSpeed() >= 0.5
-			&& _delegate->pipPlaybackSpeed() <= 2.); // Debugging strange crash.
-
 		seekFinish(_playbackProgress->value());
 	} else if (pressed && *pressed == OverState::VolumeController) {
 		_panel.setDragDisabled(false);
@@ -1097,9 +1172,6 @@ void Pip::seekProgress(float64 value) {
 }
 
 void Pip::seekFinish(float64 value) {
-	Expects(5 && _delegate->pipPlaybackSpeed() >= 0.5
-		&& _delegate->pipPlaybackSpeed() <= 2.); // Debugging strange crash.
-
 	if (!_lastDurationMs) {
 		return;
 	}
@@ -1186,7 +1258,7 @@ void Pip::setupButtons() {
 			rect.y(),
 			volumeToggleWidth,
 			volumeToggleHeight);
-		if (!IsWindowControlsOnLeft()) {
+		if (!Ui::Platform::TitleControlsOnLeft()) {
 			_close.area.moveLeft(rect.x()
 				+ rect.width()
 				- (_close.area.x() - rect.x())
@@ -1299,7 +1371,7 @@ void Pip::paint(not_null<Renderer*> renderer) const {
 		if (_preparedCoverState == ThumbState::Cover) {
 			geometry.rotation += base::take(geometry.videoRotation);
 		}
-		renderer->paintTransformedStaticContent(staticContent(), geometry);
+		renderer->paintTransformedStaticContent(content, geometry);
 	}
 	if (_instance.waitingShown()) {
 		renderer->paintRadialLoading(countRadialRect(), controlsShown);
@@ -1586,29 +1658,17 @@ void Pip::playbackPauseResume() {
 }
 
 void Pip::restartAtSeekPosition(crl::time position) {
-	Expects(6 && _delegate->pipPlaybackSpeed() >= 0.5
-		&& _delegate->pipPlaybackSpeed() <= 2.); // Debugging strange crash.
-
 	if (!_instance.info().video.cover.isNull()) {
 		_preparedCoverStorage = QImage();
 		_preparedCoverState = ThumbState::Empty;
 		_instance.saveFrameToCover();
 	}
 
-	Assert(7 && _delegate->pipPlaybackSpeed() >= 0.5
-		&& _delegate->pipPlaybackSpeed() <= 2.); // Debugging strange crash.
-
 	auto options = Streaming::PlaybackOptions();
 	options.position = position;
+	options.hwAllowed = Core::App().settings().hardwareAcceleratedVideo();
 	options.audioId = _instance.player().prepareLegacyState().id;
-
-	Assert(8 && _delegate->pipPlaybackSpeed() >= 0.5
-		&& _delegate->pipPlaybackSpeed() <= 2.); // Debugging strange crash.
-
 	options.speed = _delegate->pipPlaybackSpeed();
-
-	Assert(9 && options.speed >= 0.5
-		&& options.speed <= 2.); // Debugging strange crash.
 
 	_instance.play(options);
 	if (_startPaused) {

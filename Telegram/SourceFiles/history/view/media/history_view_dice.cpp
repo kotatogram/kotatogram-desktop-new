@@ -23,7 +23,7 @@ namespace {
 		not_null<Element*> view,
 		const QString &emoji,
 		int value) {
-	const auto &session = view->data()->history()->session();
+	const auto &session = view->history()->session();
 	return session.diceStickersPacks().lookup(emoji, value);
 }
 
@@ -34,7 +34,8 @@ Dice::Dice(not_null<Element*> parent, not_null<Data::MediaDice*> dice)
 , _dice(dice)
 , _link(dice->makeHandler()) {
 	if (const auto document = Lookup(parent, dice->emoji(), 0)) {
-		_start.emplace(parent, document);
+		const auto skipPremiumEffect = false;
+		_start.emplace(parent, document, skipPremiumEffect);
 		_start->setDiceIndex(_dice->emoji(), 0);
 	}
 	_showLastFrame = _parent->data()->Has<HistoryMessageForwarded>();
@@ -45,8 +46,8 @@ Dice::Dice(not_null<Element*> parent, not_null<Data::MediaDice*> dice)
 
 Dice::~Dice() = default;
 
-QSize Dice::size() {
-	return _start ? _start->size() : Sticker::EmojiSize();
+QSize Dice::countOptimalSize() {
+	return _start ? _start->countOptimalSize() : Sticker::EmojiSize();
 }
 
 ClickHandlerPtr Dice::link() {
@@ -56,14 +57,16 @@ ClickHandlerPtr Dice::link() {
 void Dice::draw(Painter &p, const PaintContext &context, const QRect &r) {
 	if (!_start) {
 		if (const auto document = Lookup(_parent, _dice->emoji(), 0)) {
-			_start.emplace(_parent, document);
+			const auto skipPremiumEffect = false;
+			_start.emplace(_parent, document, skipPremiumEffect);
 			_start->setDiceIndex(_dice->emoji(), 0);
 			_start->initSize();
 		}
 	}
 	if (const auto value = _end ? 0 : _dice->value()) {
 		if (const auto document = Lookup(_parent, _dice->emoji(), value)) {
-			_end.emplace(_parent, document);
+			const auto skipPremiumEffect = false;
+			_end.emplace(_parent, document, skipPremiumEffect);
 			_end->setDiceIndex(_dice->emoji(), value);
 			_end->initSize();
 		}
@@ -75,7 +78,9 @@ void Dice::draw(Painter &p, const PaintContext &context, const QRect &r) {
 		_end->draw(p, context, r);
 	} else if (_start) {
 		_start->draw(p, context, r);
-		if (_end && _end->readyToDrawLottie() && _start->atTheEnd()) {
+		if (_end
+			&& _end->readyToDrawAnimationFrame()
+			&& _start->atTheEnd()) {
 			_drawingEnd = true;
 		}
 	}

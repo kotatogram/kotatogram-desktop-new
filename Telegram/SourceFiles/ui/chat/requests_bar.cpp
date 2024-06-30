@@ -10,10 +10,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/group_call_userpics.h"
 #include "ui/widgets/shadow.h"
 #include "ui/text/text_options.h"
+#include "ui/painter.h"
 #include "lang/lang_keys.h"
-#include "styles/style_chat.h"
+#include "styles/style_chat_helpers.h"
 #include "styles/style_calls.h"
 #include "styles/style_info.h" // st::topBarArrowPadding, like TopBarWidget.
+#include "styles/style_window.h" // st::columnMinimalWidthLeft
 #include "styles/palette.h"
 
 #include <QtGui/QtEvents>
@@ -22,16 +24,14 @@ namespace Ui {
 
 RequestsBar::RequestsBar(
 	not_null<QWidget*> parent,
-	rpl::producer<RequestsBarContent> content,
-	int userpicRadius)
+	rpl::producer<RequestsBarContent> content)
 : _wrap(parent, object_ptr<RpWidget>(parent))
 , _inner(_wrap.entity())
 , _shadow(std::make_unique<PlainShadow>(_wrap.parentWidget()))
 , _userpics(std::make_unique<GroupCallUserpics>(
 		st::historyRequestsUserpics,
 		rpl::single(false),
-		[=] { _inner->update(); },
-		userpicRadius)) {
+		[=] { _inner->update(); })) {
 	_wrap.hide(anim::type::instant);
 	_shadow->hide();
 
@@ -126,9 +126,7 @@ void RequestsBar::setupInner() {
 				static_cast<QMouseEvent*>(event.get())->pos());
 		});
 	}) | rpl::flatten_latest(
-	) | rpl::map([] {
-		return rpl::empty_value();
-	}) | rpl::start_to_stream(_barClicks, _inner->lifetime());
+	) | rpl::to_empty | rpl::start_to_stream(_barClicks, _inner->lifetime());
 
 	_wrap.geometryValue(
 	) | rpl::start_with_next([=](QRect rect) {
@@ -147,18 +145,20 @@ void RequestsBar::paint(Painter &p) {
 	const auto userpicsLeft = userpicsTop * 2;
 	const auto textTop = st::lineWidth + (st::historyRequestsHeight
 		- st::lineWidth
-		- st::msgServiceNameFont->height) / 2;
+		- st::semiboldFont->height) / 2;
 	const auto width = _inner->width();
 	const auto &font = st::defaultMessageBar.title.font;
 	p.setPen(st::defaultMessageBar.titleFg);
 	p.setFont(font);
 
-	const auto textLeft = userpicsLeft + _userpicsWidth + userpicsLeft;
-	const auto available = width - textLeft - userpicsLeft;
-	if (_textFull.isEmpty() || available < _textFull.maxWidth()) {
-		_textShort.drawElided(p, textLeft, textTop, available);
-	} else {
-		_textFull.drawElided(p, textLeft, textTop, available);
+	if (width >= st::columnMinimalWidthLeft / 2) {
+		const auto textLeft = userpicsLeft + _userpicsWidth + userpicsLeft;
+		const auto available = width - textLeft - userpicsLeft;
+		if (_textFull.isEmpty() || available < _textFull.maxWidth()) {
+			_textShort.drawElided(p, textLeft, textTop, available);
+		} else {
+			_textFull.drawElided(p, textLeft, textTop, available);
+		}
 	}
 
 	// Skip shadow of the bar above.

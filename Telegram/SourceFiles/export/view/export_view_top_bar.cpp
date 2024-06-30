@@ -45,7 +45,7 @@ void TopBar::updateData(Content &&content) {
 			.append(" \xe2\x80\x93 ")
 			.append(row.label)
 			.append(' ')
-			.append(Ui::Text::PlainLink(row.info)));
+			.append(Ui::Text::Colorized(row.info)));
 	_progress->setValue(row.progress);
 }
 
@@ -62,7 +62,7 @@ void TopBar::resizeEvent(QResizeEvent *e) {
 }
 
 void TopBar::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 	auto fill = e->rect().intersected(
 		QRect(0, 0, width(), st::mediaPlayerHeight));
 	if (!fill.isEmpty()) {

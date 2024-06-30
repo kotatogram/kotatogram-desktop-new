@@ -18,21 +18,31 @@ https://github.com/kotatogram/kotatogram-desktop/blob/dev/LEGAL
 #include "data/data_user.h"
 #include "data/data_session.h"
 #include "main/main_session.h"
+#include "main/main_session_settings.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 
 UnpinMessageBox::UnpinMessageBox(
 	QWidget*,
 	not_null<PeerData*> peer,
-	MsgId msgId)
+	MsgId topicRootId,
+	MsgId msgId,
+	Fn<void()> onHidden)
 : _peer(peer)
 , _api(&peer->session().mtp())
+, _topicRootId(topicRootId)
 , _msgId(msgId)
+, _onHidden(std::move(onHidden))
 , _text(this, tr::lng_pinned_unpin_sure(tr::now), st::boxLabel) {
 }
 
 void UnpinMessageBox::prepare() {
-	addLeftButton(rktr("ktg_hide_pinned_message"), [this] { hideMessage(); });
+	if (_onHidden) {
+		addLeftButton(rktr("ktg_hide_pinned_message"), [this] {
+			_onHidden();
+			Ui::hideLayer();
+		});
+	}
 
 	addButton(tr::lng_pinned_unpin(), [this] { unpinMessage(); });
 	addButton(tr::lng_cancel(), [this] { closeBox(); });
@@ -50,7 +60,8 @@ void UnpinMessageBox::keyPressEvent(QKeyEvent *e) {
 	if (e->key() == Qt::Key_Enter || e->key() == Qt::Key_Return) {
 		unpinMessage();
 	} else if (e->key() == Qt::Key_Backspace) {
-		hideMessage();
+		_onHidden();
+		Ui::hideLayer();
 	} else {
 		BoxContent::keyPressEvent(e);
 	}
@@ -70,11 +81,4 @@ void UnpinMessageBox::unpinMessage() {
 	}).fail([=](const MTP::Error &error) {
 		Ui::hideLayer();
 	}).send();
-}
-
-void UnpinMessageBox::hideMessage() {
-	if (_requestId) return;
-
-	_peer->owner().history(_peer)->switchPinnedHidden(true);
-	Ui::hideLayer();
 }

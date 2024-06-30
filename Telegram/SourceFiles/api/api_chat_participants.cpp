@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "boxes/add_contact_box.h" // ShowAddParticipantsError
+#include "boxes/peers/add_participants_box.h" // ChatInviteForbidden
 #include "data/data_changes.h"
 #include "data/data_channel.h"
 #include "data/data_channel_admins.h"
@@ -210,6 +211,29 @@ void ApplyBotsList(
 		Data::PeerUpdate::Flag::FullInfo);
 }
 
+[[nodiscard]] ChatParticipants::Channels ParseSimilar(
+		not_null<ChannelData*> channel,
+		const MTPmessages_Chats &chats) {
+	auto result = ChatParticipants::Channels();
+	std::vector<not_null<ChannelData*>>();
+	chats.match([&](const auto &data) {
+		const auto &list = data.vchats().v;
+		result.list.reserve(list.size());
+		for (const auto &chat : list) {
+			const auto peer = channel->owner().processChat(chat);
+			if (const auto channel = peer->asChannel()) {
+				result.list.push_back(channel);
+			}
+		}
+		if constexpr (MTPDmessages_chatsSlice::Is<decltype(data)>()) {
+			if (channel->session().premiumPossible()) {
+				result.more = data.vcount().v - data.vchats().v.size();
+			}
+		}
+	});
+	return result;
+}
+
 } // namespace
 
 ChatParticipant::ChatParticipant(
@@ -365,6 +389,7 @@ void ChatParticipants::requestForAdd(
 
 void ChatParticipants::requestLast(not_null<ChannelData*> channel) {
 	if (!channel->isMegagroup()
+		|| !channel->canViewMembers()
 		|| _participantsRequests.contains(channel)) {
 		return;
 	}
@@ -437,6 +462,7 @@ void ChatParticipants::requestAdmins(not_null<ChannelData*> channel) {
 		MTP_int(channel->session().serverConfig().chatSizeMax),
 		MTP_long(participantsHash)
 	)).done([=](const MTPchannels_ChannelParticipants &result) {
+		channel->mgInfo->adminsLoaded = true;
 		_adminsRequests.remove(channel);
 		result.match([&](const MTPDchannels_channelParticipants &data) {
 			channel->owner().processUsers(data.vusers());
@@ -446,6 +472,7 @@ void ChatParticipants::requestAdmins(not_null<ChannelData*> channel) {
 				"channels.channelParticipantsNotModified received!"));
 		});
 	}).fail([=] {
+		channel->mgInfo->adminsLoaded = true;
 		_adminsRequests.remove(channel);
 	}).send();
 
@@ -462,25 +489,28 @@ void ChatParticipants::requestCountDelayed(
 void ChatParticipants::add(
 		not_null<PeerData*> peer,
 		const std::vector<not_null<UserData*>> &users,
+		std::shared_ptr<Ui::Show> show,
+		bool passGroupHistory,
 		Fn<void(bool)> done) {
 	if (const auto chat = peer->asChat()) {
 		for (const auto &user : users) {
 			_api.request(MTPmessages_AddChatUser(
 				chat->inputChat,
 				user->inputUser,
-				MTP_int(kForwardMessagesOnAdd)
+				MTP_int(passGroupHistory ? kForwardMessagesOnAdd : 0)
 			)).done([=](const MTPUpdates &result) {
 				chat->session().api().applyUpdates(result);
 				if (done) done(true);
 			}).fail([=](const MTP::Error &error) {
-				ShowAddParticipantsError(error.type(), peer, { 1, user });
+				const auto type = error.type();
+				ShowAddParticipantsError(type, peer, { 1, user }, show);
 				if (done) done(false);
 			}).afterDelay(kSmallDelayMs).send();
 		}
 	} else if (const auto channel = peer->asChannel()) {
 		const auto hasBot = ranges::any_of(users, &UserData::isBot);
 		if (!peer->isMegagroup() && hasBot) {
-			ShowAddParticipantsError("USER_BOT", peer, users);
+			ShowAddParticipantsError("USER_BOT", peer, users, show);
 			return;
 		}
 		auto list = QVector<MTPInputUser>();
@@ -494,8 +524,12 @@ void ChatParticipants::add(
 				channel->session().api().applyUpdates(result);
 				requestCountDelayed(channel);
 				if (callback) callback(true);
+				ChatInviteForbidden(
+					show,
+					channel,
+					CollectForbiddenUsers(&channel->session(), result));
 			}).fail([=](const MTP::Error &error) {
-				ShowAddParticipantsError(error.type(), peer, users);
+				ShowAddParticipantsError(error.type(), peer, users, show);
 				if (callback) callback(false);
 			}).afterDelay(kSmallDelayMs).send();
 		};
@@ -531,6 +565,7 @@ ChatParticipants::Parsed ChatParticipants::ParseRecent(
 		const TLMembers &data) {
 	const auto result = Parse(channel, data);
 	const auto applyLast = channel->isMegagroup()
+		&& channel->canViewMembers()
 		&& (channel->mgInfo->lastParticipants.size() <= result.list.size());
 	if (applyLast) {
 		ApplyLastList(channel, result.availableCount, result.list);
@@ -597,7 +632,7 @@ void ChatParticipants::requestSelf(not_null<ChannelData*> channel) {
 		});
 	}).fail([=](const MTP::Error &error) {
 		_selfParticipantRequests.erase(channel);
-		if (error.type() == qstr("CHANNEL_PRIVATE")) {
+		if (error.type() == u"CHANNEL_PRIVATE"_q) {
 			channel->privateErrorReceived();
 		}
 		finalize();
@@ -671,6 +706,52 @@ void ChatParticipants::unblock(
 	}).send();
 
 	_kickRequests.emplace(kick, requestId);
+}
+
+void ChatParticipants::loadSimilarChannels(not_null<ChannelData*> channel) {
+	if (!channel->isBroadcast()) {
+		return;
+	} else if (const auto i = _similar.find(channel); i != end(_similar)) {
+		if (i->second.requestId
+			|| !i->second.channels.more
+			|| !channel->session().premium()) {
+			return;
+		}
+	}
+	_similar[channel].requestId = _api.request(
+		MTPchannels_GetChannelRecommendations(channel->inputChannel)
+	).done([=](const MTPmessages_Chats &result) {
+		auto &similar = _similar[channel];
+		similar.requestId = 0;
+		auto parsed = ParseSimilar(channel, result);
+		if (similar.channels == parsed) {
+			return;
+		}
+		similar.channels = std::move(parsed);
+		if (const auto history = channel->owner().historyLoaded(channel)) {
+			if (const auto item = history->joinedMessageInstance()) {
+				history->owner().requestItemResize(item);
+			}
+		}
+		_similarLoaded.fire_copy(channel);
+	}).send();
+}
+
+auto ChatParticipants::similar(not_null<ChannelData*> channel)
+-> const Channels & {
+	const auto i = channel->isBroadcast()
+		? _similar.find(channel)
+		: end(_similar);
+	if (i != end(_similar)) {
+		return i->second.channels;
+	}
+	static const auto empty = Channels();
+	return empty;
+}
+
+auto ChatParticipants::similarLoaded() const
+-> rpl::producer<not_null<ChannelData*>> {
+	return _similarLoaded.events();
 }
 
 } // namespace Api

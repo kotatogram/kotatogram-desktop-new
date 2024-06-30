@@ -8,15 +8,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "intro/intro_step.h"
 
 #include "intro/intro_widget.h"
+#include "intro/intro_signup.h"
 #include "storage/localstorage.h"
 #include "storage/storage_account.h"
 #include "lang/lang_keys.h"
 #include "lang/lang_instance.h"
 #include "lang/lang_cloud_manager.h"
 #include "main/main_account.h"
+#include "main/main_app_config.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
+#include "boxes/abstract_box.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "apiwrap.h"
@@ -118,6 +121,10 @@ rpl::producer<QString> Step::nextButtonText() const {
 	return tr::lng_intro_next();
 }
 
+rpl::producer<const style::RoundButton*> Step::nextButtonStyle() const {
+	return rpl::single((const style::RoundButton*)(nullptr));
+}
+
 void Step::goBack() {
 	if (_goCallback) {
 		_goCallback(nullptr, StackAction::Back, Animate::Back);
@@ -136,13 +143,35 @@ void Step::goReplace(Step *step, Animate animate) {
 	}
 }
 
+void Step::finish(const MTPauth_Authorization &auth, QImage &&photo) {
+	auth.match([&](const MTPDauth_authorization &data) {
+		if (data.vuser().type() != mtpc_user
+			|| !data.vuser().c_user().is_self()) {
+			showError(rpl::single(Lang::Hard::ServerError())); // wtf?
+			return;
+		}
+		finish(data.vuser(), std::move(photo));
+	}, [&](const MTPDauth_authorizationSignUpRequired &data) {
+		if (const auto terms = data.vterms_of_service()) {
+			terms->match([&](const MTPDhelp_termsOfService &data) {
+				getData()->termsLock = Window::TermsLock::FromMTP(
+					nullptr,
+					data);
+			});
+		} else {
+			getData()->termsLock = Window::TermsLock();
+		}
+		goReplace<SignupWidget>(Animate::Forward);
+	});
+}
+
 void Step::finish(const MTPUser &user, QImage &&photo) {
 	if (user.type() != mtpc_user
 		|| !user.c_user().is_self()
 		|| !user.c_user().vid().v) {
 		// No idea what to do here.
 		// We could've reset intro and MTP, but this really should not happen.
-		Ui::show(Box<Ui::InformBox>(
+		Ui::show(Ui::MakeInformBox(
 			"Internal error: bad user.is_self() after sign in."));
 		return;
 	}
@@ -164,8 +193,8 @@ void Step::finish(const MTPUser &user, QImage &&photo) {
 	}
 
 	api().request(MTPmessages_GetDialogFilters(
-	)).done([=](const MTPVector<MTPDialogFilter> &result) {
-		createSession(user, photo, result.v);
+	)).done([=](const MTPmessages_DialogFilters &result) {
+		createSession(user, photo, result.data().vfilters().v);
 	}).fail([=] {
 		createSession(user, photo, QVector<MTPDialogFilter>());
 	}).send();
@@ -185,7 +214,11 @@ void Step::createSession(
 	}
 
 	auto settings = std::make_unique<Main::SessionSettings>();
-	settings->setDialogsFiltersEnabled(!filters.isEmpty());
+	const auto hasFilters = ranges::contains(
+		filters,
+		mtpc_dialogFilter,
+		&MTPDialogFilter::type);
+	settings->setDialogsFiltersEnabled(hasFilters);
 
 	const auto account = _account;
 	account->createSession(user, std::move(settings));
@@ -194,12 +227,15 @@ void Step::createSession(
 	account->local().writeMtpData();
 	auto &session = account->session();
 	session.data().chatsFilters().setPreloaded(filters);
-	if (!filters.isEmpty()) {
+	if (hasFilters) {
 		session.saveSettingsDelayed();
 	}
 	if (!photo.isNull()) {
-		session.api().peerPhoto().upload(session.user(), std::move(photo));
+		session.api().peerPhoto().upload(
+			session.user(),
+			{ std::move(photo) });
 	}
+	account->appConfig().refresh();
 	if (session.supportMode()) {
 		PrepareSupportMode(&session);
 	}
@@ -207,7 +243,7 @@ void Step::createSession(
 }
 
 void Step::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 	paintAnimated(p, e->rect());
 }
 
@@ -262,7 +298,7 @@ void Step::showFinished() {
 	activate();
 }
 
-bool Step::paintAnimated(Painter &p, QRect clip) {
+bool Step::paintAnimated(QPainter &p, QRect clip) {
 	if (_slideAnimation) {
 		_slideAnimation->paintFrame(p, (width() - st::introStepWidth) / 2, contentTop(), width());
 		if (!_slideAnimation->animating()) {
@@ -309,19 +345,31 @@ bool Step::paintAnimated(Painter &p, QRect clip) {
 }
 
 void Step::fillSentCodeData(const MTPDauth_sentCode &data) {
+	const auto bad = [](const char *type) {
+		LOG(("API Error: Should not be '%1'.").arg(type));
+	};
+	getData()->codeByTelegram = false;
+	getData()->codeByFragmentUrl = QString();
 	data.vtype().match([&](const MTPDauth_sentCodeTypeApp &data) {
 		getData()->codeByTelegram = true;
 		getData()->codeLength = data.vlength().v;
 	}, [&](const MTPDauth_sentCodeTypeSms &data) {
-		getData()->codeByTelegram = false;
+		getData()->codeLength = data.vlength().v;
+	}, [&](const MTPDauth_sentCodeTypeFragmentSms &data) {
+		getData()->codeByFragmentUrl = qs(data.vurl());
 		getData()->codeLength = data.vlength().v;
 	}, [&](const MTPDauth_sentCodeTypeCall &data) {
-		getData()->codeByTelegram = false;
 		getData()->codeLength = data.vlength().v;
 	}, [&](const MTPDauth_sentCodeTypeFlashCall &) {
-		LOG(("Error: should not be flashcall!"));
-	}, [&](const MTPDauth_sentCodeTypeMissedCall &data) {
-		LOG(("Error: should not be missedcall!"));
+		bad("FlashCall");
+	}, [&](const MTPDauth_sentCodeTypeMissedCall &) {
+		bad("MissedCall");
+	}, [&](const MTPDauth_sentCodeTypeFirebaseSms &) {
+		bad("FirebaseSms");
+	}, [&](const MTPDauth_sentCodeTypeEmailCode &) {
+		bad("EmailCode");
+	}, [&](const MTPDauth_sentCodeTypeSetUpEmailRequired &) {
+		bad("SetUpEmailRequired");
 	});
 }
 
@@ -333,7 +381,7 @@ void Step::hideDescription() {
 	_description->hide(anim::type::normal);
 }
 
-void Step::paintContentSnapshot(Painter &p, const QPixmap &snapshot, float64 alpha, float64 howMuchHidden) {
+void Step::paintContentSnapshot(QPainter &p, const QPixmap &snapshot, float64 alpha, float64 howMuchHidden) {
 	if (!snapshot.isNull()) {
 		auto contentTop = anim::interpolate(height() - (snapshot.height() / cIntRetinaFactor()), height(), howMuchHidden);
 		if (contentTop < height()) {
@@ -365,7 +413,7 @@ void Step::prepareCoverMask() {
 	_coverMask = Ui::PixmapFromImage(std::move(mask));
 }
 
-void Step::paintCover(Painter &p, int top) {
+void Step::paintCover(QPainter &p, int top) {
 	auto coverHeight = top + st::introCoverHeight;
 	if (coverHeight > 0) {
 		p.drawPixmap(QRect(0, 0, width(), coverHeight), _coverMask, QRect(0, -top * cIntRetinaFactor(), _coverMask.width(), coverHeight * cIntRetinaFactor()));

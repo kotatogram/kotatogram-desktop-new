@@ -33,8 +33,7 @@ class RequestsBar final {
 public:
 	RequestsBar(
 		not_null<QWidget*> parent,
-		rpl::producer<RequestsBarContent> content,
-		int userpicRadius);
+		rpl::producer<RequestsBarContent> content);
 	~RequestsBar();
 
 	void show();

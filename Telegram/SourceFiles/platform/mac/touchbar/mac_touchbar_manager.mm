@@ -9,12 +9,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h" // ApiWrap::updateStickers()
 #include "core/application.h"
-#include "data/data_peer.h" // PeerData::canWrite()
+#include "data/data_chat_participant_status.h" // Data::CanSendAnyOf.
+#include "data/data_forum_topic.h"
 #include "data/data_session.h"
 #include "data/stickers/data_stickers.h" // Stickers::setsRef()
 #include "main/main_domain.h"
 #include "main/main_session.h"
-#include "mainwidget.h" // MainWidget::closeBothPlayers
 #include "media/audio/media_audio_capture.h"
 #include "media/player/media_player_instance.h"
 #include "platform/mac/touchbar/mac_touchbar_audio.h"
@@ -144,7 +144,13 @@ const auto kAudioItemIdentifier = @"touchbarAudio";
 				_canApplyMarkdownLast),
 			_controller->sessionController()->activeChatValue(
 			) | rpl::map([](Dialogs::Key k) {
-				return k.peer() && k.history() && k.peer()->canWrite();
+				const auto topic = k.topic();
+				const auto peer = k.peer();
+				const auto rights = ChatRestriction::SendStickers
+					| ChatRestriction::SendOther;
+				return topic
+					? Data::CanSendAnyOf(topic, rights)
+					: (peer && Data::CanSendAnyOf(peer, rights));
 			}) | rpl::distinct_until_changed()
 		) | rpl::start_with_next([=](
 				bool canApplyMarkdown,
@@ -166,9 +172,7 @@ const auto kAudioItemIdentifier = @"touchbarAudio";
 			autorelease];
 		item.groupTouchBar = touchBar;
 		[touchBar closeRequests] | rpl::start_with_next([=] {
-			if (const auto session = _controller->sessionController()) {
-				session->content()->closeBothPlayers();
-			}
+			Media::Player::instance()->stopAndClose();
 		}, [item lifetime]);
 		return [item autorelease];
 	}

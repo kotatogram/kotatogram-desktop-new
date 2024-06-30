@@ -19,13 +19,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "ui/widgets/buttons.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/layers/generic_box.h"
+#include "ui/painter.h"
+#include "ui/vertical_list.h"
 #include "lottie/lottie_icon.h"
 #include "core/application.h"
 #include "core/core_settings.h"
@@ -34,10 +36,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_info.h"
 #include "styles/style_layers.h"
 #include "styles/style_settings.h"
+#include "styles/style_menu_icons.h"
 
 namespace {
 
-constexpr auto kSessionsShortPollTimeout = 60 * crl::time(1000);
+constexpr auto kShortPollTimeout = 60 * crl::time(1000);
 constexpr auto kMaxDeviceModelLength = 32;
 
 using EntryData = Api::Authorizations::Entry;
@@ -70,13 +73,21 @@ public:
 	Row(not_null<RowDelegate*> delegate, const EntryData &data);
 
 	void update(const EntryData &data);
-	void updateName(const QString &name);
 
 	[[nodiscard]] EntryData data() const;
 
 	QString generateName() override;
 	QString generateShortName() override;
-	PaintRoundImageCallback generatePaintUserpicCallback() override;
+	PaintRoundImageCallback generatePaintUserpicCallback(
+		bool forceRound) override;
+
+	QSize rightActionSize() const override {
+		return elementGeometry(2, 0).size();
+	}
+	QMargins rightActionMargins() const override {
+		const auto rect = elementGeometry(2, 0);
+		return QMargins(0, rect.y(), -(rect.x() + rect.width()), 0);
+	}
 
 	int elementsCount() const override;
 	QRect elementGeometry(int element, int outerWidth) const override;
@@ -105,18 +116,18 @@ private:
 void RenameBox(not_null<Ui::GenericBox*> box) {
 	box->setTitle(tr::lng_settings_rename_device_title());
 
-	const auto skip = st::settingsSubsectionTitlePadding.top();
+	const auto skip = st::defaultSubsectionTitlePadding.top();
 	box->addRow(
 		object_ptr<Ui::FlatLabel>(
 			box,
 			tr::lng_settings_device_name(),
-			st::settingsSubsectionTitle),
+			st::defaultSubsectionTitle),
 		st::boxRowPadding + style::margins(0, skip, 0, 0));
 	const auto name = box->addRow(
 		object_ptr<Ui::InputField>(
 			box,
 			st::settingsDeviceName,
-			rpl::single(Platform::DeviceModelPretty()),
+			rpl::single(QSysInfo::machineHostName()),
 			Core::App().settings().customDeviceModel()),
 		st::boxRowPadding - style::margins(
 			st::settingsDeviceName.textMargins.left(),
@@ -134,7 +145,7 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 		Core::App().settings().setCustomDeviceModel(result);
 		Core::App().saveSettingsDelayed();
 	};
-	QObject::connect(name, &Ui::InputField::submitted, submit);
+	name->submits() | rpl::start_with_next(submit, name->lifetime());
 	box->addButton(tr::lng_settings_save(), submit);
 	box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 }
@@ -200,7 +211,7 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 		return Type::Other;
 	} else if (const auto browser = detectBrowser()) {
 		return *browser;
-    } else if (device.contains("iphone")) {
+	} else if (device.contains("iphone")) {
 		return Type::iPhone;
 	} else if (device.contains("ipad")) {
 		return Type::iPad;
@@ -210,35 +221,49 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 		return *desktop;
 	} else if (platform.contains("android") || system.contains("android")) {
 		return Type::Android;
-    } else if (platform.contains("ios") || system.contains("ios")) {
+	} else if (platform.contains("ios") || system.contains("ios")) {
 		return Type::iPhone;
-    }
+	}
 	return Type::Other;
 }
 
-[[nodiscard]] style::color ColorForType(Type type) {
-	switch (type) {
-	case Type::Windows:
-	case Type::Mac:
-	case Type::Other:
-		return st::historyPeer4UserpicBg; // blue
-	case Type::Ubuntu:
-		return st::historyPeer8UserpicBg; // orange
-	case Type::Linux:
-		return st::historyPeer5UserpicBg; // purple
-	case Type::iPhone:
-	case Type::iPad:
-		return st::historyPeer7UserpicBg; // sea
-	case Type::Android:
-		return st::historyPeer2UserpicBg; // green
-	case Type::Web:
-	case Type::Chrome:
-	case Type::Edge:
-	case Type::Firefox:
-	case Type::Safari:
-		return st::historyPeer6UserpicBg; // pink
-	}
-	Unexpected("Type in ColorForType.");
+[[nodiscard]] QBrush GradientForType(Type type, int size) {
+	const auto colors = [&]() -> std::pair<style::color, style::color> {
+		switch (type) {
+		case Type::Windows:
+		case Type::Mac:
+		case Type::Other:
+			// Blue.
+			return { st::historyPeer4UserpicBg, st::historyPeer4UserpicBg2 };
+		case Type::Ubuntu:
+			// Orange.
+			return { st::historyPeer8UserpicBg, st::historyPeer8UserpicBg2 };
+		case Type::Linux:
+			// Purple.
+			return { st::historyPeer5UserpicBg, st::historyPeer5UserpicBg2 };
+		case Type::iPhone:
+		case Type::iPad:
+			// Sea.
+			return { st::historyPeer7UserpicBg, st::historyPeer7UserpicBg2 };
+		case Type::Android:
+			// Green.
+			return { st::historyPeer2UserpicBg, st::historyPeer2UserpicBg2 };
+		case Type::Web:
+		case Type::Chrome:
+		case Type::Edge:
+		case Type::Firefox:
+		case Type::Safari:
+			// Pink.
+			return { st::historyPeer6UserpicBg, st::historyPeer6UserpicBg2 };
+		}
+		Unexpected("Type in GradientForType.");
+	}();
+	auto gradient = QLinearGradient(0, 0, 0, size);
+	gradient.setStops({
+		{ 0.0, colors.first->c },
+		{ 1.0, colors.second->c },
+	});
+	return QBrush(std::move(gradient));
 }
 
 [[nodiscard]] const style::icon &IconForType(Type type) {
@@ -289,7 +314,7 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 		Unexpected("Type in LottieForType.");
 	}();
 	const auto size = st::sessionBigLottieSize;
-	return std::make_unique<Lottie::Icon>(Lottie::IconDescriptor{
+	return Lottie::MakeIcon({
 		.path = u":/icons/settings/devices/"_q + path + u".lottie"_q,
 		.sizeOverride = QSize(size, size),
 	});
@@ -306,7 +331,7 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 
 	auto p = QPainter(&result);
 	auto hq = PainterHighQualityEnabler(p);
-	p.setBrush(ColorForType(type));
+	p.setBrush(GradientForType(type, size));
 	p.setPen(Qt::NoPen);
 	p.drawEllipse(rect);
 	IconForType(type).paintInCenter(p, rect);
@@ -342,7 +367,7 @@ void RenameBox(not_null<Ui::GenericBox*> box) {
 
 	auto p = QPainter(&state->background);
 	auto hq = PainterHighQualityEnabler(p);
-	p.setBrush(ColorForType(type));
+	p.setBrush(GradientForType(type, size));
 	p.setPen(Qt::NoPen);
 	p.drawEllipse(rect);
 	if (const auto icon = IconBigForType(type)) {
@@ -438,32 +463,31 @@ void SessionInfoBox(
 
 	using namespace Settings;
 	const auto container = box->verticalLayout();
-	AddDivider(container);
-	AddSkip(container, st::sessionSubtitleSkip);
-	AddSubsectionTitle(container, tr::lng_sessions_info());
+	Ui::AddDivider(container);
+	Ui::AddSkip(container, st::sessionSubtitleSkip);
+	Ui::AddSubsectionTitle(container, tr::lng_sessions_info());
 
-	const auto add = [&](rpl::producer<QString> label, QString value) {
-		if (value.isEmpty()) {
-			return;
-		}
-		container->add(
-			object_ptr<Ui::FlatLabel>(
-				container,
-				rpl::single(value),
-				st::boxLabel),
-			st::boxRowPadding + st::sessionValuePadding);
-		container->add(
-			object_ptr<Ui::FlatLabel>(
-				container,
-				std::move(label),
-				st::sessionValueLabel),
-			(st::boxRowPadding
-				+ style::margins{ 0, 0, 0, st::sessionValueSkip }));
-	};
-	add(tr::lng_sessions_application(), data.info);
-	add(tr::lng_sessions_system(), data.system);
-	add(tr::lng_sessions_ip(), data.ip);
-	add(tr::lng_sessions_location(), data.location);
+	AddSessionInfoRow(
+		container,
+		tr::lng_sessions_application(),
+		data.info,
+		st::menuIconDevices);
+	AddSessionInfoRow(
+		container,
+		tr::lng_sessions_system(),
+		data.system,
+		st::menuIconInfo);
+	AddSessionInfoRow(
+		container,
+		tr::lng_sessions_ip(),
+		data.ip,
+		st::menuIconIpAddress);
+	AddSessionInfoRow(
+		container,
+		tr::lng_sessions_location(),
+		data.location,
+		st::menuIconAddress);
+
 	AddSkip(container, st::sessionValueSkip);
 	if (!data.location.isEmpty()) {
 		AddDividerText(container, tr::lng_sessions_location_about());
@@ -501,12 +525,6 @@ void Row::update(const EntryData &data) {
 	_delegate->rowUpdateRow(this);
 }
 
-void Row::updateName(const QString &name) {
-	_data.name = name;
-	refreshName(st::sessionListItem);
-	_delegate->rowUpdateRow(this);
-}
-
 EntryData Row::data() const {
 	return _data;
 }
@@ -519,9 +537,9 @@ QString Row::generateShortName() {
 	return generateName();
 }
 
-PaintRoundImageCallback Row::generatePaintUserpicCallback() {
+PaintRoundImageCallback Row::generatePaintUserpicCallback(bool forceRound) {
 	return [=](
-			Painter &p,
+			QPainter &p,
 			int x,
 			int y,
 			int outerWidth,
@@ -587,7 +605,7 @@ void Row::elementsPaint(
 			: st::sessionTerminate.icon;
 		icon.paint(p, position.x(), position.y(), outerWidth);
 	}
-	p.setFont(st::msgFont);
+	p.setFont(st::normalFont);
 	p.setPen(st::sessionInfoFg);
 	const auto locationLeft = st::sessionListItem.namePosition.x();
 	const auto available = outerWidth - locationLeft;
@@ -598,8 +616,6 @@ void Row::elementsPaint(
 		available,
 		outerWidth);
 }
-
-} // namespace
 
 class SessionsContent : public Ui::RpWidget {
 public:
@@ -636,7 +652,7 @@ private:
 	Full _data;
 
 	object_ptr<Inner> _inner;
-	QPointer<Ui::ConfirmBox> _terminateBox;
+	QPointer<Ui::BoxContent> _terminateBox;
 
 	base::Timer _shortPollTimer;
 
@@ -667,8 +683,6 @@ public:
 		style::margins margins = {});
 
 private:
-	void subscribeToCustomDeviceModel();
-
 	const not_null<Main::Session*> _session;
 
 	rpl::event_stream<uint64> _terminateRequests;
@@ -744,7 +758,7 @@ void SessionsContent::setupContent() {
 		_inner->setVisible(!value);
 	}, lifetime());
 
-	_authorizations->listChanges(
+	_authorizations->listValue(
 	) | rpl::start_with_next([=](const Api::Authorizations::List &list) {
 		parse(list);
 	}, lifetime());
@@ -775,7 +789,7 @@ void SessionsContent::parse(const Api::Authorizations::List &list) {
 
 	_inner->showData(_data);
 
-	_shortPollTimer.callOnce(kSessionsShortPollTimeout);
+	_shortPollTimer.callOnce(kShortPollTimeout);
 }
 
 void SessionsContent::resizeEvent(QResizeEvent *e) {
@@ -800,7 +814,7 @@ void SessionsContent::paintEvent(QPaintEvent *e) {
 }
 
 void SessionsContent::shortPollSessions() {
-	const auto left = kSessionsShortPollTimeout
+	const auto left = kShortPollTimeout
 		- (crl::now() - _authorizations->lastReceivedTime());
 	if (left > 0) {
 		parse(_authorizations->list());
@@ -823,13 +837,14 @@ void SessionsContent::terminate(Fn<void()> terminateRequest, QString message) {
 		}
 		terminateRequest();
 	});
-	_terminateBox = Ui::show(
-		Box<Ui::ConfirmBox>(
-			message,
-			tr::lng_settings_reset_button(tr::now),
-			st::attentionBoxButton,
-			callback),
-		Ui::LayerOption::KeepOther);
+	auto box = Ui::MakeConfirmBox({
+		.text = message,
+		.confirmed = callback,
+		.confirmText = tr::lng_settings_reset_button(),
+		.confirmStyle = &st::attentionBoxButton,
+	});
+	_terminateBox = Ui::MakeWeak(box.data());
+	_controller->show(std::move(box));
 }
 
 void SessionsContent::terminateOne(uint64 hash) {
@@ -905,13 +920,13 @@ void SessionsContent::Inner::setupContent() {
 	) | rpl::start_with_next([=](QSize outer, QPoint position) {
 		const auto x = st::sessionTerminateSkip
 			+ st::sessionTerminate.iconPosition.x();
-		const auto y = st::settingsSubsectionTitlePadding.top()
-			+ st::settingsSubsectionTitle.style.font->ascent
+		const auto y = st::defaultSubsectionTitlePadding.top()
+			+ st::defaultSubsectionTitle.style.font->ascent
 			- st::defaultLinkButton.font->ascent;
 		rename->moveToRight(x, y, outer.width());
 	}, rename->lifetime());
 	rename->setClickedCallback([=] {
-		Ui::show(Box(RenameBox), Ui::LayerOption::KeepOther);
+		_controller->show(Box(RenameBox));
 	});
 
 	const auto session = &_controller->session();
@@ -925,13 +940,11 @@ void SessionsContent::Inner::setupContent() {
 			object_ptr<Ui::VerticalLayout>(content)))->setDuration(0);
 	const auto terminateInner = terminateWrap->entity();
 	_terminateAll = terminateInner->add(
-		CreateButton(
+		CreateButtonWithIcon(
 			terminateInner,
 			tr::lng_sessions_terminate_all(),
-			st::sessionsTerminateAll,
-			&st::sessionsTerminateAllIcon,
-			st::sessionsTerminateAllIconLeft,
-			&st::attentionButtonFg));
+			st::infoBlockButton,
+			{ .icon = &st::infoIconBlock }));
 	AddSkip(terminateInner);
 	AddDividerText(terminateInner, tr::lng_sessions_terminate_all_about());
 
@@ -968,9 +981,8 @@ void SessionsContent::Inner::setupContent() {
 	AddButtonWithLabel(
 		ttlInner,
 		tr::lng_settings_terminate_if(),
-		_ttlDays.value(
-	) | rpl::map(SelfDestructionBox::DaysLabel),
-		st::settingsButton
+		_ttlDays.value() | rpl::map(SelfDestructionBox::DaysLabel),
+		st::settingsButtonNoIcon
 	)->addClickHandler([=] {
 		_controller->show(Box<SelfDestructionBox>(
 			&_controller->session(),
@@ -987,7 +999,7 @@ void SessionsContent::Inner::setupContent() {
 				content,
 				tr::lng_sessions_other_desc(),
 				st::boxDividerLabel),
-			st::settingsDividerLabelPadding))->setDuration(0);
+			st::defaultBoxDividerLabelPadding))->setDuration(0);
 
 	terminateWrap->toggleOn(
 		rpl::combine(
@@ -1032,18 +1044,6 @@ SessionsContent::ListController::ListController(
 
 Main::Session &SessionsContent::ListController::session() const {
 	return *_session;
-}
-
-void SessionsContent::ListController::subscribeToCustomDeviceModel() {
-	Core::App().settings().deviceModelChanges(
-	) | rpl::start_with_next([=](const QString &model) {
-		for (auto i = 0; i != delegate()->peerListFullRowsCount(); ++i) {
-			const auto row = delegate()->peerListRowAt(i);
-			if (!row->id()) {
-				static_cast<Row*>(row.get())->updateName(model);
-			}
-		}
-	}, lifetime());
 }
 
 void SessionsContent::ListController::prepare() {
@@ -1134,27 +1134,7 @@ auto SessionsContent::ListController::Add(
 	return controller;
 }
 
-SessionsBox::SessionsBox(
-	QWidget*,
-	not_null<Window::SessionController*> controller)
-: _controller(controller) {
-}
-
-void SessionsBox::prepare() {
-	setTitle(tr::lng_sessions_other_header());
-
-	addButton(tr::lng_close(), [=] { closeBox(); });
-
-	const auto w = st::boxWideWidth;
-
-	const auto content = setInnerWidget(
-		object_ptr<SessionsContent>(this, _controller),
-		st::sessionsScroll);
-	content->resize(w, st::noContactsHeight);
-	content->setupContent();
-
-	setDimensions(w, st::sessionsHeight);
-}
+} // namespace
 
 namespace Settings {
 
@@ -1165,6 +1145,10 @@ Sessions::Sessions(
 	setupContent(controller);
 }
 
+rpl::producer<QString> Sessions::title() {
+	return tr::lng_settings_sessions_title();
+}
+
 void Sessions::setupContent(not_null<Window::SessionController*> controller) {
 	const auto container = Ui::CreateChild<Ui::VerticalLayout>(this);
 	AddSkip(container, st::settingsPrivacySkip);
@@ -1173,6 +1157,43 @@ void Sessions::setupContent(not_null<Window::SessionController*> controller) {
 	content->setupContent();
 
 	Ui::ResizeFitChild(this, container);
+}
+
+void AddSessionInfoRow(
+		not_null<Ui::VerticalLayout*> container,
+		rpl::producer<QString> label,
+		const QString &value,
+		const style::icon &icon) {
+	if (value.isEmpty()) {
+		return;
+	}
+
+	const auto text = container->add(
+		object_ptr<Ui::FlatLabel>(
+			container,
+			rpl::single(value),
+			st::boxLabel),
+		st::boxRowPadding + st::sessionValuePadding);
+	const auto left = st::sessionValuePadding.left();
+	container->add(
+		object_ptr<Ui::FlatLabel>(
+			container,
+			std::move(label),
+			st::sessionValueLabel),
+		(st::boxRowPadding
+			+ style::margins{ left, 0, 0, st::sessionValueSkip }));
+
+	const auto widget = Ui::CreateChild<Ui::RpWidget>(container.get());
+	widget->resize(icon.size());
+
+	text->topValue() | rpl::start_with_next([=](int top) {
+		widget->move(st::sessionValueIconPosition + QPoint(0, top));
+	}, widget->lifetime());
+
+	widget->paintRequest() | rpl::start_with_next([=, &icon] {
+		auto p = QPainter(widget);
+		icon.paintInCenter(p, widget->rect());
+	}, widget->lifetime());
 }
 
 } // namespace Settings

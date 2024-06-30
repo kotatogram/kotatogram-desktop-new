@@ -71,7 +71,8 @@ public:
 
 	void setMode(PanelMode mode, not_null<QWidget*> parent);
 	void setControlsShown(float64 shown);
-	void setGeometry(QRect geometry);
+	void setCursorShown(bool shown);
+	void setGeometry(bool fullscreen, QRect geometry);
 	void resizeToWidth(int newWidth);
 	void setScrollTop(int scrollTop);
 
@@ -79,7 +80,8 @@ public:
 		const VideoEndpoint &endpoint,
 		VideoTileTrack track,
 		rpl::producer<QSize> trackSize,
-		rpl::producer<bool> pinned);
+		rpl::producer<bool> pinned,
+		bool self);
 	void remove(const VideoEndpoint &endpoint);
 	void showLarge(const VideoEndpoint &endpoint);
 
@@ -175,6 +177,8 @@ private:
 	std::vector<not_null<VideoTile*>> _tilesForOrder;
 	rpl::variable<int> _fullHeight = 0;
 	bool _hasTwoOrMore = false;
+	bool _fullscreen = false;
+	bool _cursorHidden = false;
 	int _scrollTop = 0;
 	QImage _shadow;
 	rpl::event_stream<VideoEndpoint> _clicks;

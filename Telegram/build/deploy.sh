@@ -73,6 +73,9 @@ if [ "$BuildTarget" == "mac" ]; then
   BackupPath="$HOME/Projects/backup/tdesktop"
 elif [ "$BuildTarget" == "linux" ]; then
   BackupPath="/media/psf/Home/Projects/backup/tdesktop"
+  if [ ! -d "$BackupPath" ]; then
+    BackupPath="/mnt/c/Telegram/Projects/backup/tdesktop"
+  fi
 else
   Error "Can't deploy here"
 fi
@@ -194,7 +197,7 @@ if [ "$DeployLinux" == "1" ]; then
   Files+=("tlinux/$LinuxUpdateFile" "tlinux/$LinuxSetupFile")
 fi
 cd $DeployPath
-rsync -avR --progress ${Files[@]} "$FullScriptPath/../../../DesktopPrivate/remote/files"
+rsync -avR --no-g --progress ${Files[@]} "$FullScriptPath/../../../DesktopPrivate/remote/files"
 
 echo "Version $AppVersionStrFull was deployed!"
 cd $FullExecPath

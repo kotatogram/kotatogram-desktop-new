@@ -7,10 +7,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/flags.h"
+
 #include <rpl/producer.h>
 #include <rpl/map.h>
 
 struct ChannelLocation;
+
+namespace Data {
+class ForumTopic;
+class Thread;
+} // namespace Data
 
 namespace Main {
 class Session;
@@ -26,8 +33,7 @@ namespace Storage {
 enum class SharedMediaType : signed char;
 } // namespace Storage
 
-namespace Info {
-namespace Profile {
+namespace Info::Profile {
 
 inline auto ToSingleLine() {
 	return rpl::map([](const QString &text) {
@@ -40,47 +46,82 @@ rpl::producer<not_null<PeerData*>> MigratedOrMeValue(
 
 QString IDString(not_null<PeerData*> peer);
 
-rpl::producer<TextWithEntities> IDValue(not_null<PeerData*> peer);
-rpl::producer<TextWithEntities> NameValue(not_null<PeerData*> peer);
-rpl::producer<TextWithEntities> PhoneValue(not_null<UserData*> user);
-rpl::producer<TextWithEntities> PhoneOrHiddenValue(not_null<UserData*> user);
-rpl::producer<TextWithEntities> UsernameValue(not_null<UserData*> user);
+[[nodiscard]] rpl::producer<TextWithEntities> IDValue(
+	not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<QString> NameValue(not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<QString> TitleValue(
+	not_null<Data::ForumTopic*> topic);
+[[nodiscard]] rpl::producer<DocumentId> IconIdValue(
+	not_null<Data::ForumTopic*> topic);
+[[nodiscard]] rpl::producer<int32> ColorIdValue(
+	not_null<Data::ForumTopic*> topic);
+[[nodiscard]] rpl::producer<TextWithEntities> PhoneValue(
+	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<TextWithEntities> PhoneOrHiddenValue(
+	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<TextWithEntities> UsernameValue(
+	not_null<UserData*> user,
+	bool primary = false);
+[[nodiscard]] rpl::producer<std::vector<TextWithEntities>> UsernamesValue(
+	not_null<PeerData*> peer);
 [[nodiscard]] TextWithEntities AboutWithEntities(
 	not_null<PeerData*> peer,
 	const QString &value);
-rpl::producer<TextWithEntities> AboutValue(not_null<PeerData*> peer);
-rpl::producer<QString> LinkValue(not_null<PeerData*> peer);
-rpl::producer<const ChannelLocation*> LocationValue(
-	not_null<ChannelData*> channel);
-rpl::producer<bool> NotificationsEnabledValue(not_null<PeerData*> peer);
-rpl::producer<bool> IsContactValue(not_null<UserData*> user);
-rpl::producer<bool> CanInviteBotToGroupValue(not_null<UserData*> user);
-rpl::producer<bool> CanShareContactValue(not_null<UserData*> user);
-rpl::producer<bool> CanAddContactValue(not_null<UserData*> user);
-rpl::producer<bool> HasLinkedChatValue(not_null<ChannelData*> channel);
-rpl::producer<bool> AmInChannelValue(not_null<ChannelData*> channel);
-rpl::producer<int> MembersCountValue(not_null<PeerData*> peer);
-rpl::producer<int> PendingRequestsCountValue(not_null<PeerData*> peer);
-rpl::producer<int> AdminsCountValue(not_null<PeerData*> peer);
-rpl::producer<int> RestrictionsCountValue(not_null<PeerData*> peer);
-rpl::producer<int> RestrictedCountValue(not_null<ChannelData*> channel);
-rpl::producer<int> KickedCountValue(not_null<ChannelData*> channel);
-rpl::producer<int> SharedMediaCountValue(
+[[nodiscard]] rpl::producer<TextWithEntities> AboutValue(
+	not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<QString> LinkValue(
 	not_null<PeerData*> peer,
+	bool primary = false);
+[[nodiscard]] rpl::producer<const ChannelLocation*> LocationValue(
+	not_null<ChannelData*> channel);
+[[nodiscard]] rpl::producer<bool> NotificationsEnabledValue(
+	not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<bool> NotificationsEnabledValue(
+	not_null<Data::Thread*> thread);
+[[nodiscard]] rpl::producer<bool> IsContactValue(not_null<UserData*> user);
+[[nodiscard]] rpl::producer<QString> InviteToChatButton(
+	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<QString> InviteToChatAbout(
+	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<bool> CanShareContactValue(
+	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<bool> CanAddContactValue(
+	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<bool> HasLinkedChatValue(
+	not_null<ChannelData*> channel);
+[[nodiscard]] rpl::producer<bool> AmInChannelValue(
+	not_null<ChannelData*> channel);
+[[nodiscard]] rpl::producer<int> MembersCountValue(not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<int> PendingRequestsCountValue(
+	not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<int> AdminsCountValue(not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<int> RestrictionsCountValue(
+	not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<int> RestrictedCountValue(
+	not_null<ChannelData*> channel);
+[[nodiscard]] rpl::producer<int> KickedCountValue(
+	not_null<ChannelData*> channel);
+[[nodiscard]] rpl::producer<int> SharedMediaCountValue(
+	not_null<PeerData*> peer,
+	MsgId topicRootId,
 	PeerData *migrated,
 	Storage::SharedMediaType type);
-rpl::producer<int> CommonGroupsCountValue(not_null<UserData*> user);
-rpl::producer<bool> CanAddMemberValue(not_null<PeerData*> peer);
-rpl::producer<int> FullReactionsCountValue(not_null<Main::Session*> peer);
-rpl::producer<int> AllowedReactionsCountValue(not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<int> CommonGroupsCountValue(
+	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<int> SimilarChannelsCountValue(
+	not_null<ChannelData*> channel);
+[[nodiscard]] rpl::producer<int> SavedSublistCountValue(
+	not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<bool> CanAddMemberValue(
+	not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<int> FullReactionsCountValue(
+	not_null<Main::Session*> peer);
+[[nodiscard]] rpl::producer<bool> CanViewParticipantsValue(
+	not_null<ChannelData*> megagroup);
 
-enum class Badge {
-	None,
-	Verified,
-	Scam,
-	Fake,
-};
-rpl::producer<Badge> BadgeValue(not_null<PeerData*> peer);
+enum class BadgeType;
+[[nodiscard]] rpl::producer<BadgeType> BadgeValue(not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<DocumentId> EmojiStatusIdValue(
+	not_null<PeerData*> peer);
 
-} // namespace Profile
-} // namespace Info
+} // namespace Info::Profile

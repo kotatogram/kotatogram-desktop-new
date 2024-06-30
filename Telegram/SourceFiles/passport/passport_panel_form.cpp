@@ -13,18 +13,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/abstract_box.h"
 #include "core/click_handler_types.h"
 #include "data/data_user.h"
+#include "ui/controls/userpic_button.h"
 #include "ui/effects/animations.h"
-#include "ui/widgets/shadow.h"
+#include "ui/effects/scroll_content_shadow.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/box_content_divider.h"
 #include "ui/wrap/vertical_layout.h"
-#include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/text/text_utilities.h"
 #include "ui/text/text_options.h"
-#include "ui/special_buttons.h"
 #include "styles/style_passport.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
@@ -37,8 +36,6 @@ PanelForm::PanelForm(
 : RpWidget(parent)
 , _controller(controller)
 , _scroll(this, st::passportPanelScroll)
-, _topShadow(this)
-, _bottomShadow(this)
 , _submit(
 		this,
 		tr::lng_passport_authorize(),
@@ -53,15 +50,7 @@ void PanelForm::setupControls() {
 		_controller->submitForm();
 	});
 
-	using namespace rpl::mappers;
-
-	_topShadow->toggleOn(
-		_scroll->scrollTopValue() | rpl::map(_1 > 0));
-	_bottomShadow->toggleOn(rpl::combine(
-		_scroll->scrollTopValue(),
-		_scroll->heightValue(),
-		inner->heightValue(),
-		_1 + _2 < _3));
+	SetupShadowsToScrollContent(this, _scroll, inner->heightValue());
 }
 
 not_null<Ui::RpWidget*> PanelForm::setupContent() {
@@ -84,7 +73,6 @@ not_null<Ui::RpWidget*> PanelForm::setupContent() {
 		object_ptr<Ui::UserpicButton>(
 			userpicWrap,
 			bot,
-			Ui::UserpicButton::Role::Custom,
 			st::passportFormUserpic));
 	userpicWrap->widthValue(
 	) | rpl::start_with_next([=](int width) {
@@ -96,7 +84,7 @@ not_null<Ui::RpWidget*> PanelForm::setupContent() {
 			inner,
 			object_ptr<Ui::FlatLabel>(
 				inner,
-				tr::lng_passport_request1(tr::now, lt_bot, bot->name),
+				tr::lng_passport_request1(tr::now, lt_bot, bot->name()),
 				st::passportPasswordLabelBold)),
 		st::passportFormAbout1Padding)->entity();
 
@@ -156,19 +144,24 @@ not_null<Ui::RpWidget*> PanelForm::setupContent() {
 		});
 	}, lifetime());
 	const auto policyUrl = _controller->privacyPolicyUrl();
+	auto policyLink = tr::lng_passport_policy(
+		lt_bot,
+		rpl::single(bot->name())
+	) | Ui::Text::ToLink(
+		policyUrl
+	) | rpl::map([=](TextWithEntities &&text) {
+		return Ui::Text::Wrapped(std::move(text), EntityType::Bold);
+	});
 	auto text = policyUrl.isEmpty()
 		? tr::lng_passport_allow(
 			lt_bot,
-			rpl::single('@' + bot->username)
+			rpl::single('@' + bot->username())
 		) | Ui::Text::ToWithEntities()
 		: tr::lng_passport_accept_allow(
 			lt_policy,
-			tr::lng_passport_policy(
-				lt_bot,
-				rpl::single(bot->name)
-			) | Ui::Text::ToLink(policyUrl),
+			std::move(policyLink),
 			lt_bot,
-			rpl::single('@' + bot->username) | Ui::Text::ToWithEntities(),
+			rpl::single('@' + bot->username()) | Ui::Text::ToWithEntities(),
 			Ui::Text::WithEntities);
 	const auto policy = inner->add(
 		object_ptr<Ui::FlatLabel>(
@@ -188,10 +181,6 @@ void PanelForm::resizeEvent(QResizeEvent *e) {
 void PanelForm::updateControlsGeometry() {
 	const auto submitTop = height() - _submit->height();
 	_scroll->setGeometry(0, 0, width(), submitTop);
-	_topShadow->resizeToWidth(width());
-	_topShadow->moveToLeft(0, 0);
-	_bottomShadow->resizeToWidth(width());
-	_bottomShadow->moveToLeft(0, submitTop - st::lineWidth);
 	_submit->setFullWidth(width());
 	_submit->moveToLeft(0, submitTop);
 

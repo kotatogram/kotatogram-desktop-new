@@ -9,12 +9,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "data/data_peer.h"
 #include "data/data_chat_participant_status.h"
+#include "data/data_peer_bot_commands.h"
 
 enum class ChatAdminRight;
 
 enum class ChatDataFlag {
 	Left = (1 << 0),
-	Kicked = (1 << 1),
+	//Kicked = (1 << 1),
 	Creator = (1 << 2),
 	Deactivated = (1 << 3),
 	Forbidden = (1 << 4),
@@ -26,7 +27,7 @@ enum class ChatDataFlag {
 inline constexpr bool is_flag_type(ChatDataFlag) { return true; };
 using ChatDataFlags = base::flags<ChatDataFlag>;
 
-class ChatData : public PeerData {
+class ChatData final : public PeerData {
 public:
 	using Flag = ChatDataFlag;
 	using Flags = Data::Flags<ChatDataFlags>;
@@ -80,16 +81,10 @@ public:
 		return flags() & Flag::Forbidden;
 	}
 	[[nodiscard]] bool amIn() const {
-		return !isForbidden()
-			&& !isDeactivated()
-			&& !haveLeft()
-			&& !wasKicked();
+		return !isForbidden() && !isDeactivated() && !haveLeft();
 	}
 	[[nodiscard]] bool haveLeft() const {
 		return flags() & ChatDataFlag::Left;
-	}
-	[[nodiscard]] bool wasKicked() const {
-		return flags() & ChatDataFlag::Kicked;
 	}
 	[[nodiscard]] bool amCreator() const {
 		return flags() & ChatDataFlag::Creator;
@@ -105,7 +100,6 @@ public:
 		not_null<UserData*> user);
 
 	// Like in ChannelData.
-	[[nodiscard]] bool canWrite() const;
 	[[nodiscard]] bool allowsForwarding() const;
 	[[nodiscard]] bool canEditInformation() const;
 	[[nodiscard]] bool canEditPermissions() const;
@@ -115,7 +109,6 @@ public:
 	[[nodiscard]] bool canAddMembers() const;
 	[[nodiscard]] bool canAddAdmins() const;
 	[[nodiscard]] bool canBanMembers() const;
-	[[nodiscard]] bool canSendPolls() const;
 	[[nodiscard]] bool anyoneCanAddMembers() const;
 
 	void applyEditAdmin(not_null<UserData*> user, bool isAdmin);
@@ -148,17 +141,14 @@ public:
 	}
 	void setGroupCall(
 		const MTPInputGroupCall &call,
-		TimeId scheduleDate = 0);
+		TimeId scheduleDate = 0,
+		bool rtmp = false);
 	void clearGroupCall();
 	void setGroupCallDefaultJoinAs(PeerId peerId);
 	[[nodiscard]] PeerId groupCallDefaultJoinAs() const;
 
-	void setBotCommands(const MTPVector<MTPBotInfo> &data);
-	void setBotCommands(
-		UserId botId,
-		const MTPVector<MTPBotCommand> &data);
-	[[nodiscard]] auto botCommands() const
-		-> const base::flat_map<UserId, std::vector<BotCommand>> & {
+	void setBotCommands(const std::vector<Data::BotCommands> &commands);
+	[[nodiscard]] const Data::ChatBotCommands &botCommands() const {
 		return _botCommands;
 	}
 
@@ -175,8 +165,8 @@ public:
 		int count,
 		std::vector<UserId> recentRequesters);
 
-	void setAllowedReactions(base::flat_set<QString> list);
-	[[nodiscard]] const base::flat_set<QString> &allowedReactions() const;
+	void setAllowedReactions(Data::AllowedReactions value);
+	[[nodiscard]] const Data::AllowedReactions &allowedReactions() const;
 
 	// Still public data members.
 	const MTPlong inputChat;
@@ -202,11 +192,11 @@ private:
 	int _pendingRequestsCount = 0;
 	std::vector<UserId> _recentRequesters;
 
-	base::flat_set<QString> _allowedReactions;
+	Data::AllowedReactions _allowedReactions;
 
 	std::unique_ptr<Data::GroupCall> _call;
 	PeerId _callDefaultJoinAs = 0;
-	base::flat_map<UserId, std::vector<BotCommand>> _botCommands;
+	Data::ChatBotCommands _botCommands;
 
 	ChannelData *_migratedTo = nullptr;
 	rpl::lifetime _lifetime;

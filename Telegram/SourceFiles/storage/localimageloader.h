@@ -9,13 +9,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/variant.h"
 #include "api/api_common.h"
-#include "ui/chat/attach/attach_prepare.h"
+
+namespace Ui {
+struct PreparedFileInformation;
+} // namespace Ui
 
 namespace Main {
 class Session;
 } // namespace Main
 
-constexpr auto kFileSizeLimit = 2000 * 1024 * 1024; // Load files up to 2000MB
+// Load files up to 2'000 MB.
+constexpr auto kFileSizeLimit = 2'000 * int64(1024 * 1024);
+
+// Load files up to 4'000 MB.
+constexpr auto kFileSizePremiumLimit = 4'000 * int64(1024 * 1024);
+
+extern const char kOptionSendLargePhotos[];
+
+[[nodiscard]] int PhotoSideLimit();
 
 enum class SendMediaType {
 	Photo,
@@ -25,49 +36,14 @@ enum class SendMediaType {
 	Secure,
 };
 
-struct SendMediaPrepare {
-	SendMediaPrepare(
-		const QString &file,
-		const PeerId &peer,
-		SendMediaType type,
-		MsgId replyTo);
-	SendMediaPrepare(
-		const QImage &img,
-		const PeerId &peer,
-		SendMediaType type,
-		MsgId replyTo);
-	SendMediaPrepare(
-		const QByteArray &data,
-		const PeerId &peer,
-		SendMediaType type,
-		MsgId replyTo);
-	SendMediaPrepare(
-		const QByteArray &data,
-		int duration,
-		const PeerId &peer,
-		SendMediaType type,
-		MsgId replyTo);
-
-	PhotoId id;
-	QString file;
-	QImage img;
-	QByteArray data;
-	PeerId peer;
-	SendMediaType type;
-	int duration = 0;
-	MsgId replyTo;
-
-};
-using SendMediaPrepareList = QList<SendMediaPrepare>;
-
-using UploadFileParts =  QMap<int, QByteArray>;
+using UploadFileParts = QMap<int, QByteArray>;
 struct SendMediaReady {
 	SendMediaReady() = default; // temp
 	SendMediaReady(
 		SendMediaType type,
 		const QString &file,
 		const QString &filename,
-		int32 filesize,
+		int64 filesize,
 		const QByteArray &data,
 		const uint64 &id,
 		const uint64 &thumbId,
@@ -76,13 +52,11 @@ struct SendMediaReady {
 		const MTPPhoto &photo,
 		const PreparedPhotoThumbs &photoThumbs,
 		const MTPDocument &document,
-		const QByteArray &jpeg,
-		MsgId replyTo);
+		const QByteArray &jpeg);
 
-	MsgId replyTo;
 	SendMediaType type;
 	QString file, filename;
-	int32 filesize;
+	int64 filesize = 0;
 	QByteArray data;
 	QString thumbExt;
 	uint64 id, thumbId; // id always file-id of media, thumbId is file-id of thumb ( == id for photos)
@@ -195,7 +169,7 @@ struct FileLoadTo {
 	FileLoadTo(
 		PeerId peer,
 		Api::SendOptions options,
-		MsgId replyTo,
+		FullReplyTo replyTo,
 		MsgId replaceMediaOf)
 	: peer(peer)
 	, options(options)
@@ -204,7 +178,7 @@ struct FileLoadTo {
 	}
 	PeerId peer;
 	Api::SendOptions options;
-	MsgId replyTo;
+	FullReplyTo replyTo;
 	MsgId replaceMediaOf;
 };
 
@@ -214,6 +188,7 @@ struct FileLoadResult {
 		uint64 id,
 		const FileLoadTo &to,
 		const TextWithTags &caption,
+		bool spoiler,
 		std::shared_ptr<SendingAlbum> album);
 
 	TaskId taskId;
@@ -226,10 +201,10 @@ struct FileLoadResult {
 
 	QString filename;
 	QString filemime;
-	int32 filesize = 0;
+	int64 filesize = 0;
 	UploadFileParts fileparts;
 	QByteArray filemd5;
-	int32 partssize;
+	int64 partssize = 0;
 
 	uint64 thumbId = 0; // id is always file-id of media, thumbId is file-id of thumb ( == id for photos)
 	QString thumbname;
@@ -246,6 +221,7 @@ struct FileLoadResult {
 
 	PreparedPhotoThumbs photoThumbs;
 	TextWithTags caption;
+	bool spoiler = false;
 
 	std::vector<MTPInputDocument> attachedStickers;
 
@@ -263,7 +239,9 @@ public:
 	static bool FillImageInformation(
 		QImage &&image,
 		bool animated,
-		std::unique_ptr<Ui::PreparedFileInformation> &result);
+		std::unique_ptr<Ui::PreparedFileInformation> &result,
+		QByteArray content = {},
+		QByteArray format = {});
 
 	FileLoadTask(
 		not_null<Main::Session*> session,
@@ -273,11 +251,12 @@ public:
 		SendMediaType type,
 		const FileLoadTo &to,
 		const TextWithTags &caption,
+		bool spoiler,
 		std::shared_ptr<SendingAlbum> album = nullptr);
 	FileLoadTask(
 		not_null<Main::Session*> session,
 		const QByteArray &voice,
-		int32 duration,
+		crl::time duration,
 		const VoiceWaveform &waveform,
 		const FileLoadTo &to,
 		const TextWithTags &caption);
@@ -327,10 +306,11 @@ private:
 	QString _filepath;
 	QByteArray _content;
 	std::unique_ptr<Ui::PreparedFileInformation> _information;
-	int32 _duration = 0;
+	crl::time _duration = 0;
 	VoiceWaveform _waveform;
 	SendMediaType _type;
 	TextWithTags _caption;
+	bool _spoiler = false;
 
 	std::shared_ptr<FileLoadResult> _result;
 

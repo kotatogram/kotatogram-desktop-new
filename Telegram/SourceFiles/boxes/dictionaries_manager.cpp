@@ -12,7 +12,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/event_filter.h"
 #include "chat_helpers/spellchecker_common.h"
 #include "core/application.h"
+#include "core/core_settings.h"
+#include "lang/lang_keys.h"
 #include "main/main_account.h"
+#include "main/main_session.h"
 #include "mainwidget.h"
 #include "mtproto/dedicated_file_loader.h"
 #include "spellcheck/spellcheck_utils.h"
@@ -23,7 +26,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/popup_menu.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/effects/animations.h"
-#include "window/window_session_controller.h"
 #include "styles/style_layers.h"
 #include "styles/style_settings.h"
 #include "styles/style_boxes.h"
@@ -44,7 +46,7 @@ class Inner : public Ui::RpWidget {
 public:
 	Inner(
 		QWidget *parent,
-		not_null<Window::SessionController*> controller,
+		not_null<Main::Session*> session,
 		Dictionaries enabledDictionaries);
 
 	Dictionaries enabledRows() const;
@@ -52,7 +54,7 @@ public:
 
 private:
 	void setupContent(
-		not_null<Window::SessionController*> controller,
+		not_null<Main::Session*> session,
 		Dictionaries enabledDictionaries);
 
 	Dictionaries _enabledRows;
@@ -97,10 +99,10 @@ auto CreateMultiSelect(QWidget *parent) {
 
 Inner::Inner(
 	QWidget *parent,
-	not_null<Window::SessionController*> controller,
+	not_null<Main::Session*> session,
 	Dictionaries enabledDictionaries)
 : RpWidget(parent) {
-	setupContent(controller, std::move(enabledDictionaries));
+	setupContent(session, std::move(enabledDictionaries));
 }
 
 QueryCallback Inner::queryCallback() const {
@@ -113,7 +115,7 @@ Dictionaries Inner::enabledRows() const {
 
 auto AddButtonWithLoader(
 		not_null<Ui::VerticalLayout*> content,
-		not_null<Window::SessionController*> controller,
+		not_null<Main::Session*> session,
 		const Spellchecker::Dict &dict,
 		bool buttonEnabled,
 		rpl::producer<QStringView> query) {
@@ -283,7 +285,7 @@ auto AddButtonWithLoader(
 			const auto weak = Ui::MakeWeak(button);
 			setLocalLoader(base::make_unique_q<Loader>(
 				QCoreApplication::instance(),
-				&controller->session(),
+				session,
 				id,
 				Spellchecker::GetDownloadLocation(id),
 				Spellchecker::DictPathByLangId(id),
@@ -335,7 +337,7 @@ auto AddButtonWithLoader(
 }
 
 void Inner::setupContent(
-		not_null<Window::SessionController*> controller,
+		not_null<Main::Session*> session,
 		Dictionaries enabledDictionaries) {
 	const auto content = Ui::CreateChild<Ui::VerticalLayout>(this);
 
@@ -346,7 +348,7 @@ void Inner::setupContent(
 		const auto id = dict.id;
 		const auto row = AddButtonWithLoader(
 			content,
-			controller,
+			session,
 			dict,
 			ranges::contains(enabledDictionaries, id),
 			queryStream->events());
@@ -376,8 +378,8 @@ void Inner::setupContent(
 
 ManageDictionariesBox::ManageDictionariesBox(
 	QWidget*,
-	not_null<Window::SessionController*> controller)
-: _controller(controller) {
+	not_null<Main::Session*> session)
+: _session(session) {
 }
 
 void ManageDictionariesBox::setInnerFocus() {
@@ -390,7 +392,7 @@ void ManageDictionariesBox::prepare() {
 	const auto inner = setInnerWidget(
 		object_ptr<Inner>(
 			this,
-			_controller,
+			_session,
 			Core::App().settings().dictionariesEnabled()),
 		st::boxScroll,
 		multiSelect->height()

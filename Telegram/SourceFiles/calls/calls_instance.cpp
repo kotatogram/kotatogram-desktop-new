@@ -12,8 +12,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "calls/group/calls_group_common.h"
 #include "calls/group/calls_choose_join_as.h"
 #include "calls/group/calls_group_call.h"
+#include "calls/group/calls_group_rtmp.h"
 #include "mtproto/mtproto_dh_utils.h"
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
 #include "apiwrap.h"
@@ -33,6 +35,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "base/unixtime.h"
 #include "mtproto/mtproto_config.h"
+#include "boxes/abstract_box.h" // Ui::show().
 
 #include <tgcalls/VideoCaptureInterface.h>
 #include <tgcalls/StaticThreads.h>
@@ -171,7 +174,8 @@ FnMut<void()> Instance::Delegate::groupCallAddAsyncWaiter() {
 Instance::Instance()
 : _delegate(std::make_unique<Delegate>(this))
 , _cachedDhConfig(std::make_unique<DhConfig>())
-, _chooseJoinAs(std::make_unique<Group::ChooseJoinAsProcess>()) {
+, _chooseJoinAs(std::make_unique<Group::ChooseJoinAsProcess>())
+, _startWithRtmp(std::make_unique<Group::StartRtmpProcess>()) {
 }
 
 Instance::~Instance() {
@@ -190,8 +194,10 @@ void Instance::startOutgoingCall(not_null<UserData*> user, bool video) {
 	if (user->callsStatus() == UserData::CallsStatus::Private) {
 		// Request full user once more to refresh the setting in case it was changed.
 		user->session().api().requestFullPeer(user);
-		Ui::show(Box<Ui::InformBox>(
-			tr::lng_call_error_not_available(tr::now, lt_user, user->name)));
+		Ui::show(Ui::MakeInformBox(tr::lng_call_error_not_available(
+			tr::now,
+			lt_user,
+			user->name())));
 		return;
 	}
 	requestPermissionsOrFail(crl::guard(this, [=] {
@@ -200,24 +206,89 @@ void Instance::startOutgoingCall(not_null<UserData*> user, bool video) {
 }
 
 void Instance::startOrJoinGroupCall(
+		std::shared_ptr<Ui::Show> show,
 		not_null<PeerData*> peer,
-		const QString &joinHash,
-		bool confirmNeeded) {
-	const auto context = confirmNeeded
-		? Group::ChooseJoinAsProcess::Context::JoinWithConfirm
-		: peer->groupCall()
-		? Group::ChooseJoinAsProcess::Context::Join
-		: Group::ChooseJoinAsProcess::Context::Create;
-	_chooseJoinAs->start(peer, context, [=](object_ptr<Ui::BoxContent> box) {
-		Ui::show(std::move(box), Ui::LayerOption::KeepOther);
-	}, [=](QString text) {
-		Ui::Toast::Show(text);
-	}, [=](Group::JoinInfo info) {
-		const auto call = info.peer->groupCall();
-		info.joinHash = joinHash;
-		createGroupCall(
-			std::move(info),
-			call ? call->input() : MTP_inputGroupCall(MTPlong(), MTPlong()));
+		StartGroupCallArgs args) {
+	confirmLeaveCurrent(show, peer, args, [=](StartGroupCallArgs args) {
+		using JoinConfirm = Calls::StartGroupCallArgs::JoinConfirm;
+		const auto context = (args.confirm == JoinConfirm::Always)
+			? Group::ChooseJoinAsProcess::Context::JoinWithConfirm
+			: peer->groupCall()
+			? Group::ChooseJoinAsProcess::Context::Join
+			: args.scheduleNeeded
+			? Group::ChooseJoinAsProcess::Context::CreateScheduled
+			: Group::ChooseJoinAsProcess::Context::Create;
+		_chooseJoinAs->start(peer, context, show, [=](Group::JoinInfo info) {
+			const auto call = info.peer->groupCall();
+			info.joinHash = args.joinHash;
+			if (call) {
+				info.rtmp = call->rtmp();
+			}
+			createGroupCall(
+				std::move(info),
+				call ? call->input() : MTP_inputGroupCall({}, {}));
+		});
+	});
+}
+
+void Instance::confirmLeaveCurrent(
+		std::shared_ptr<Ui::Show> show,
+		not_null<PeerData*> peer,
+		StartGroupCallArgs args,
+		Fn<void(StartGroupCallArgs)> confirmed) {
+	using JoinConfirm = Calls::StartGroupCallArgs::JoinConfirm;
+
+	auto confirmedArgs = args;
+	confirmedArgs.confirm = JoinConfirm::None;
+
+	const auto askConfirmation = [&](QString text, QString button) {
+		show->showBox(Ui::MakeConfirmBox({
+			.text = text,
+			.confirmed = [=] {
+				show->hideLayer();
+				confirmed(confirmedArgs);
+			},
+			.confirmText = button,
+		}));
+	};
+	if (args.confirm != JoinConfirm::None && inCall()) {
+		// Do you want to leave your active voice chat
+		// to join a voice chat in this group?
+		askConfirmation(
+			(peer->isBroadcast()
+				? tr::lng_call_leave_to_other_sure_channel
+				: tr::lng_call_leave_to_other_sure)(tr::now),
+			tr::lng_call_bar_hangup(tr::now));
+	} else if (args.confirm != JoinConfirm::None && inGroupCall()) {
+		const auto now = currentGroupCall()->peer();
+		if (now == peer) {
+			activateCurrentCall(args.joinHash);
+		} else if (currentGroupCall()->scheduleDate()) {
+			confirmed(confirmedArgs);
+		} else {
+			askConfirmation(
+				((peer->isBroadcast() && now->isBroadcast())
+					? tr::lng_group_call_leave_channel_to_other_sure_channel
+					: now->isBroadcast()
+					? tr::lng_group_call_leave_channel_to_other_sure
+					: peer->isBroadcast()
+					? tr::lng_group_call_leave_to_other_sure_channel
+					: tr::lng_group_call_leave_to_other_sure)(tr::now),
+				tr::lng_group_call_leave(tr::now));
+		}
+	} else {
+		confirmed(args);
+	}
+}
+
+void Instance::showStartWithRtmp(
+		std::shared_ptr<Ui::Show> show,
+		not_null<PeerData*> peer) {
+	_startWithRtmp->start(peer, show, [=](Group::JoinInfo info) {
+		confirmLeaveCurrent(show, peer, {}, [=](auto) {
+			_startWithRtmp->close();
+			createGroupCall(std::move(info), MTP_inputGroupCall({}, {}));
+		});
 	});
 }
 
@@ -254,26 +325,52 @@ void Instance::destroyCall(not_null<Call*> call) {
 	}
 }
 
-void Instance::createCall(not_null<UserData*> user, Call::Type type, bool video) {
-	auto call = std::make_unique<Call>(_delegate.get(), user, type, video);
-	const auto raw = call.get();
+void Instance::createCall(
+		not_null<UserData*> user,
+		Call::Type type,
+		bool isVideo) {
+	struct Performer final {
+		explicit Performer(Fn<void(bool, bool, const Performer &)> callback)
+		: callback(std::move(callback)) {
+		}
+		Fn<void(bool, bool, const Performer &)> callback;
+	};
+	const auto performer = Performer([=](
+			bool video,
+			bool isConfirmed,
+			const Performer &repeater) {
+		const auto delegate = _delegate.get();
+		auto call = std::make_unique<Call>(delegate, user, type, video);
+		if (isConfirmed) {
+			call->applyUserConfirmation();
+		}
+		const auto raw = call.get();
 
-	user->session().account().sessionChanges(
-	) | rpl::start_with_next([=] {
-		destroyCall(raw);
-	}, raw->lifetime());
+		user->session().account().sessionChanges(
+		) | rpl::start_with_next([=] {
+			destroyCall(raw);
+		}, raw->lifetime());
 
-	if (_currentCall) {
-		_currentCallPanel->replaceCall(raw);
-		std::swap(_currentCall, call);
-		call->hangup();
-	} else {
-		_currentCallPanel = std::make_unique<Panel>(raw);
-		_currentCall = std::move(call);
-	}
-	_currentCallChanges.fire_copy(raw);
-	refreshServerConfig(&user->session());
-	refreshDhConfig();
+		if (_currentCall) {
+			_currentCallPanel->replaceCall(raw);
+			std::swap(_currentCall, call);
+			call->hangup();
+		} else {
+			_currentCallPanel = std::make_unique<Panel>(raw);
+			_currentCall = std::move(call);
+		}
+		if (raw->state() == Call::State::WaitingUserConfirmation) {
+			_currentCallPanel->startOutgoingRequests(
+			) | rpl::start_with_next([=](bool video) {
+				repeater.callback(video, true, repeater);
+			}, raw->lifetime());
+		} else {
+			refreshServerConfig(&user->session());
+			refreshDhConfig();
+		}
+		_currentCallChanges.fire_copy(raw);
+	});
+	performer.callback(isVideo, false, performer);
 }
 
 void Instance::destroyGroupCall(not_null<GroupCall*> call) {
@@ -426,20 +523,6 @@ void Instance::showInfoPanel(not_null<GroupCall*> call) {
 	}
 }
 
-void Instance::setCurrentAudioDevice(bool input, const QString &deviceId) {
-	if (input) {
-		Core::App().settings().setCallInputDeviceId(deviceId);
-	} else {
-		Core::App().settings().setCallOutputDeviceId(deviceId);
-	}
-	Core::App().saveSettingsDelayed();
-	if (const auto call = currentCall()) {
-		call->setCurrentAudioDevice(input, deviceId);
-	} else if (const auto group = currentGroupCall()) {
-		group->setCurrentAudioDevice(input, deviceId);
-	}
-}
-
 FnMut<void()> Instance::addAsyncWaiter() {
 	auto semaphore = std::make_unique<crl::semaphore>();
 	const auto raw = semaphore.get();
@@ -458,6 +541,11 @@ FnMut<void()> Instance::addAsyncWaiter() {
 			}
 		});
 	};
+}
+
+bool Instance::isSharingScreen() const {
+	return (_currentCall && _currentCall->isSharingScreen())
+		|| (_currentGroupCall && _currentGroupCall->isSharingScreen());
 }
 
 bool Instance::isQuitPrevent() {
@@ -488,6 +576,15 @@ void Instance::handleCallUpdate(
 			// May be a repeated phoneCallRequested update from getDifference.
 			return;
 		}
+		if (inCall()
+			&& _currentCall->type() == Call::Type::Outgoing
+			&& _currentCall->user()->id == session->userPeerId()
+			&& (peerFromUser(phoneCall.vparticipant_id())
+				== _currentCall->user()->session().userPeerId())) {
+			// Ignore call from the same running app, other account.
+			return;
+		}
+
 		const auto &config = session->serverConfig();
 		if (inCall() || inGroupCall() || !user || user->isSelf()) {
 			const auto flags = phoneCall.is_video()
@@ -602,13 +699,24 @@ void Instance::destroyCurrentCall() {
 	}
 }
 
-bool Instance::hasActivePanel(not_null<Main::Session*> session) const {
+bool Instance::hasVisiblePanel(Main::Session *session) const {
 	if (inCall()) {
-		return (&_currentCall->user()->session() == session)
-			&& _currentCallPanel->isActive();
+		return _currentCallPanel->isVisible()
+			&& (!session || (&_currentCall->user()->session() == session));
 	} else if (inGroupCall()) {
-		return (&_currentGroupCall->peer()->session() == session)
-			&& _currentGroupCallPanel->isActive();
+		return _currentGroupCallPanel->isVisible()
+			&& (!session || (&_currentGroupCall->peer()->session() == session));
+	}
+	return false;
+}
+
+bool Instance::hasActivePanel(Main::Session *session) const {
+	if (inCall()) {
+		return _currentCallPanel->isActive()
+			&& (!session || (&_currentCall->user()->session() == session));
+	} else if (inGroupCall()) {
+		return _currentGroupCallPanel->isActive()
+			&& (!session || (&_currentGroupCall->peer()->session() == session));
 	}
 	return false;
 }
@@ -633,6 +741,17 @@ bool Instance::minimizeCurrentActiveCall() {
 		return true;
 	} else if (inGroupCall() && _currentGroupCallPanel->isActive()) {
 		_currentGroupCallPanel->minimize();
+		return true;
+	}
+	return false;
+}
+
+bool Instance::toggleFullScreenCurrentActiveCall() {
+	if (inCall() && _currentCallPanel->isActive()) {
+		_currentCallPanel->toggleFullScreen();
+		return true;
+	} else if (inGroupCall() && _currentGroupCallPanel->isActive()) {
+		_currentGroupCallPanel->toggleFullScreen();
 		return true;
 	}
 	return false;
@@ -696,13 +815,14 @@ void Instance::requestPermissionOrFail(Platform::PermissionType type, Fn<void()>
 		if (inGroupCall()) {
 			_currentGroupCall->hangup();
 		}
-		Ui::show(Box<Ui::ConfirmBox>(
-			ktr("ktg_no_mic_permission"),
-			tr::lng_menu_settings(tr::now),
-			crl::guard(this, [=] {
+		Ui::show(Ui::MakeConfirmBox({
+			.text = ktr("ktg_no_mic_permission"),
+			.confirmed = crl::guard(this, [=](Fn<void()> &&close) {
 				Platform::OpenSystemSettingsForPermission(type);
-				Ui::hideLayer();
-			})));
+				close();
+			}),
+			.confirmText = tr::lng_menu_settings(),
+		}));
 	}
 }
 
@@ -713,7 +833,7 @@ std::shared_ptr<tgcalls::VideoCaptureInterface> Instance::getVideoCapture(
 		if (deviceId) {
 			result->switchToDevice(
 				(deviceId->isEmpty()
-					? Core::App().settings().callVideoInputDeviceId()
+					? Core::App().settings().cameraDeviceId()
 					: *deviceId).toStdString(),
 				isScreenCapture);
 		}
@@ -721,7 +841,7 @@ std::shared_ptr<tgcalls::VideoCaptureInterface> Instance::getVideoCapture(
 	}
 	const auto startDeviceId = (deviceId && !deviceId->isEmpty())
 		? *deviceId
-		: Core::App().settings().callVideoInputDeviceId();
+		: Core::App().settings().cameraDeviceId();
 	auto result = std::shared_ptr<tgcalls::VideoCaptureInterface>(
 		tgcalls::VideoCaptureInterface::Create(
 			tgcalls::StaticThreads::getThreads(),

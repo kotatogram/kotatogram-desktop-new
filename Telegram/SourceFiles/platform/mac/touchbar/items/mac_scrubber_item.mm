@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/call_delayed.h"
 #include "base/platform/mac/base_utilities_mac.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/painter.h"
 #include "chat_helpers/emoji_list_widget.h"
 #include "core/sandbox.h"
 #include "core/application.h"
@@ -20,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_origin.h"
+#include "data/data_forum_topic.h"
 #include "data/data_session.h"
 #include "data/stickers/data_stickers.h"
 #include "history/history.h"
@@ -28,7 +30,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/mac/touchbar/mac_touchbar_common.h"
 #include "styles/style_basic.h"
 #include "styles/style_settings.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
+#include "window/section_widget.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 
@@ -43,6 +46,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #import <AppKit/NSScrubberLayout.h>
 #import <AppKit/NSSegmentedControl.h>
 #import <AppKit/NSTextField.h>
+
+#include <QtWidgets/QTextEdit>
 
 using TouchBar::kCircleDiameter;
 using TouchBar::CreateNSImageFromStyleIcon;
@@ -165,23 +170,22 @@ auto ActiveChat(not_null<Window::Controller*> controller) {
 	return Dialogs::Key();
 }
 
-bool CanWriteToActiveChat(not_null<Window::Controller*> controller) {
-	if (const auto history = ActiveChat(controller).history()) {
-		return history->peer->canWrite();
+bool CanSendToActiveChat(
+		not_null<Window::Controller*> controller,
+			ChatRestriction right) {
+	if (const auto topic = ActiveChat(controller).topic()) {
+		return Data::CanSend(topic, right);
+	} else if (const auto history = ActiveChat(controller).history()) {
+		return Data::CanSend(history->peer, right);
 	}
 	return false;
 }
 
-std::optional<QString> RestrictionToSendStickers(not_null<PeerData*> peer) {
-	return Data::RestrictionError(
-		peer,
-		ChatRestriction::SendStickers);
-}
-
-std::optional<QString> RestrictionToSendStickers(
-		not_null<Window::Controller*> controller) {
+std::optional<QString> RestrictionToSend(
+		not_null<Window::Controller*> controller,
+		ChatRestriction right) {
 	if (const auto peer = ActiveChat(controller).peer()) {
-		return RestrictionToSendStickers(peer);
+		return Data::RestrictionError(peer, right);
 	}
 	return std::nullopt;
 }
@@ -257,13 +261,25 @@ void AppendFavedStickers(
 	}
 }
 
+[[nodiscard]] EmojiPack RecentEmojiSection() {
+	const auto list = Core::App().settings().recentEmoji();
+	auto result = EmojiPack();
+	result.reserve(list.size());
+	for (const auto &emoji : list) {
+		if (const auto one = std::get_if<EmojiPtr>(&emoji.id.data)) {
+			result.push_back(*one);
+		}
+	}
+	return result;
+}
+
 void AppendEmojiPacks(
 		const Data::StickersSets &sets,
 		std::vector<PickerScrubberItem> &to) {
 	for (auto i = 0; i != ChatHelpers::kEmojiSectionCount; ++i) {
 		const auto section = static_cast<Ui::Emoji::Section>(i);
 		const auto list = (section == Ui::Emoji::Section::Recent)
-			? Core::App().settings().recentEmojiSection()
+			? RecentEmojiSection()
 			: Ui::Emoji::GetSection(section);
 		const auto title = (section == Ui::Emoji::Section::Recent)
 			? TitleRecentlyUsed(sets)
@@ -347,9 +363,16 @@ void AppendEmojiPacks(
 		gesture.allowableMovement = 0;
 		[scrubber addGestureRecognizer:gesture];
 
-		if (const auto error = RestrictionToSendStickers(_controller)) {
+		const auto kRight = ChatRestriction::SendStickers;
+		if (const auto error = RestrictionToSend(_controller, kRight)) {
 			_error = std::make_unique<PickerScrubberItem>(
 				tr::lng_restricted_send_stickers_all(tr::now));
+		}
+	} else {
+		const auto kRight = ChatRestriction::SendOther;
+		if (const auto error = RestrictionToSend(_controller, kRight)) {
+			_error = std::make_unique<PickerScrubberItem>(
+				tr::lng_restricted_send_message_all(tr::now));
 		}
 	}
 	_lastPreviewedSticker = 0;
@@ -450,17 +473,22 @@ void AppendEmojiPacks(
 
 - (void)scrubber:(NSScrubber*)scrubber
 		didSelectItemAtIndex:(NSInteger)index {
-	if (!CanWriteToActiveChat(_controller) || _error) {
-		return;
-	}
 	scrubber.selectedIndex = -1;
 	const auto sticker = _itemsDataSource->at(index, _type);
 	const auto document = sticker.document;
 	const auto emoji = sticker.emoji;
+	const auto kRight = document
+		? ChatRestriction::SendStickers
+		: ChatRestriction::SendOther;
+	if (!CanSendToActiveChat(_controller, kRight) || _error) {
+		return;
+	}
 	auto callback = [=] {
 		if (document) {
-			if (const auto error = RestrictionToSendStickers(_controller)) {
-				_controller->show(Box<Ui::InformBox>(*error));
+			if (const auto error = RestrictionToSend(_controller, kRight)) {
+				_controller->show(Ui::MakeInformBox(*error));
+				return true;
+			} else if (Window::ShowSendPremiumError(_controller->sessionController(), document)) {
 				return true;
 			}
 			Api::SendExistingDocument(
@@ -469,10 +497,13 @@ void AppendEmojiPacks(
 				document);
 			return true;
 		} else if (emoji) {
-			if (const auto inputField = qobject_cast<QTextEdit*>(
+			if (const auto error = RestrictionToSend(_controller, kRight)) {
+				_controller->show(Ui::MakeInformBox(*error));
+				return true;
+			} else if (const auto inputField = qobject_cast<QTextEdit*>(
 					QApplication::focusWidget())) {
 				Ui::InsertEmojiAtCursor(inputField->textCursor(), emoji);
-				Core::App().settings().incrementRecentEmoji(emoji);
+				Core::App().settings().incrementRecentEmoji({ emoji });
 				return true;
 			}
 		}
@@ -541,10 +572,13 @@ void AppendEmojiPacks(
 
 	controller->sessionController()->activeChatValue(
 	) | rpl::map([](Dialogs::Key k) {
-		return k.peer()
-			&& k.history()
-			&& k.peer()->canWrite()
-			&& !RestrictionToSendStickers(k.peer());
+		const auto topic = k.topic();
+		const auto peer = k.peer();
+		const auto right = ChatRestriction::SendStickers;
+		return peer
+			&& (topic
+				? Data::CanSend(topic, right)
+				: Data::CanSend(peer, right));
 	}) | rpl::distinct_until_changed(
 	) | rpl::start_with_next([=](bool value) {
 		[self dismissPopover:nil];
@@ -562,11 +596,10 @@ void AppendEmojiPacks(
 
 	rpl::merge(
 		rpl::merge(
-			_session->data().stickers().updated(),
+			_session->data().stickers().updated(
+				Data::StickersType::Stickers),
 			_session->data().stickers().recentUpdated(
-			) | rpl::filter([](Data::Stickers::Recent recent) {
-				return (recent != Data::Stickers::Recent::Attached);
-			}) | rpl::to_empty
+				Data::StickersType::Stickers)
 		) | rpl::map_to(ScrubberItemType::Sticker),
 		rpl::merge(
 			Core::App().settings().recentEmojiUpdated(),

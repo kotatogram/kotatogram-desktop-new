@@ -49,14 +49,14 @@ enum class Type;
 namespace InlineBots {
 namespace Layout {
 
-constexpr int kInlineItemsMaxPerRow = 5;
-
 class ItemBase;
 using Results = std::vector<std::unique_ptr<Result>>;
 
 struct CacheEntry {
 	QString nextOffset;
-	QString switchPmText, switchPmStartToken;
+	QString switchPmText;
+	QString switchPmStartToken;
+	QByteArray switchPmUrl;
 	Results results;
 };
 
@@ -88,9 +88,6 @@ public:
 
 	void setResultSelectedCallback(Fn<void(ResultSelected)> callback) {
 		_resultSelectedCallback = std::move(callback);
-	}
-	void setCurrentDialogsEntryState(Dialogs::EntryState state) {
-		_currentDialogsEntryState = state;
 	}
 	void setSendMenuType(Fn<SendMenu::Type()> &&callback);
 
@@ -163,7 +160,7 @@ private:
 
 	object_ptr<Ui::RoundButton> _switchPmButton = { nullptr };
 	QString _switchPmStartToken;
-	Dialogs::EntryState _currentDialogsEntryState;
+	QByteArray _switchPmUrl;
 
 	object_ptr<Ui::FlatLabel> _restrictedLabel = { nullptr };
 

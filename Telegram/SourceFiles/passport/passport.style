@@ -13,8 +13,6 @@ using "info/info.style";
 using "chat_helpers/chat_helpers.style";
 
 passportPasswordPadding: margins(20px, 30px, 20px, 40px);
-passportPasswordForgotSkip: 5px;
-passportPasswordAboutSkip: 15px;
 passportPasswordLabel: FlatLabel(boxLabel) {
 	minWidth: 275px;
 	align: align(top);
@@ -22,8 +20,6 @@ passportPasswordLabel: FlatLabel(boxLabel) {
 passportPasswordLabelBold: FlatLabel(passportPasswordLabel) {
 	style: TextStyle(boxLabelStyle) {
 		font: font(boxFontSize semibold);
-		linkFont: font(boxFontSize semibold);
-		linkFontOver: font(boxFontSize semibold underline);
 	}
 }
 passportPasswordSetupLabel: FlatLabel(passportPasswordLabel) {
@@ -95,8 +91,7 @@ passportFormDividerHeight: 13px;
 passportFormLabelPadding: margins(22px, 7px, 22px, 14px);
 passportFormPolicy: FlatLabel(boxDividerLabel) {
 	style: TextStyle(defaultTextStyle) {
-		linkFont: font(fsize semibold underline);
-		linkFontOver: font(fsize semibold underline);
+		linkUnderline: kLinkUnderlineAlways;
 	}
 	palette: TextPalette(defaultTextPalette) {
 		linkFg: windowSubTextFg;
@@ -119,14 +114,13 @@ passportRowEmptyIcon: icon {{ "passport_empty", menuIconFgOver }};
 passportRowTitleFg: windowFg;
 passportRowDescriptionFg: windowSubTextFg;
 
-passportScansHeaderPadding: margins(22px, 10px, 22px, 10px);
 passportUploadButton: SettingsButton(defaultSettingsButton) {
 	textFg: windowActiveTextFg;
 	textFgOver: windowActiveTextFg;
 	textBg: windowBg;
 	textBgOver: windowBgOver;
 
-	font: semiboldFont;
+	style: semiboldTextStyle;
 
 	height: 18px;
 	padding: margins(22px, 14px, 22px, 12px);
@@ -180,6 +174,7 @@ passportDetailsSeparator: FlatLabel(passportPasswordLabelBold) {
 		font: font(semibold 14px);
 	}
 	textFg: windowSubTextFg;
+	align: align(topleft);
 }
 passportDetailsSeparatorPadding: margins(5px, 8px, 5px, 0px);
 passportContactField: InputField(defaultInputField) {

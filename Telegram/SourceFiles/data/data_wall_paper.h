@@ -15,6 +15,14 @@ namespace Main {
 class Session;
 } // namespace Main
 
+namespace Ui {
+
+[[nodiscard]] QColor ColorFromSerialized(MTPint serialized);
+[[nodiscard]] std::optional<QColor> MaybeColorFromSerialized(
+	const tl::conditional<MTPint> &mtp);
+
+} // namespace Ui
+
 namespace Data {
 
 struct FileOrigin;
@@ -34,7 +42,12 @@ public:
 
 	void setLocalImageAsThumbnail(std::shared_ptr<Image> image);
 
+	[[nodiscard]] bool equals(const WallPaper &paper) const;
+
 	[[nodiscard]] WallPaperId id() const;
+	[[nodiscard]] QString emojiId() const;
+	[[nodiscard]] bool isNull() const;
+	[[nodiscard]] QString key() const;
 	[[nodiscard]] const std::vector<QColor> backgroundColors() const;
 	[[nodiscard]] DocumentData *document() const;
 	[[nodiscard]] Image *localThumbnail() const;
@@ -90,16 +103,20 @@ public:
 		qint32 legacyId);
 	[[nodiscard]] static std::optional<WallPaper> FromColorsSlug(
 		const QString &slug);
+	[[nodiscard]] static WallPaper FromEmojiId(const QString &emojiId);
 	[[nodiscard]] static WallPaper ConstructDefault();
 
 private:
 	static constexpr auto kDefaultIntensity = 50;
+
+	[[nodiscard]] QStringList collectShareParams() const;
 
 	WallPaperId _id = WallPaperId();
 	uint64 _accessHash = 0;
 	UserId _ownerId = 0;
 	WallPaperFlags _flags;
 	QString _slug;
+	QString _emojiId;
 
 	std::vector<QColor> _backgroundColors;
 	int _rotation = 0;
@@ -125,13 +142,6 @@ private:
 [[nodiscard]] bool IsCloudWallPaper(const WallPaper &paper);
 
 [[nodiscard]] QImage GenerateDitheredGradient(const WallPaper &paper);
-
-[[nodiscard]] QColor ColorFromSerialized(quint32 serialized);
-[[nodiscard]] QColor ColorFromSerialized(MTPint serialized);
-[[nodiscard]] std::optional<QColor> MaybeColorFromSerialized(
-	quint32 serialized);
-[[nodiscard]] std::optional<QColor> MaybeColorFromSerialized(
-	const tl::conditional<MTPint> &mtp);
 
 namespace details {
 

@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_codes.h"
 
 #include "kotato/kotato_lang.h"
-#include "platform/platform_specific.h"
 #include "ui/toast/toast.h"
 #include "mainwidget.h"
 #include "mainwindow.h"
@@ -18,7 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "ui/boxes/confirm_box.h"
-#include "boxes/add_contact_box.h"
+#include "boxes/premium_limits_box.h"
 #include "lang/lang_cloud_manager.h"
 #include "lang/lang_instance.h"
 #include "core/application.h"
@@ -30,12 +29,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/themes/window_theme_editor.h"
 #include "window/window_session_controller.h"
 #include "media/audio/media_audio_track.h"
-#include "settings/settings_common.h"
+#include "settings/settings_folders.h"
 #include "api/api_updates.h"
 #include "base/qt/qt_common_adapters.h"
 #include "base/custom_app_icon.h"
+#include "boxes/abstract_box.h" // Ui::show().
 
-#include "zlib.h"
+#include <zlib.h>
 
 namespace Settings {
 namespace {
@@ -75,50 +75,49 @@ using SessionController = Window::SessionController;
 
 auto GenerateCodes() {
 	auto codes = std::map<QString, Fn<void(SessionController*)>>();
-	codes.emplace(qsl("debugmode"), [](SessionController *window) {
+	codes.emplace(u"debugmode"_q, [](SessionController *window) {
 		QString text = Logs::DebugEnabled()
-			? qsl("Do you want to disable DEBUG logs?")
-			: qsl("Do you want to enable DEBUG logs?\n\n"
-				"All network events will be logged.");
-		Ui::show(Box<Ui::ConfirmBox>(text, [] {
+			? u"Do you want to disable DEBUG logs?"_q
+			: u"Do you want to enable DEBUG logs?\n\nAll network events will be logged."_q;
+		Ui::show(Ui::MakeConfirmBox({ text, [] {
 			Core::App().switchDebugMode();
-		}));
+		} }));
 	});
-	codes.emplace(qsl("viewlogs"), [](SessionController *window) {
+	codes.emplace(u"viewlogs"_q, [](SessionController *window) {
 		File::ShowInFolder(cWorkingDir() + "log.txt");
 	});
 	if (!Core::UpdaterDisabled()) {
-		codes.emplace(qsl("testupdate"), [](SessionController *window) {
+		codes.emplace(u"testupdate"_q, [](SessionController *window) {
 			Core::UpdateChecker().test();
 		});
 	}
-	codes.emplace(qsl("loadlang"), [](SessionController *window) {
-		Lang::CurrentCloudManager().switchToLanguage({ qsl("#custom") });
+	codes.emplace(u"loadlang"_q, [](SessionController *window) {
+		Lang::CurrentCloudManager().switchToLanguage({ u"#custom"_q });
 	});
-	codes.emplace(qsl("crashplease"), [](SessionController *window) {
+	codes.emplace(u"crashplease"_q, [](SessionController *window) {
 		Unexpected("Crashed in Settings!");
 	});
-	codes.emplace(qsl("moderate"), [](SessionController *window) {
-		auto text = Core::App().settings().moderateModeEnabled() ? qsl("Disable moderate mode?") : qsl("Enable moderate mode?");
-		Ui::show(Box<Ui::ConfirmBox>(text, [=] {
+	codes.emplace(u"moderate"_q, [](SessionController *window) {
+		auto text = Core::App().settings().moderateModeEnabled() ? u"Disable moderate mode?"_q : u"Enable moderate mode?"_q;
+		Ui::show(Ui::MakeConfirmBox({ text, [=] {
 			Core::App().settings().setModerateModeEnabled(!Core::App().settings().moderateModeEnabled());
 			Core::App().saveSettingsDelayed();
 			Ui::hideLayer();
-		}));
+		} }));
 	});
-	codes.emplace(qsl("getdifference"), [](SessionController *window) {
+	codes.emplace(u"getdifference"_q, [](SessionController *window) {
 		if (window) {
 			window->session().updates().getDifference();
 		}
 	});
-	codes.emplace(qsl("loadcolors"), [](SessionController *window) {
+	codes.emplace(u"loadcolors"_q, [](SessionController *window) {
 		FileDialog::GetOpenPath(Core::App().getFileDialogParent(), "Open palette file", "Palette (*.tdesktop-palette)", [](const FileDialog::OpenResult &result) {
 			if (!result.paths.isEmpty()) {
 				Window::Theme::Apply(result.paths.front());
 			}
 		});
 	});
-	codes.emplace(qsl("endpoints"), [](SessionController *window) {
+	codes.emplace(u"endpoints"_q, [](SessionController *window) {
 		if (!Core::App().domain().started()) {
 			return;
 		}
@@ -129,7 +128,7 @@ auto GenerateCodes() {
 			if (!result.paths.isEmpty()) {
 				const auto loadFor = [&](not_null<Main::Account*> account) {
 					if (!account->mtp().dcOptions().loadFromFile(result.paths.front())) {
-						Ui::show(Box<Ui::InformBox>("Could not load endpoints"
+						Ui::show(Ui::MakeInformBox("Could not load endpoints"
 							" :( Errors in 'log.txt'."));
 					}
 				};
@@ -143,7 +142,7 @@ auto GenerateCodes() {
 			}
 		});
 	});
-	codes.emplace(qsl("testmode"), [](SessionController *window) {
+	codes.emplace(u"testmode"_q, [](SessionController *window) {
 		auto &domain = Core::App().domain();
 		if (domain.started()
 			&& (domain.accounts().size() == 1)
@@ -159,47 +158,24 @@ auto GenerateCodes() {
 				: "Switched to the production environment.");
 		}
 	});
-	codes.emplace(qsl("folders"), [](SessionController *window) {
+	codes.emplace(u"folders"_q, [](SessionController *window) {
 		if (window) {
-			window->showSettings(Settings::Type::Folders);
+			window->showSettings(Settings::Folders::Id());
 		}
 	});
-	codes.emplace(qsl("registertg"), [](SessionController *window) {
+	codes.emplace(u"registertg"_q, [](SessionController *window) {
 		Core::Application::RegisterUrlScheme();
 		Ui::Toast::Show("Forced custom scheme register.");
 	});
 
-#if defined Q_OS_WIN || defined Q_OS_MAC
-	codes.emplace(qsl("freetype"), [](SessionController *window) {
-		auto text = cUseFreeType()
-#ifdef Q_OS_WIN
-			? qsl("Switch font engine to GDI?")
-#else // Q_OS_WIN
-			? qsl("Switch font engine to Cocoa?")
-#endif // !Q_OS_WIN
-			: qsl("Switch font engine to FreeType?");
-
-		Ui::show(Box<Ui::ConfirmBox>(text, [] {
-			Core::App().switchFreeType();
-		}));
-	});
-#endif // Q_OS_WIN || Q_OS_MAC
-
-#if defined Q_OS_UNIX && !defined Q_OS_MAC
-	codes.emplace(qsl("installlauncher"), [](SessionController *window) {
-		Platform::InstallLauncher(true);
-		Ui::Toast::Show("Forced launcher installation.");
-	});
-#endif // Q_OS_UNIX && !Q_OS_MAC
-
-	auto audioFilters = qsl("Audio files (*.wav *.mp3);;") + FileDialog::AllFilesFilter();
+	auto audioFilters = u"Audio files (*.wav *.mp3);;"_q + FileDialog::AllFilesFilter();
 	auto audioKeys = {
-		qsl("msg_incoming"),
-		qsl("call_incoming"),
-		qsl("call_outgoing"),
-		qsl("call_busy"),
-		qsl("call_connect"),
-		qsl("call_end"),
+		u"msg_incoming"_q,
+		u"call_incoming"_q,
+		u"call_outgoing"_q,
+		u"call_busy"_q,
+		u"call_connect"_q,
+		u"call_end"_q,
 	};
 	for (auto &key : audioKeys) {
 		codes.emplace(key, [=](SessionController *window) {
@@ -208,7 +184,7 @@ auto GenerateCodes() {
 					auto track = Media::Audio::Current().createTrack();
 					track->fillFromFile(result.paths.front());
 					if (track->failed()) {
-						Ui::show(Box<Ui::InformBox>(
+						Ui::show(Ui::MakeInformBox(
 							"Could not audio :( Errors in 'log.txt'."));
 					} else {
 						Core::App().settings().setSoundOverride(
@@ -220,12 +196,12 @@ auto GenerateCodes() {
 			});
 		});
 	}
-	codes.emplace(qsl("sounds_reset"), [](SessionController *window) {
+	codes.emplace(u"sounds_reset"_q, [](SessionController *window) {
 		Core::App().settings().clearSoundOverrides();
 		Core::App().saveSettingsDelayed();
-		Ui::show(Box<Ui::InformBox>("All sound overrides were reset."));
+		Ui::show(Ui::MakeInformBox("All sound overrides were reset."));
 	});
-	codes.emplace(qsl("unpacklog"), [](SessionController *window) {
+	codes.emplace(u"unpacklog"_q, [](SessionController *window) {
 		FileDialog::GetOpenPath(Core::App().getFileDialogParent(), "Open crash log file", "Crash dump (*.txt)", [=](const FileDialog::OpenResult &result) {
 			if (result.paths.isEmpty()) {
 				return;
@@ -269,17 +245,17 @@ auto GenerateCodes() {
 			});
 		});
 	});
-	codes.emplace(qsl("testchatcolors"), [](SessionController *window) {
+	codes.emplace(u"testchatcolors"_q, [](SessionController *window) {
 		const auto now = !Data::CloudThemes::TestingColors();
 		Data::CloudThemes::SetTestingColors(now);
 		Ui::Toast::Show(now ? "Testing chat theme colors!" : "Not testing..");
 	});
 	codes.emplace(qsl("usernames"), [](SessionController *window) {
-		Ui::show(
-			Box<RevokePublicLinkBox>(
-				&window->session(),
-				Fn<void()>()),
-			Ui::LayerOption::KeepOther);
+		if (window) {
+			Ui::show(
+				Box(PublicLinksLimitBox, window, Fn<void()>()),
+				Ui::LayerOption::KeepOther);
+		}
 	});
 	codes.emplace(qsl("reloadlang"), [](SessionController *window) {
 		Kotato::Lang::Load(
@@ -289,8 +265,8 @@ auto GenerateCodes() {
 	});
 
 #ifdef Q_OS_MAC
-	codes.emplace(qsl("customicon"), [](SessionController *window) {
-		const auto iconFilters = qsl("Icon files (*.icns *.png);;") + FileDialog::AllFilesFilter();
+	codes.emplace(u"customicon"_q, [](SessionController *window) {
+		const auto iconFilters = u"Icon files (*.icns *.png);;"_q + FileDialog::AllFilesFilter();
 		const auto change = [](const QString &path) {
 			const auto success = path.isEmpty()
 				? base::ClearCustomAppIcon()

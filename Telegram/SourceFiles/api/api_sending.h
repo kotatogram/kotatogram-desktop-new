@@ -32,18 +32,21 @@ struct SendAction;
 void SendWebDocument(
 	MessageToSend &&message,
 	not_null<DocumentData*> document,
+	std::optional<MsgId> localMessageId = std::nullopt,
 	Fn<void()> doneCallback = nullptr,
 	bool forwarding = false);
 
 void SendExistingDocument(
 	MessageToSend &&message,
 	not_null<DocumentData*> document,
+	std::optional<MsgId> localMessageId = std::nullopt,
 	Fn<void()> doneCallback = nullptr,
 	bool forwarding = false);
 
 void SendExistingPhoto(
 	MessageToSend &&message,
 	not_null<PhotoData*> photo,
+	std::optional<MsgId> localMessageId = std::nullopt,
 	Fn<void()> doneCallback = nullptr,
 	bool forwarding = false);
 

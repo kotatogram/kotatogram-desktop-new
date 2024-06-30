@@ -8,12 +8,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "calls/group/ui/calls_group_scheduled_labels.h"
 
 #include "ui/rp_widget.h"
+#include "ui/painter.h"
 #include "lang/lang_keys.h"
 #include "base/unixtime.h"
 #include "base/timer_rpl.h"
 #include "styles/style_calls.h"
 
 #include <QtCore/QDateTime>
+#include <QtCore/QLocale>
 
 namespace Calls::Group::Ui {
 
@@ -32,8 +34,9 @@ rpl::producer<QString> StartsWhenText(rpl::producer<TimeId> date) {
 		const auto tillToday = tillTomorrow + kDay;
 		const auto tillAfter = tillToday + kDay;
 
-		const auto time = parsedDate.time().toString(
-			QLocale::system().timeFormat(QLocale::ShortFormat));
+		const auto time = QLocale().toString(
+			parsedDate.time(),
+			QLocale::ShortFormat);
 		auto exact = tr::lng_group_call_starts_short_date(
 			lt_date,
 			rpl::single(langDayOfMonthFull(dateDay.date())),

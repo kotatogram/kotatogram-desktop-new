@@ -12,7 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_peer_common.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/widgets/labels.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/checkbox.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h"
 #include "info/profile/info_profile_cover.h"
@@ -21,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
+#include "api/api_peer_photo.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 #include "styles/style_info.h"
@@ -40,7 +42,8 @@ void SendRequest(
 		bool sharePhone,
 		const QString &first,
 		const QString &last,
-		const QString &phone) {
+		const QString &phone,
+		Fn<void()> done) {
 	const auto wasContact = user->isContact();
 	using Flag = MTPcontacts_AddContact::Flag;
 	user->session().api().request(MTPcontacts_AddContact(
@@ -56,7 +59,7 @@ void SendRequest(
 			first,
 			last,
 			user->nameOrPhone,
-			user->username);
+			user->username());
 		user->session().api().applyUpdates(result);
 		if (const auto settings = user->settings()) {
 			const auto flags = PeerSetting::AddContact
@@ -65,14 +68,13 @@ void SendRequest(
 			user->setSettings(*settings & ~flags);
 		}
 		if (box) {
+			if (!wasContact) {
+				box->showToast(
+					tr::lng_new_contact_add_done(tr::now, lt_user, first));
+			}
 			box->closeBox();
 		}
-		if (!wasContact) {
-			Ui::Toast::Show(tr::lng_new_contact_add_done(
-				tr::now,
-				lt_user,
-				first));
-		}
+		done();
 	}).send();
 }
 
@@ -103,6 +105,7 @@ private:
 	QString _phone;
 	Fn<void()> _focus;
 	Fn<void()> _save;
+	Fn<std::optional<QImage>()> _updatedPersonalPhoto;
 
 };
 
@@ -136,15 +139,17 @@ void Controller::setupContent() {
 }
 
 void Controller::setupCover() {
-	_box->addRow(
+	const auto cover = _box->addRow(
 		object_ptr<Info::Profile::Cover>(
 			_box,
-			_user,
 			_window,
+			_user,
+			Info::Profile::Cover::Role::EditContact,
 			(_phone.isEmpty()
 				? tr::lng_contact_mobile_hidden()
 				: rpl::single(Ui::FormatPhone(_phone)))),
-		style::margins())->setAttribute(Qt::WA_TransparentForMouseEvents);
+		style::margins());
+	_updatedPersonalPhoto = [=] { return cover->updatedPersonalPhoto(); };
 }
 
 void Controller::setupNameFields() {
@@ -198,13 +203,29 @@ void Controller::initNameFields(
 			(inverted ? last : first)->showError();
 			return;
 		}
+		const auto user = _user;
+		const auto personal = _updatedPersonalPhoto
+			? _updatedPersonalPhoto()
+			: std::nullopt;
+		const auto done = [=] {
+			if (personal) {
+				if (personal->isNull()) {
+					user->session().api().peerPhoto().clearPersonal(user);
+				} else {
+					user->session().api().peerPhoto().upload(
+						user,
+						{ base::duplicate(*personal) });
+				}
+			}
+		};
 		SendRequest(
 			Ui::MakeWeak(_box),
-			_user,
+			user,
 			_sharePhone && _sharePhone->checked(),
 			firstValue,
 			lastValue,
-			_phone);
+			_phone,
+			done);
 	};
 	const auto submit = [=] {
 		const auto firstValue = first->getLastText().trimmed();
@@ -218,8 +239,8 @@ void Controller::initNameFields(
 			_save();
 		}
 	};
-	QObject::connect(first, &Ui::InputField::submitted, submit);
-	QObject::connect(last, &Ui::InputField::submitted, submit);
+	first->submits() | rpl::start_with_next(submit, first->lifetime());
+	last->submits() | rpl::start_with_next(submit, last->lifetime());
 	first->setMaxLength(Ui::EditPeer::kMaxUserFirstLastName);
 	first->setMaxLength(Ui::EditPeer::kMaxUserFirstLastName);
 }

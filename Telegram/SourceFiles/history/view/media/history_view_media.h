@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "history/view/history_view_object.h"
+#include "ui/chat/message_bubble.h"
 #include "ui/rect_part.h"
 
 class History;
@@ -25,14 +26,18 @@ using SharedMediaTypesMask = base::enum_mask<SharedMediaType>;
 } // namespace Storage
 
 namespace Lottie {
-class SinglePlayer;
 struct ColorReplacements;
 } // namespace Lottie
 
 namespace Ui {
 struct BubbleSelectionInterval;
 struct ChatPaintContext;
+class SpoilerAnimation;
 } // namespace Ui
+
+namespace Images {
+struct CornersMaskRef;
+} // namespace Images
 
 namespace HistoryView {
 
@@ -41,11 +46,14 @@ enum class CursorState : char;
 enum class InfoDisplayType : char;
 struct TextState;
 struct StateRequest;
+struct MediaSpoiler;
+class StickerPlayer;
 class Element;
+struct SelectedQuote;
 
 using PaintContext = Ui::ChatPaintContext;
 
-enum class MediaInBubbleState {
+enum class MediaInBubbleState : uchar {
 	None,
 	Top,
 	Middle,
@@ -69,19 +77,28 @@ enum class MediaInBubbleState {
 	TimeId duration,
 	const QString &base);
 
-class Media : public Object {
+class Media : public Object, public base::has_weak_ptr {
 public:
 	explicit Media(not_null<Element*> parent) : _parent(parent) {
 	}
 
+	[[nodiscard]] not_null<Element*> parent() const;
 	[[nodiscard]] not_null<History*> history() const;
 
 	[[nodiscard]] virtual TextForMimeData selectedText(
 			TextSelection selection) const {
-		return TextForMimeData();
+		return {};
+	}
+	[[nodiscard]] virtual SelectedQuote selectedQuote(
+		TextSelection selection) const;
+	[[nodiscard]] virtual TextSelection selectionFromQuote(
+			const SelectedQuote &quote) const {
+		return {};
 	}
 
-	[[nodiscard]] virtual bool isDisplayed() const;
+	[[nodiscard]] virtual bool isDisplayed() const {
+		return true;
+	}
 	virtual void updateNeedBubbleState() {
 	}
 	[[nodiscard]] virtual bool hasTextForCopy() const {
@@ -89,6 +106,12 @@ public:
 	}
 	[[nodiscard]] virtual bool hideMessageText() const {
 		return true;
+	}
+	[[nodiscard]] virtual bool hideServiceText() const {
+		return false;
+	}
+	[[nodiscard]] virtual bool hideFromName() const {
+		return false;
 	}
 	[[nodiscard]] virtual bool allowsFastShare() const {
 		return false;
@@ -114,11 +137,8 @@ public:
 	// toggle selection instead of activating the pressed link
 	[[nodiscard]] virtual bool toggleSelectionByHandlerClick(
 		const ClickHandlerPtr &p) const = 0;
-
-	// if we press and drag on this media should we drag the item
-	[[nodiscard]] virtual bool dragItem() const {
-		return false;
-	}
+	[[nodiscard]] virtual bool allowTextSelectionByHandler(
+		const ClickHandlerPtr &p) const;
 
 	[[nodiscard]] virtual TextSelection adjustSelection(
 			TextSelection selection,
@@ -167,7 +187,7 @@ public:
 	}
 	virtual void stickerClearLoopPlayed() {
 	}
-	virtual std::unique_ptr<Lottie::SinglePlayer> stickerTakeLottie(
+	virtual std::unique_ptr<StickerPlayer> stickerTakePlayer(
 		not_null<DocumentData*> data,
 		const Lottie::ColorReplacements *replacements);
 	virtual void checkAnimation() {
@@ -184,7 +204,7 @@ public:
 			const PaintContext &context,
 			const QRect &geometry,
 			RectParts sides,
-			RectParts corners,
+			Ui::BubbleRounding rounding,
 			float64 highlightOpacity,
 			not_null<uint64*> cacheKey,
 			not_null<QPixmap*> cache) const {
@@ -203,7 +223,12 @@ public:
 	[[nodiscard]] virtual TextWithEntities getCaption() const {
 		return TextWithEntities();
 	}
+	virtual void hideSpoilers() {
+	}
 	[[nodiscard]] virtual bool needsBubble() const = 0;
+	[[nodiscard]] virtual bool unwrapped() const {
+		return false;
+	}
 	[[nodiscard]] virtual bool customInfoLayout() const = 0;
 	[[nodiscard]] virtual QRect contentRectForReactions() const {
 		return QRect(0, 0, width(), height());
@@ -239,6 +264,16 @@ public:
 	[[nodiscard]] MediaInBubbleState inBubbleState() const {
 		return _inBubbleState;
 	}
+	void setBubbleRounding(Ui::BubbleRounding rounding) {
+		_bubbleRounding = rounding;
+	}
+	[[nodiscard]] Ui::BubbleRounding bubbleRounding() const {
+		return _bubbleRounding;
+	}
+	[[nodiscard]] Ui::BubbleRounding adjustedBubbleRounding(
+		RectParts square = {}) const;
+	[[nodiscard]] Ui::BubbleRounding adjustedBubbleRoundingWithCaption(
+		const Ui::Text::String &caption) const;
 	[[nodiscard]] bool isBubbleTop() const {
 		return (_inBubbleState == MediaInBubbleState::Top)
 			|| (_inBubbleState == MediaInBubbleState::None);
@@ -302,6 +337,10 @@ public:
 	virtual void parentTextUpdated() {
 	}
 
+	virtual bool consumeHorizontalScroll(QPoint position, int delta) {
+		return false;
+	}
+
 	virtual ~Media() = default;
 
 protected:
@@ -314,11 +353,32 @@ protected:
 
 	[[nodiscard]] bool usesBubblePattern(const PaintContext &context) const;
 
+	void fillImageShadow(
+		QPainter &p,
+		QRect rect,
+		Ui::BubbleRounding rounding,
+		const PaintContext &context) const;
+	void fillImageOverlay(
+		QPainter &p,
+		QRect rect,
+		std::optional<Ui::BubbleRounding> rounding, // nullopt if in WebPage.
+		const PaintContext &context) const;
+	void fillImageSpoiler(
+		QPainter &p,
+		not_null<MediaSpoiler*> spoiler,
+		QRect rect,
+		const PaintContext &context) const;
+	void createSpoilerLink(not_null<MediaSpoiler*> spoiler);
+
 	void repaint() const;
 
 	const not_null<Element*> _parent;
 	MediaInBubbleState _inBubbleState = MediaInBubbleState::None;
+	Ui::BubbleRounding _bubbleRounding;
 
 };
+
+[[nodiscard]] Images::CornersMaskRef MediaRoundingMask(
+	std::optional<Ui::BubbleRounding> rounding);
 
 } // namespace HistoryView

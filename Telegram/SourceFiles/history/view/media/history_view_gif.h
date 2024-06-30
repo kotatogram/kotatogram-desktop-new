@@ -37,16 +37,29 @@ enum class Error;
 
 namespace HistoryView {
 
+class Reply;
+class TranscribeButton;
+
+using TtlRoundPaintCallback = Fn<void(
+	QPainter&,
+	QRect,
+	const PaintContext &context)>;
+
 class Gif final : public File {
 public:
 	Gif(
 		not_null<Element*> parent,
 		not_null<HistoryItem*> realParent,
-		not_null<DocumentData*> document);
+		not_null<DocumentData*> document,
+		bool spoiler);
 	~Gif();
 
 	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
+
+	void clickHandlerPressedChanged(
+		const ClickHandlerPtr &p,
+		bool pressed) override;
 
 	[[nodiscard]] TextSelection adjustSelection(
 			TextSelection selection,
@@ -61,6 +74,9 @@ public:
 	}
 
 	TextForMimeData selectedText(TextSelection selection) const override;
+	SelectedQuote selectedQuote(TextSelection selection) const override;
+	TextSelection selectionFromQuote(
+		const SelectedQuote &quote) const override;
 
 	bool uploading() const override;
 
@@ -76,7 +92,7 @@ public:
 		const PaintContext &context,
 		const QRect &geometry,
 		RectParts sides,
-		RectParts corners,
+		Ui::BubbleRounding rounding,
 		float64 highlightOpacity,
 		not_null<uint64*> cacheKey,
 		not_null<QPixmap*> cache) const override;
@@ -92,7 +108,9 @@ public:
 	TextWithEntities getCaption() const override {
 		return _caption.toTextWithEntities();
 	}
+	void hideSpoilers() override;
 	bool needsBubble() const override;
+	bool unwrapped() const override;
 	bool customInfoLayout() const override {
 		return _caption.isEmpty();
 	}
@@ -100,10 +118,6 @@ public:
 	std::optional<int> reactionButtonCenterOverride() const override;
 	QPoint resolveCustomInfoRightBottom() const override;
 	QString additionalInfoString() const override;
-
-	void stickerClearLoopPlayed() override {
-		_stickerOncePlayed = false;
-	}
 
 	bool skipBubbleTail() const override {
 		return isRoundedInBubbleBottom() && _caption.isEmpty();
@@ -124,6 +138,9 @@ private:
 
 	void validateVideoThumbnail() const;
 	[[nodiscard]] QSize countThumbSize(int &inOutWidthMax) const;
+	[[nodiscard]] int adjustHeightForLessCrop(
+		QSize dimensions,
+		QSize current) const;
 
 	float64 dataProgress() const override;
 	bool dataFinished() const override;
@@ -152,24 +169,43 @@ private:
 	void handleStreamingError(::Media::Streaming::Error &&error);
 	void streamingReady(::Media::Streaming::Information &&info);
 	void repaintStreamedContent();
+	void ensureTranscribeButton() const;
+
+	void paintTranscribe(
+		Painter &p,
+		int x,
+		int y,
+		bool right,
+		const PaintContext &context) const;
 
 	[[nodiscard]] bool needInfoDisplay() const;
 	[[nodiscard]] bool needCornerStatusDisplay() const;
 	[[nodiscard]] int additionalWidth(
+		const Reply *reply,
 		const HistoryMessageVia *via,
-		const HistoryMessageReply *reply,
 		const HistoryMessageForwarded *forwarded) const;
 	[[nodiscard]] int additionalWidth() const;
 	[[nodiscard]] bool isUnwrapped() const;
 
+	void validateThumbCache(
+		QSize outer,
+		bool isEllipse,
+		std::optional<Ui::BubbleRounding> rounding) const;
+	[[nodiscard]] QImage prepareThumbCache(QSize outer) const;
+	void validateSpoilerImageCache(
+		QSize outer,
+		std::optional<Ui::BubbleRounding> rounding) const;
+
 	void validateGroupedCache(
 		const QRect &geometry,
-		RectParts corners,
+		Ui::BubbleRounding rounding,
 		not_null<uint64*> cacheKey,
 		not_null<QPixmap*> cache) const;
-	void setStatusSize(int newSize) const;
+	void setStatusSize(int64 newSize) const;
 	void updateStatusText() const;
 	[[nodiscard]] QSize sizeForAspectRatio() const;
+
+	void validateRoundingMask(QSize size) const;
 
 	[[nodiscard]] bool downloadInCorner() const;
 	void drawCornerStatus(
@@ -181,22 +217,25 @@ private:
 		StateRequest request,
 		QPoint position) const;
 
-	void paintPath(
-		Painter &p,
-		const PaintContext &context,
-		const QRect &r) const;
+	void togglePollingStory(bool enabled) const;
+
+	TtlRoundPaintCallback _drawTtl;
 
 	const not_null<DocumentData*> _data;
-	int _thumbw = 1;
-	int _thumbh = 1;
+	const FullStoryId _storyId;
 	Ui::Text::String _caption;
 	std::unique_ptr<Streamed> _streamed;
+	const std::unique_ptr<MediaSpoiler> _spoiler;
+	mutable std::unique_ptr<TranscribeButton> _transcribe;
 	mutable std::shared_ptr<Data::DocumentMedia> _dataMedia;
 	mutable std::unique_ptr<Image> _videoThumbnailFrame;
-	ClickHandlerPtr _stickerLink;
-
 	QString _downloadSize;
-	mutable bool _stickerOncePlayed = false;
+	mutable QImage _thumbCache;
+	mutable QImage _roundingMask;
+	mutable std::optional<Ui::BubbleRounding> _thumbCacheRounding;
+	mutable bool _thumbCacheBlurred : 1 = false;
+	mutable bool _thumbIsEllipse : 1 = false;
+	mutable bool _pollingStory : 1 = false;
 
 };
 

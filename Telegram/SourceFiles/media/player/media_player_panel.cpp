@@ -13,17 +13,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "data/data_session.h"
 #include "data/data_document.h"
-#include "data/data_media_types.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "ui/widgets/shadow.h"
 #include "ui/widgets/scroll_area.h"
-#include "ui/ui_utility.h"
 #include "ui/cached_round_corners.h"
 #include "mainwindow.h"
 #include "main/main_session.h"
 #include "styles/style_overview.h"
-#include "styles/style_widgets.h"
 #include "styles/style_media_player.h"
 #include "styles/style_info.h"
 
@@ -135,7 +132,7 @@ void Panel::updateSize() {
 }
 
 void Panel::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 
 	if (!_cache.isNull()) {
 		bool animating = _a_appearance.animating();
@@ -160,8 +157,7 @@ void Panel::paintEvent(QPaintEvent *e) {
 		| (rtl() ? RectPart::Left : RectPart::Right)
 		| RectPart::Top;
 	Ui::Shadow::paint(p, shadowedRect, width(), st::defaultRoundShadow, shadowedSides);
-	auto parts = RectPart::Full;
-	Ui::FillRoundRect(p, shadowedRect, st::menuBg, Ui::MenuCorners, nullptr, parts);
+	Ui::FillRoundRect(p, shadowedRect, st::menuBg, Ui::MenuCorners);
 }
 
 void Panel::enterEventHook(QEnterEvent *e) {
@@ -301,7 +297,7 @@ void Panel::refreshList() {
 			section().mediaType());
 		memento.setAroundId(contextId);
 		memento.setIdsLimit(kPlaylistIdsLimit);
-		memento.setScrollTopItem(contextId);
+		memento.setScrollTopItem({ contextId, peer->session().uniqueId() });
 		memento.setScrollTopShift(-st::infoMediaMargin.top());
 		weak->restoreState(&memento);
 	}

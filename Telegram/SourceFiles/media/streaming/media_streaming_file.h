@@ -21,6 +21,13 @@ namespace Streaming {
 
 class FileDelegate;
 
+struct StartOptions {
+	crl::time position = 0;
+	crl::time durationOverride = 0;
+	bool seekable = true;
+	bool hwAllow = false;
+};
+
 class File final {
 public:
 	explicit File(std::shared_ptr<Reader> reader);
@@ -28,7 +35,7 @@ public:
 	File(const File &other) = delete;
 	File &operator=(const File &other) = delete;
 
-	void start(not_null<FileDelegate*> delegate, crl::time position);
+	void start(not_null<FileDelegate*> delegate, StartOptions options);
 	void wake();
 	void stop(bool stillActive = false);
 
@@ -43,7 +50,7 @@ private:
 		Context(not_null<FileDelegate*> delegate, not_null<Reader*> reader);
 		~Context();
 
-		void start(crl::time position);
+		void start(StartOptions options);
 		void readNextPacket();
 
 		void interrupt();
@@ -75,7 +82,8 @@ private:
 		[[nodiscard]] Stream initStream(
 			not_null<AVFormatContext *> format,
 			AVMediaType type,
-			Mode mode);
+			Mode mode,
+			StartOptions options);
 		void seekToPosition(
 			not_null<AVFormatContext *> format,
 			const Stream &stream,
@@ -93,8 +101,8 @@ private:
 		const not_null<Reader*> _reader;
 
 		base::flat_map<int, std::vector<FFmpeg::Packet>> _queuedPackets;
-		int _offset = 0;
-		int _size = 0;
+		int64 _offset = 0;
+		int64 _size = 0;
 		bool _failed = false;
 		bool _readTillEnd = false;
 		std::optional<bool> _fullInCache;

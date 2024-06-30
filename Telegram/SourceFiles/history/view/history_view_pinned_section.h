@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/section_widget.h"
 #include "window/section_memento.h"
 #include "history/view/history_view_list_widget.h"
+#include "history/view/history_view_corner_buttons.h"
 #include "data/data_messages.h"
 #include "base/weak_ptr.h"
 #include "base/timer.h"
@@ -20,7 +21,6 @@ namespace Ui {
 class ScrollArea;
 class PlainShadow;
 class FlatButton;
-class HistoryDownButton;
 } // namespace Ui
 
 namespace Profile {
@@ -32,18 +32,20 @@ namespace HistoryView {
 class Element;
 class TopBarWidget;
 class PinnedMemento;
+class TranslateBar;
 
 class PinnedWidget final
 	: public Window::SectionWidget
-	, private ListDelegate {
+	, private ListDelegate
+	, private CornerButtonsDelegate {
 public:
 	PinnedWidget(
 		QWidget *parent,
 		not_null<Window::SessionController*> controller,
-		not_null<History*> history);
+		not_null<Data::Thread*> thread);
 	~PinnedWidget();
 
-	[[nodiscard]] not_null<History*> history() const;
+	[[nodiscard]] not_null<Data::Thread*> thread() const;
 	Dialogs::RowDescriptor activeChat() const override;
 
 	bool hasTopBarShadow() const override {
@@ -77,9 +79,10 @@ public:
 
 	// ListDelegate interface.
 	Context listContext() override;
-	void listScrollTo(int top) override;
+	bool listScrollTo(int top, bool syntetic = true) override;
 	void listCancelRequest() override;
 	void listDeleteRequest() override;
+	void listTryProcessKeyInput(not_null<QKeyEvent*> e) override;
 	rpl::producer<Data::MessagesSlice> listSource(
 		Data::MessagePosition aroundId,
 		int limitBefore,
@@ -90,25 +93,60 @@ public:
 		not_null<HistoryItem*> first,
 		not_null<HistoryItem*> second) override;
 	void listSelectionChanged(SelectedItems &&items) override;
-	void listVisibleItemsChanged(HistoryItemsList &&items) override;
+	void listMarkReadTill(not_null<HistoryItem*> item) override;
+	void listMarkContentsRead(
+		const base::flat_set<not_null<HistoryItem*>> &items) override;
 	MessagesBarData listMessagesBar(
 		const std::vector<not_null<Element*>> &elements) override;
 	void listContentRefreshed() override;
-	ClickHandlerPtr listDateLink(not_null<Element*> view) override;
+	void listUpdateDateLink(
+		ClickHandlerPtr &link,
+		not_null<Element*> view) override;
 	bool listElementHideReply(not_null<const Element*> view) override;
 	bool listElementShownUnread(not_null<const Element*> view) override;
-	bool listIsGoodForAroundPosition(not_null<const Element*> view) override;
+	bool listIsGoodForAroundPosition(
+		not_null<const Element*> view) override;
 	void listSendBotCommand(
 		const QString &command,
+		const FullMsgId &context) override;
+	void listSearch(
+		const QString &query,
 		const FullMsgId &context) override;
 	void listHandleViaClick(not_null<UserData*> bot) override;
 	not_null<Ui::ChatTheme*> listChatTheme() override;
 	CopyRestrictionType listCopyRestrictionType(HistoryItem *item) override;
+	CopyRestrictionType listCopyMediaRestrictionType(
+		not_null<HistoryItem*> item) override;
 	CopyRestrictionType listSelectRestrictionType() override;
 	auto listAllowedReactionsValue()
-		-> rpl::producer<std::optional<base::flat_set<QString>>> override;
+		-> rpl::producer<Data::AllowedReactions> override;
+	void listShowPremiumToast(not_null<DocumentData*> document) override;
+	void listOpenPhoto(
+		not_null<PhotoData*> photo,
+		FullMsgId context) override;
+	void listOpenDocument(
+		not_null<DocumentData*> document,
+		FullMsgId context,
+		bool showInMediaView) override;
+	void listPaintEmpty(
+		Painter &p,
+		const Ui::ChatPaintContext &context) override;
+	QString listElementAuthorRank(not_null<const Element*> view) override;
+	History *listTranslateHistory() override;
+	void listAddTranslatedItems(
+		not_null<TranslateTracker*> tracker) override;
 
-protected:
+	// CornerButtonsDelegate delegate.
+	void cornerButtonsShowAtPosition(
+		Data::MessagePosition position) override;
+	Data::Thread *cornerButtonsThread() override;
+	FullMsgId cornerButtonsCurrentId() override;
+	bool cornerButtonsIgnoreVisibility() override;
+	std::optional<bool> cornerButtonsDownShown() override;
+	bool cornerButtonsUnreadMayBeShown() override;
+	bool cornerButtonsHas(CornerButtonType type) override;
+
+private:
 	void resizeEvent(QResizeEvent *e) override;
 	void paintEvent(QPaintEvent *e) override;
 
@@ -116,30 +154,20 @@ protected:
 		const Window::SectionSlideParams &params) override;
 	void showFinishedHook() override;
 	void doSetInnerFocus() override;
+	void checkActivation() override;
 
-private:
 	void onScroll();
 	void updateInnerVisibleArea();
 	void updateControlsGeometry();
 	void updateAdaptiveLayout();
 	void saveState(not_null<PinnedMemento*> memento);
 	void restoreState(not_null<PinnedMemento*> memento);
-	void showAtStart();
-	void showAtEnd();
 	void showAtPosition(
 		Data::MessagePosition position,
-		HistoryItem *originItem = nullptr);
-	bool showAtPositionNow(
-		Data::MessagePosition position,
-		HistoryItem *originItem,
-		anim::type animated = anim::type::normal);
+		FullMsgId originId = {});
 
 	void setupClearButton();
-	void setupScrollDownButton();
-	void scrollDownClicked();
-	void scrollDownAnimationFinish();
-	void updateScrollDownVisibility();
-	void updateScrollDownPosition();
+	void setupTranslateBar();
 
 	void confirmDeleteSelected();
 	void confirmForwardSelected();
@@ -149,6 +177,7 @@ private:
 	void setMessagesCount(int count);
 	void refreshClearButtonText();
 
+	const not_null<Data::Thread*> _thread;
 	const not_null<History*> _history;
 	std::shared_ptr<Ui::ChatTheme> _theme;
 	PeerData *_migratedPeer = nullptr;
@@ -156,13 +185,14 @@ private:
 	object_ptr<TopBarWidget> _topBar;
 	object_ptr<Ui::PlainShadow> _topBarShadow;
 
+	std::unique_ptr<TranslateBar> _translateBar;
+	int _translateBarHeight = 0;
+
 	bool _skipScrollEvent = false;
 	std::unique_ptr<Ui::ScrollArea> _scroll;
 	std::unique_ptr<Ui::FlatButton> _clearButton;
 
-	Ui::Animations::Simple _scrollDownShown;
-	bool _scrollDownIsShown = false;
-	object_ptr<Ui::HistoryDownButton> _scrollDown;
+	CornerButtons _cornerButtons;
 
 	int _messagesCount = -1;
 
@@ -173,7 +203,7 @@ public:
 	using UniversalMsgId = MsgId;
 
 	explicit PinnedMemento(
-		not_null<History*> history,
+		not_null<Data::Thread*> thread,
 		UniversalMsgId highlightId = 0);
 
 	object_ptr<Window::SectionWidget> createWidget(
@@ -182,8 +212,8 @@ public:
 		Window::Column column,
 		const QRect &geometry) override;
 
-	[[nodiscard]] not_null<History*> getHistory() const {
-		return _history;
+	[[nodiscard]] not_null<Data::Thread*> getThread() const {
+		return _thread;
 	}
 
 	[[nodiscard]] not_null<ListMemento*> list() {
@@ -193,8 +223,10 @@ public:
 		return _highlightId;
 	}
 
+	Data::ForumTopic *topicForRemoveRequests() const override;
+
 private:
-	const not_null<History*> _history;
+	const not_null<Data::Thread*> _thread;
 	const UniversalMsgId _highlightId = 0;
 	ListMemento _list;
 

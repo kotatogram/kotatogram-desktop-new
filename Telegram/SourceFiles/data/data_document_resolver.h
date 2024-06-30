@@ -20,6 +20,8 @@ namespace Data {
 
 class DocumentMedia;
 
+extern const char kOptionExternalVideoPlayer[];
+
 [[nodiscard]] QString FileExtension(const QString &filepath);
 // [[nodiscard]] bool IsValidMediaFile(const QString &filepath);
 [[nodiscard]] bool IsExecutableName(const QString &filepath);
@@ -32,6 +34,7 @@ base::binary_guard ReadBackgroundImageAsync(
 void ResolveDocument(
 	Window::SessionController *controller,
 	not_null<DocumentData*> document,
-	HistoryItem *item);
+	HistoryItem *item,
+	MsgId topicRootId);
 
 } // namespace Data

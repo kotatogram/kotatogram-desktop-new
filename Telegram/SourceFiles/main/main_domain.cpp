@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_domain.h"
 
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "core/shortcuts.h"
 #include "core/crash_reports.h"
 #include "main/main_account.h"
@@ -22,7 +23,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localstorage.h"
 #include "export/export_settings.h"
 #include "window/notifications_manager.h"
-#include "facades.h"
+#include "window/window_controller.h"
+#include "data/data_peer_values.h" // Data::AmPremiumValue.
 
 namespace Main {
 
@@ -74,7 +76,7 @@ Storage::StartResult Domain::start(const QByteArray &passcode) {
 
 void Domain::finish() {
 	_accountToActivate = -1;
-	_active = nullptr;
+	_active.reset(nullptr);
 	base::take(_accounts);
 }
 
@@ -140,6 +142,27 @@ const std::vector<Domain::AccountWithIndex> &Domain::accounts() const {
 	return _accounts;
 }
 
+std::vector<not_null<Account*>> Domain::orderedAccounts() const {
+	const auto order = Core::App().settings().accountsOrder();
+	auto accounts = ranges::views::all(
+		_accounts
+	) | ranges::views::transform([](const Domain::AccountWithIndex &a) {
+		return not_null{ a.account.get() };
+	}) | ranges::to_vector;
+	ranges::stable_sort(accounts, [&](
+			not_null<Account*> a,
+			not_null<Account*> b) {
+		const auto aIt = a->sessionExists()
+			? ranges::find(order, a->session().uniqueId())
+			: end(order);
+		const auto bIt = b->sessionExists()
+			? ranges::find(order, b->session().uniqueId())
+			: end(order);
+		return aIt < bIt;
+	});
+	return accounts;
+}
+
 rpl::producer<> Domain::accountsChanges() const {
 	return _accountsChanges.events();
 }
@@ -158,6 +181,16 @@ Account *Domain::maybeLastOrSomeAuthedAccount() {
 	return result;
 }
 
+int Domain::accountsAuthedCount() const {
+	auto result = 0;
+	for (const auto &[index, account] : _accounts) {
+		if (account->sessionExists()) {
+			++result;
+		}
+	}
+	return result;
+}
+
 rpl::producer<Account*> Domain::activeValue() const {
 	return _active.value();
 }
@@ -168,8 +201,6 @@ Account &Domain::active() const {
 	Ensures(_active.current() != nullptr);
 	return *_active.current();
 }
-
-
 
 rpl::producer<not_null<Account*>> Domain::activeChanges() const {
 	return _active.changes() | rpl::map([](Account *value) {
@@ -236,7 +267,7 @@ void Domain::scheduleUpdateUnreadBadge() {
 
 not_null<Main::Account*> Domain::add(MTP::Environment environment) {
 	Expects(started());
-	Expects(_accounts.size() < kMaxAccounts);
+	Expects(_accounts.size() < kPremiumMaxAccounts);
 
 	static const auto cloneConfig = [](const MTP::Config &config) {
 		return std::make_unique<MTP::Config>(config);
@@ -282,14 +313,24 @@ not_null<Main::Account*> Domain::add(MTP::Environment environment) {
 	return account;
 }
 
-void Domain::addActivated(MTP::Environment environment) {
-	if (accounts().size() < Main::Domain::kMaxAccounts) {
-		activate(add(environment));
+void Domain::addActivated(MTP::Environment environment, bool newWindow) {
+	const auto added = [&](not_null<Main::Account*> account) {
+		if (newWindow) {
+			Core::App().ensureSeparateWindowForAccount(account);
+		} else if (const auto window = Core::App().separateWindowForAccount(
+				account)) {
+			window->activate();
+		} else {
+			activate(account);
+		}
+	};
+	if (accounts().size() < maxAccounts()) {
+		added(add(environment));
 	} else {
 		for (auto &[index, account] : accounts()) {
 			if (!account->sessionExists()
 				&& account->mtp().environment() == environment) {
-				activate(account.get());
+				added(account.get());
 				break;
 			}
 		}
@@ -305,6 +346,12 @@ void Domain::watchSession(not_null<Account*> account) {
 		) | rpl::start_with_next([=] {
 			scheduleUpdateUnreadBadge();
 		}, session->lifetime());
+
+		Data::AmPremiumValue(
+			session
+		) | rpl::start_with_next([=] {
+			_lastMaxAccounts = maxAccounts();
+		}, session->lifetime());
 	}, account->lifetime());
 
 	account->sessionChanges(
@@ -312,26 +359,31 @@ void Domain::watchSession(not_null<Account*> account) {
 		return !session;
 	}) | rpl::start_with_next([=] {
 		scheduleUpdateUnreadBadge();
-		if (account == _active.current()) {
-			activateAuthedAccount();
-		}
+		closeAccountWindows(account);
 		crl::on_main(&Core::App(), [=] {
 			removeRedundantAccounts();
 		});
 	}, account->lifetime());
 }
 
-void Domain::activateAuthedAccount() {
-	Expects(started());
-
-	if (_active.current()->sessionExists()) {
-		return;
-	}
+void Domain::closeAccountWindows(not_null<Main::Account*> account) {
+	auto another = (Main::Account*)nullptr;
 	for (auto i = _accounts.begin(); i != _accounts.end(); ++i) {
-		if (i->account->sessionExists()) {
-			activate(i->account.get());
-			return;
+		const auto other = i->account.get();
+		if (other == account) {
+			continue;
+		} else if (Core::App().separateWindowForAccount(other)) {
+			const auto that = Core::App().separateWindowForAccount(account);
+			if (that) {
+				that->close();
+			}
+		} else if (!another
+			|| (other->sessionExists() && !another->sessionExists())) {
+			another = other;
 		}
+	}
+	if (another) {
+		activate(another);
 	}
 }
 
@@ -356,9 +408,8 @@ void Domain::removeRedundantAccounts() {
 	Expects(started());
 
 	const auto was = _accounts.size();
-	activateAuthedAccount();
 	for (auto i = _accounts.begin(); i != _accounts.end();) {
-		if (i->account.get() == _active.current()
+		if (Core::App().separateWindowForAccount(i->account.get())
 			|| i->account->sessionExists()) {
 			++i;
 			continue;
@@ -389,12 +440,19 @@ void Domain::checkForLastProductionConfig(
 }
 
 void Domain::maybeActivate(not_null<Main::Account*> account) {
-	Core::App().preventOrInvoke(crl::guard(account, [=] {
+	if (Core::App().separateWindowForAccount(account)) {
 		activate(account);
-	}));
+	} else {
+		Core::App().preventOrInvoke(crl::guard(account, [=] {
+			activate(account);
+		}));
+	}
 }
 
 void Domain::activate(not_null<Main::Account*> account) {
+	if (const auto window = Core::App().separateWindowForAccount(account)) {
+		window->activate();
+	}
 	if (_active.current() == account.get()) {
 		return;
 	}
@@ -436,6 +494,23 @@ void Domain::scheduleWriteAccounts() {
 		_writeAccountsScheduled = false;
 		_local->writeAccounts();
 	});
+}
+
+int Domain::maxAccounts() const {
+	/*
+	const auto premiumCount = ranges::count_if(accounts(), [](
+			const Main::Domain::AccountWithIndex &d) {
+		return d.account->sessionExists()
+			&& (d.account->session().premium()
+				|| d.account->session().isTestMode());
+	});
+	return std::min(int(premiumCount) + kMaxAccounts, kPremiumMaxAccounts);
+	*/
+	return kMaxAccounts;
+}
+
+rpl::producer<int> Domain::maxAccountsChanges() const {
+	return _lastMaxAccounts.changes();
 }
 
 } // namespace Main

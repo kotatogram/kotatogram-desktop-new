@@ -1,0 +1,25 @@
+<RCC>
+  <qresource prefix="/animations">
+    <file alias="blocked_peers_empty.tgs">../../animations/blocked_peers_empty.tgs</file>
+    <file alias="filters.tgs">../../animations/filters.tgs</file>
+    <file alias="cloud_filters.tgs">../../animations/cloud_filters.tgs</file>
+    <file alias="local_passcode_enter.tgs">../../animations/local_passcode_enter.tgs</file>
+    <file alias="cloud_password/intro.tgs">../../animations/cloud_password/intro.tgs</file>
+    <file alias="cloud_password/password_input.tgs">../../animations/cloud_password/password_input.tgs</file>
+    <file alias="cloud_password/hint.tgs">../../animations/cloud_password/hint.tgs</file>
+    <file alias="cloud_password/email.tgs">../../animations/cloud_password/email.tgs</file>
+    <file alias="ttl.tgs">../../animations/ttl.tgs</file>
+    <file alias="discussion.tgs">../../animations/discussion.tgs</file>
+    <file alias="stats.tgs">../../animations/stats.tgs</file>
+    <file alias="voice_ttl_idle.tgs">../../animations/voice_ttl_idle.tgs</file>
+    <file alias="voice_ttl_start.tgs">../../animations/voice_ttl_start.tgs</file>
+    <file alias="palette.tgs">../../animations/palette.tgs</file>
+    <file alias="sleep.tgs">../../animations/sleep.tgs</file>
+	<file alias="greeting.tgs">../../animations/greeting.tgs</file>
+	<file alias="location.tgs">../../animations/location.tgs</file>
+	<file alias="robot.tgs">../../animations/robot.tgs</file>
+	<file alias="writing.tgs">../../animations/writing.tgs</file>
+	<file alias="hours.tgs">../../animations/hours.tgs</file>
+	<file alias="phone.tgs">../../animations/phone.tgs</file>
+  </qresource>
+</RCC>

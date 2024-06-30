@@ -8,12 +8,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/basic_click_handlers.h"
+#include "data/data_msg_id.h"
 
 constexpr auto kPeerLinkPeerIdProperty = 0x01;
 constexpr auto kPhotoLinkMediaProperty = 0x02;
 constexpr auto kDocumentLinkMediaProperty = 0x03;
 constexpr auto kSendReactionEmojiProperty = 0x04;
 constexpr auto kReactionsCountEmojiProperty = 0x05;
+constexpr auto kDocumentFilenameTooltipProperty = 0x06;
+
+namespace Ui {
+class Show;
+} // namespace Ui
 
 namespace Main {
 class Session;
@@ -32,10 +38,14 @@ class SessionController;
 class PeerData;
 struct ClickHandlerContext {
 	FullMsgId itemId;
+	QString attachBotWebviewUrl;
 	// Is filled from sections.
 	Fn<HistoryView::ElementDelegate*()> elementDelegate;
 	base::weak_ptr<Window::SessionController> sessionWindow;
+	std::shared_ptr<Ui::Show> show;
+	bool mayShowConfirmation = false;
 	bool skipBotAutoLogin = false;
+	bool botStartAutoSubmit = false;
 	// Is filled from peer info.
 	PeerData *peer = nullptr;
 };

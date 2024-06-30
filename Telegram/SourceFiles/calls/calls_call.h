@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/bytes.h"
 #include "mtproto/sender.h"
 #include "mtproto/mtproto_auth_key.h"
+#include "webrtc/webrtc_device_resolver.h"
 
 namespace Media {
 namespace Audio {
@@ -126,6 +127,7 @@ public:
 		WaitingIncoming,
 		Ringing,
 		Busy,
+		WaitingUserConfirmation,
 	};
 	[[nodiscard]] State state() const {
 		return _state.current();
@@ -179,6 +181,7 @@ public:
 	crl::time getDurationMs() const;
 	float64 getWaitingSoundPeakValue() const;
 
+	void applyUserConfirmation();
 	void answer();
 	void hangup();
 	void redial();
@@ -188,11 +191,9 @@ public:
 
 	QString getDebugLog() const;
 
-	void setCurrentAudioDevice(bool input, const QString &deviceId);
 	//void setAudioVolume(bool input, float level);
 	void setAudioDuckingEnabled(bool enabled);
 
-	void setCurrentCameraDevice(const QString &deviceId);
 	[[nodiscard]] QString videoDeviceId() const {
 		return _videoCaptureDeviceId;
 	}
@@ -248,6 +249,7 @@ private:
 	void setSignalBarCount(int count);
 	void destroyController();
 
+	void setupMediaDevices();
 	void setupOutgoingVideo();
 	void updateRemoteMediaState(
 		tgcalls::AudioState audio,
@@ -268,6 +270,11 @@ private:
 	crl::time _startTime = 0;
 	base::DelayedCallTimer _finishByTimeoutTimer;
 	base::Timer _discardByTimeoutTimer;
+
+	Fn<void(Webrtc::DeviceResolvedId)> _setDeviceIdCallback;
+	Webrtc::DeviceResolver _playbackDeviceId;
+	Webrtc::DeviceResolver _captureDeviceId;
+	Webrtc::DeviceResolver _cameraDeviceId;
 
 	rpl::variable<bool> _muted = false;
 

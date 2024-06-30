@@ -13,25 +13,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Ui {
 struct ChatPaintContext;
+class AnimatedIcon;
+struct ReactionFlyAnimationArgs;
+class ReactionFlyAnimation;
 } // namespace Ui
 
 namespace Data {
 class Reactions;
+struct ReactionId;
+struct MessageReaction;
 } // namespace Data
 
 namespace HistoryView {
-namespace Reactions {
-class Animation;
-} // namespace Reactions
 
 using PaintContext = Ui::ChatPaintContext;
 
 class Message;
 struct TextState;
-struct ReactionAnimationArgs;
 
 class BottomInfo final : public Object {
 public:
+	using ReactionId = ::Data::ReactionId;
+	using MessageReaction = ::Data::MessageReaction;
 	struct Data {
 		enum class Flag : uchar {
 			Edited         = 0x01,
@@ -41,6 +44,7 @@ public:
 			Sponsored      = 0x10,
 			Pinned         = 0x20,
 			Imported       = 0x40,
+			Shortcut       = 0x80,
 			//Unread, // We don't want to pass and update it in Date for now.
 		};
 		friend inline constexpr bool is_flag_type(Flag) { return true; };
@@ -48,10 +52,10 @@ public:
 
 		QDateTime date;
 		QString author;
-		base::flat_map<QString, int> reactions;
-		QString chosenReaction;
+		std::vector<MessageReaction> reactions;
 		std::optional<int> views;
 		std::optional<int> replies;
+		std::optional<int> forwardsCount;
 		Flags flags;
 	};
 	BottomInfo(not_null<::Data::Reactions*> reactionsOwner, Data &&data);
@@ -75,23 +79,18 @@ public:
 		const PaintContext &context) const;
 
 	void animateReaction(
-		ReactionAnimationArgs &&args,
+		Ui::ReactionFlyAnimationArgs &&args,
 		Fn<void()> repaint);
 	[[nodiscard]] auto takeReactionAnimations()
-		-> base::flat_map<QString, std::unique_ptr<Reactions::Animation>>;
+		-> base::flat_map<
+			ReactionId,
+			std::unique_ptr<Ui::ReactionFlyAnimation>>;
 	void continueReactionAnimations(base::flat_map<
-		QString,
-		std::unique_ptr<Reactions::Animation>> animations);
+		ReactionId,
+		std::unique_ptr<Ui::ReactionFlyAnimation>> animations);
 
 private:
-	struct Reaction {
-		mutable std::unique_ptr<Reactions::Animation> animation;
-		mutable QImage image;
-		QString emoji;
-		QString countText;
-		int count = 0;
-		int countTextWidth = 0;
-	};
+	struct Reaction;
 
 	void layout();
 	void layoutDateText();
@@ -113,7 +112,8 @@ private:
 	QSize countCurrentSize(int newWidth) override;
 
 	void setReactionCount(Reaction &reaction, int count);
-	[[nodiscard]] Reaction prepareReactionWithEmoji(const QString &emoji);
+	[[nodiscard]] Reaction prepareReactionWithId(
+		const ReactionId &id);
 	[[nodiscard]] ClickHandlerPtr revokeReactionLink(
 		not_null<const HistoryItem*> item,
 		QPoint position) const;

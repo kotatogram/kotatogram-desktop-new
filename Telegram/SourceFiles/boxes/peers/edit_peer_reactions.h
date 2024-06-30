@@ -7,21 +7,36 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/layers/generic_box.h"
-
-class PeerData;
+#include "data/data_peer.h"
 
 namespace Data {
 struct Reaction;
+struct AllowedReactions;
 } // namespace Data
+
+namespace Ui {
+class GenericBox;
+} // namespace Ui
+
+namespace Window {
+class SessionNavigation;
+} // namespace Window
+
+struct EditAllowedReactionsArgs {
+	not_null<Window::SessionNavigation*> navigation;
+	int allowedCustomReactions = 0;
+	int customReactionsHardLimit = 0;
+	bool isGroup = false;
+	std::vector<Data::Reaction> list;
+	Data::AllowedReactions allowed;
+	Fn<void(int required)> askForBoosts;
+	Fn<void(const Data::AllowedReactions &)> save;
+};
 
 void EditAllowedReactionsBox(
 	not_null<Ui::GenericBox*> box,
-	bool isGroup,
-	const std::vector<Data::Reaction> &list,
-	const base::flat_set<QString> &selected,
-	Fn<void(const std::vector<QString> &)> callback);
+	EditAllowedReactionsArgs &&args);
 
 void SaveAllowedReactions(
 	not_null<PeerData*> peer,
-	const std::vector<QString> &allowed);
+	const Data::AllowedReactions &allowed);

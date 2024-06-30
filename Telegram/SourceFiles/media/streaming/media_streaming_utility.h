@@ -30,7 +30,8 @@ struct Stream {
 	crl::time duration = kTimeUnknown;
 	AVRational timeBase = FFmpeg::kUniversalTimeBase;
 	FFmpeg::CodecPointer codec;
-	FFmpeg::FramePointer frame;
+	FFmpeg::FramePointer decodedFrame;
+	FFmpeg::FramePointer transferredFrame;
 	std::deque<FFmpeg::Packet> queue;
 	int invalidDataPackets = 0;
 
@@ -54,15 +55,41 @@ struct Stream {
 	bool hasAlpha,
 	int rotation,
 	const FrameRequest &request);
+[[nodiscard]] bool TransferFrame(
+	Stream &stream,
+	not_null<AVFrame*> decodedFrame,
+	not_null<AVFrame*> transferredFrame);
 [[nodiscard]] QImage ConvertFrame(
 	Stream &stream,
-	AVFrame *frame,
+	not_null<AVFrame*> frame,
 	QSize resize,
 	QImage storage);
-[[nodiscard]] FrameYUV420 ExtractYUV420(Stream &stream, AVFrame *frame);
+[[nodiscard]] FrameYUV ExtractYUV(Stream &stream, AVFrame *frame);
+
+struct ExpandDecision {
+	QSize result;
+	bool expanding = false;
+};
+[[nodiscard]] ExpandDecision DecideFrameResize(
+	QSize outer,
+	QSize original,
+	int minVisibleNominator = 3, // If we cut out no more than 0.25 of
+	int minVisibleDenominator = 4); // the original, let's expand.
+[[nodiscard]] bool FrameResizeMayExpand(
+	QSize outer,
+	QSize original,
+	int minVisibleNominator = 3,
+	int minVisibleDenominator = 4);
+[[nodiscard]] ExpandDecision DecideVideoFrameResize(
+	QSize outer,
+	QSize original);
+[[nodiscard]] QSize CalculateResizeFromOuter(QSize outer, QSize original);
+[[nodiscard]] QImage PrepareBlurredBackground(QSize outer, QImage frame);
+void FillBlurredBackground(QPainter &p, QSize outer, QImage bg);
 [[nodiscard]] QImage PrepareByRequest(
 	const QImage &original,
-	bool alpha,
+	bool hasAlpha,
+	const AVRational &aspect,
 	int rotation,
 	const FrameRequest &request,
 	QImage storage);
