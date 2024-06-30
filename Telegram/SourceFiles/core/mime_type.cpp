@@ -7,9 +7,37 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/mime_type.h"
 
+#include "core/utils.h"
+#include "ui/image/image_prepare.h"
+
 #include <QtCore/QMimeDatabase>
+#include <QtCore/QMimeData>
+
+#include <kurlmimedata.h>
 
 namespace Core {
+namespace {
+
+[[nodiscard]] bool IsImageFromFirefox(not_null<const QMimeData*> data) {
+	// See https://bugs.telegram.org/c/6765/public
+	// See https://github.com/telegramdesktop/tdesktop/issues/10564
+	//
+	// Usually we prefer pasting from URLs list instead of pasting from
+	// image data, because sometimes a file is copied together with an
+	// image data of its File Explorer thumbnail or smth like that. In
+	// that case you end up sending this thumbnail instead of the file.
+	//
+	// But in case of "Copy Image" from Firefox on Windows we get both
+	// URLs list with a file path to some Temp folder in the list and
+	// the image data that was copied. The file is read slower + it may
+	// have incorrect content in case the URL can't be accessed without
+	// authorization. So in that case we want only image data and we
+	// check for a special Firefox mime type to check for that case.
+	return data->hasFormat(u"application/x-moz-nativeimage"_q)
+		&& data->hasImage();
+}
+
+} // namespace
 
 MimeType::MimeType(const QMimeType &type) : _typeStruct(type) {
 }
@@ -54,18 +82,18 @@ QString MimeType::name() const {
 }
 
 MimeType MimeTypeForName(const QString &mime) {
-	if (mime == qstr("image/webp")) {
+	if (mime == u"image/webp"_q) {
 		return MimeType(MimeType::Known::WebP);
-	} else if (mime == qstr("application/x-tgsticker")) {
+	} else if (mime == u"application/x-tgsticker"_q) {
 		return MimeType(MimeType::Known::Tgs);
-	} else if (mime == qstr("application/x-tgwallpattern")) {
+	} else if (mime == u"application/x-tgwallpattern"_q) {
 		return MimeType(MimeType::Known::Tgv);
-	} else if (mime == qstr("application/x-tdesktop-theme")
-		|| mime == qstr("application/x-tgtheme-tdesktop")) {
+	} else if (mime == u"application/x-tdesktop-theme"_q
+		|| mime == u"application/x-tgtheme-tdesktop"_q) {
 		return MimeType(MimeType::Known::TDesktopTheme);
-	} else if (mime == qstr("application/x-tdesktop-palette")) {
+	} else if (mime == u"application/x-tdesktop-palette"_q) {
 		return MimeType(MimeType::Known::TDesktopPalette);
-	} else if (mime == qstr("audio/mpeg3")) {
+	} else if (mime == u"audio/mpeg3"_q) {
 		return MimeType(QMimeDatabase().mimeTypeForName("audio/mp3"));
 	}
 	return MimeType(QMimeDatabase().mimeTypeForName(mime));
@@ -73,15 +101,15 @@ MimeType MimeTypeForName(const QString &mime) {
 
 MimeType MimeTypeForFile(const QFileInfo &file) {
 	QString path = file.absoluteFilePath();
-	if (path.endsWith(qstr(".webp"), Qt::CaseInsensitive)) {
+	if (path.endsWith(u".webp"_q, Qt::CaseInsensitive)) {
 		return MimeType(MimeType::Known::WebP);
-	} else if (path.endsWith(qstr(".tgs"), Qt::CaseInsensitive)) {
+	} else if (path.endsWith(u".tgs"_q, Qt::CaseInsensitive)) {
 		return MimeType(MimeType::Known::Tgs);
-	} else if (path.endsWith(qstr(".tgv"))) {
+	} else if (path.endsWith(u".tgv"_q)) {
 		return MimeType(MimeType::Known::Tgv);
-	} else if (path.endsWith(qstr(".tdesktop-theme"), Qt::CaseInsensitive)) {
+	} else if (path.endsWith(u".tdesktop-theme"_q, Qt::CaseInsensitive)) {
 		return MimeType(MimeType::Known::TDesktopTheme);
-	} else if (path.endsWith(qstr(".tdesktop-palette"), Qt::CaseInsensitive)) {
+	} else if (path.endsWith(u".tdesktop-palette"_q, Qt::CaseInsensitive)) {
 		return MimeType(MimeType::Known::TDesktopPalette);
 	}
 
@@ -135,19 +163,79 @@ bool IsMimeAcceptedForPhotoVideoAlbum(const QString &mime) {
 
 bool FileIsImage(const QString &name, const QString &mime) {
 	QString lowermime = mime.toLower(), namelower = name.toLower();
-	if (lowermime.startsWith(qstr("image/"))) {
+	if (lowermime.startsWith(u"image/"_q)) {
 		return true;
-	} else if (namelower.endsWith(qstr(".bmp"))
-		|| namelower.endsWith(qstr(".jpg"))
-		|| namelower.endsWith(qstr(".jpeg"))
-		|| namelower.endsWith(qstr(".gif"))
-		|| namelower.endsWith(qstr(".webp"))
-		|| namelower.endsWith(qstr(".tga"))
-		|| namelower.endsWith(qstr(".tiff"))
-		|| namelower.endsWith(qstr(".tif"))
-		|| namelower.endsWith(qstr(".psd"))
-		|| namelower.endsWith(qstr(".png"))) {
+	} else if (namelower.endsWith(u".bmp"_q)
+		|| namelower.endsWith(u".jpg"_q)
+		|| namelower.endsWith(u".jpeg"_q)
+		|| namelower.endsWith(u".gif"_q)
+		|| namelower.endsWith(u".webp"_q)
+		|| namelower.endsWith(u".tga"_q)
+		|| namelower.endsWith(u".tiff"_q)
+		|| namelower.endsWith(u".tif"_q)
+		|| namelower.endsWith(u".psd"_q)
+		|| namelower.endsWith(u".png"_q)) {
 		return true;
+	}
+	return false;
+}
+
+std::shared_ptr<QMimeData> ShareMimeMediaData(
+		not_null<const QMimeData*> original) {
+	auto result = std::make_shared<QMimeData>();
+	if (original->hasFormat(u"application/x-td-forward"_q)) {
+		result->setData(u"application/x-td-forward"_q, "1");
+	}
+	if (original->hasImage()) {
+		result->setImageData(original->imageData());
+	}
+	if (original->hasFormat(u"application/x-td-use-jpeg"_q)
+		&& original->hasFormat(u"image/jpeg"_q)) {
+		result->setData(u"application/x-td-use-jpeg"_q, "1");
+		result->setData(u"image/jpeg"_q, original->data(u"image/jpeg"_q));
+	}
+	if (auto list = Core::ReadMimeUrls(original); !list.isEmpty()) {
+		result->setUrls(std::move(list));
+	}
+	result->setText(Core::ReadMimeText(original));
+	return result;
+}
+
+MimeImageData ReadMimeImage(not_null<const QMimeData*> data) {
+	if (data->hasFormat(u"application/x-td-use-jpeg"_q)) {
+		auto bytes = data->data(u"image/jpeg"_q);
+		auto read = Images::Read({ .content = bytes });
+		if (read.format == "jpeg" && !read.image.isNull()) {
+			return {
+				.image = std::move(read.image),
+				.content = std::move(bytes),
+			};
+		}
+	} else if (data->hasImage()) {
+		return { .image = qvariant_cast<QImage>(data->imageData()) };
+	}
+	return {};
+}
+
+QString ReadMimeText(not_null<const QMimeData*> data) {
+	return IsImageFromFirefox(data) ? QString() : data->text();
+}
+
+QList<QUrl> ReadMimeUrls(not_null<const QMimeData*> data) {
+	return (data->hasUrls() && !IsImageFromFirefox(data))
+		? KUrlMimeData::urlsFromMimeData(
+			data,
+			KUrlMimeData::PreferLocalUrls)
+		: QList<QUrl>();
+}
+
+bool CanSendFiles(not_null<const QMimeData*> data) {
+	if (data->hasImage()) {
+		return true;
+	} else if (const auto urls = ReadMimeUrls(data); !urls.empty()) {
+		if (ranges::all_of(urls, &QUrl::isLocalFile)) {
+			return true;
+		}
 	}
 	return false;
 }

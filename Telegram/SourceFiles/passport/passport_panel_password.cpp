@@ -8,12 +8,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "passport/passport_panel_password.h"
 
 #include "passport/passport_panel_controller.h"
+#include "ui/controls/userpic_button.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/password_input.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/padding_wrap.h"
-#include "ui/special_buttons.h"
 #include "boxes/passcode_box.h"
 #include "data/data_user.h"
 #include "lang/lang_keys.h"
@@ -31,14 +31,13 @@ PanelAskPassword::PanelAskPassword(
 , _userpic(
 	this,
 	_controller->bot(),
-	Ui::UserpicButton::Role::Custom,
 	st::passportPasswordUserpic)
 , _about1(
 	this,
 	tr::lng_passport_request1(
 		tr::now,
 		lt_bot,
-		_controller->bot()->name),
+		_controller->bot()->name()),
 	st::passportPasswordLabelBold)
 , _about2(
 	this,
@@ -179,7 +178,7 @@ void PanelNoPassword::setupContent() {
 				tr::lng_passport_request1(
 					tr::now,
 					lt_bot,
-					_controller->bot()->name),
+					_controller->bot()->name()),
 				st::passportPasswordLabelBold)),
 		st::passportPasswordAbout1Padding)->entity();
 
@@ -248,6 +247,8 @@ void PanelNoPassword::refreshBottom() {
 			container,
 			tr::lng_cancel(),
 			st::defaultBoxButton);
+		cancel->setTextTransform(
+			Ui::RoundButton::TextTransform::NoTransform);
 		cancel->addClickHandler([=] {
 			_controller->cancelPasswordSubmit();
 		});
@@ -255,6 +256,8 @@ void PanelNoPassword::refreshBottom() {
 			container,
 			tr::lng_passport_email_validate(),
 			st::defaultBoxButton);
+		validate->setTextTransform(
+			Ui::RoundButton::TextTransform::NoTransform);
 		validate->addClickHandler([=] {
 			_controller->validateRecoveryEmail();
 		});

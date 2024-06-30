@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "ui/style/style_palette_colorizer.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/painter.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "core/application.h"
@@ -220,7 +221,7 @@ void CloudListCheck::validateBackgroundCache(int width) {
 	_backgroundCache.setDevicePixelRatio(cRetinaFactor());
 }
 
-void CloudListCheck::paint(Painter &p, int left, int top, int outerWidth) {
+void CloudListCheck::paint(QPainter &p, int left, int top, int outerWidth) {
 	if (!_colors) {
 		return;
 	} else if (_colors->background.isNull()) {
@@ -231,7 +232,7 @@ void CloudListCheck::paint(Painter &p, int left, int top, int outerWidth) {
 }
 
 void CloudListCheck::paintNotSupported(
-		Painter &p,
+		QPainter &p,
 		int left,
 		int top,
 		int outerWidth) {
@@ -241,13 +242,13 @@ void CloudListCheck::paintNotSupported(
 
 	const auto height = st::settingsThemePreviewSize.height();
 	const auto rect = QRect(0, 0, outerWidth, height);
-	const auto radius = st::historyMessageRadius;
+	const auto radius = st::roundRadiusLarge;
 	p.drawRoundedRect(rect, radius, radius);
 	st::settingsThemeNotSupportedIcon.paintInCenter(p, rect);
 }
 
 void CloudListCheck::paintWithColors(
-		Painter &p,
+		QPainter &p,
 		int left,
 		int top,
 		int outerWidth) {
@@ -336,9 +337,7 @@ void CloudList::setup() {
 			object.cloud.id ? object.cloud.id : kFakeCloudThemeId));
 	});
 
-	auto cloudListChanges = rpl::single(
-		rpl::empty_value()
-	) | rpl::then(
+	auto cloudListChanges = rpl::single(rpl::empty) | rpl::then(
 		_window->session().data().cloudThemes().updated()
 	);
 
@@ -499,7 +498,7 @@ bool CloudList::insertTillLimit(
 void CloudList::insert(int index, const Data::CloudTheme &theme) {
 	const auto id = theme.id;
 	const auto value = groupValueForId(id);
-	const auto checked = _group->hasValue() && (_group->value() == value);
+	const auto checked = _group->hasValue() && (_group->current() == value);
 	auto check = std::make_unique<CloudListCheck>(checked);
 	const auto raw = check.get();
 	auto button = std::make_unique<Ui::Radiobutton>(
@@ -594,7 +593,8 @@ void CloudList::showMenu(Element &element) {
 		_contextMenu->addAction(tr::lng_theme_share(tr::now), [=] {
 			QGuiApplication::clipboard()->setText(
 				_window->session().createInternalLinkFull("addtheme/" + slug));
-			Ui::Toast::Show(tr::lng_background_link_copied(tr::now));
+			_window->window().showToast(
+				tr::lng_background_link_copied(tr::now));
 		}, &st::menuIconShare);
 	}
 	if (cloud.documentId
@@ -622,10 +622,11 @@ void CloudList::showMenu(Element &element) {
 				_window->session().data().cloudThemes().remove(id);
 			}
 		};
-		_window->window().show(Box<Ui::ConfirmBox>(
-			tr::lng_theme_delete_sure(tr::now),
-			tr::lng_theme_delete(tr::now),
-			remove));
+		_window->window().show(Ui::MakeConfirmBox({
+			.text = tr::lng_theme_delete_sure(),
+			.confirmed = remove,
+			.confirmText = tr::lng_theme_delete(),
+		}));
 	}, &st::menuIconDelete);
 	_contextMenu->popup(QCursor::pos());
 }

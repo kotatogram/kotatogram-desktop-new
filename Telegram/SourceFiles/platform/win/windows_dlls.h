@@ -7,9 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "base/platform/win/base_windows_h.h"
+#include "base/platform/win/base_windows_shlobj_h.h"
 
-#include <shlobj.h>
+#include <windows.h>
+#include <shellapi.h>
 #include <dwmapi.h>
 #include <RestartManager.h>
 #include <psapi.h>
@@ -65,8 +66,6 @@ inline void(__stdcall *SHChangeNotify)(
 	UINT uFlags,
 	__in_opt LPCVOID dwItem1,
 	__in_opt LPCVOID dwItem2);
-inline HRESULT(__stdcall *SetCurrentProcessExplicitAppUserModelID)(
-	__in PCWSTR AppID);
 
 // PROPSYS.DLL
 

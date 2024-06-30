@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/auto_delete_settings.h"
 
 #include "ui/widgets/checkbox.h"
+#include "ui/painter.h"
 #include "lang/lang_keys.h"
 #include "styles/style_chat.h"
 #include "styles/style_layers.h"
@@ -200,7 +201,7 @@ void AutoDeleteSettingsBox(
 	});
 
 	const auto options = std::vector<QString>{
-		tr::lng_manage_messages_ttl_never(tr::now),
+		tr::lng_manage_messages_ttl_disable(tr::now),
 		//u"5 seconds"_q, AssertIsDebug()
 		tr::lng_manage_messages_ttl_after1(tr::now),
 		tr::lng_manage_messages_ttl_after2(tr::now),

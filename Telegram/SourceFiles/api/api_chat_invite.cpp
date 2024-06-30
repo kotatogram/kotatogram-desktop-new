@@ -9,41 +9,127 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "window/window_session_controller.h"
+#include "info/profile/info_profile_badge.h"
+#include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "ui/empty_userpic.h"
+#include "ui/painter.h"
 #include "core/application.h"
 #include "data/data_session.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_channel.h"
+#include "data/data_forum.h"
 #include "data/data_user.h"
 #include "data/data_file_origin.h"
 #include "ui/boxes/confirm_box.h"
-#include "boxes/abstract_box.h"
+#include "ui/toast/toast.h"
+#include "boxes/premium_limits_box.h"
 #include "styles/style_boxes.h"
+#include "styles/style_info.h"
 #include "styles/style_layers.h"
 
 namespace Api {
+
+namespace {
+
+void SubmitChatInvite(
+		base::weak_ptr<Window::SessionController> weak,
+		not_null<Main::Session*> session,
+		const QString &hash,
+		bool isGroup) {
+	session->api().request(MTPmessages_ImportChatInvite(
+		MTP_string(hash)
+	)).done([=](const MTPUpdates &result) {
+		session->api().applyUpdates(result);
+		const auto strongController = weak.get();
+		if (!strongController) {
+			return;
+		}
+
+		strongController->hideLayer();
+		const auto handleChats = [&](const MTPVector<MTPChat> &chats) {
+			if (chats.v.isEmpty()) {
+				return;
+			}
+			const auto peerId = chats.v[0].match([](const MTPDchat &data) {
+				return peerFromChat(data.vid().v);
+			}, [](const MTPDchannel &data) {
+				return peerFromChannel(data.vid().v);
+			}, [](auto&&) {
+				return PeerId(0);
+			});
+			if (const auto peer = session->data().peerLoaded(peerId)) {
+				// Shows in the primary window anyway.
+				strongController->showPeerHistory(
+					peer,
+					Window::SectionShow::Way::Forward);
+			}
+		};
+		result.match([&](const MTPDupdates &data) {
+			handleChats(data.vchats());
+		}, [&](const MTPDupdatesCombined &data) {
+			handleChats(data.vchats());
+		}, [&](auto &&) {
+			LOG(("API Error: unexpected update cons %1 "
+				"(ApiWrap::importChatInvite)").arg(result.type()));
+		});
+	}).fail([=](const MTP::Error &error) {
+		const auto &type = error.type();
+
+		const auto strongController = weak.get();
+		if (!strongController) {
+			return;
+		} else if (type == u"CHANNELS_TOO_MUCH"_q) {
+			strongController->show(
+				Box(ChannelsLimitBox, &strongController->session()));
+			return;
+		}
+
+		strongController->hideLayer();
+		strongController->showToast([&] {
+			if (type == u"INVITE_REQUEST_SENT"_q) {
+				return isGroup
+					? tr::lng_group_request_sent(tr::now)
+					: tr::lng_group_request_sent_channel(tr::now);
+			} else if (type == u"USERS_TOO_MUCH"_q) {
+				return tr::lng_group_invite_no_room(tr::now);
+			} else {
+				return tr::lng_group_invite_bad_link(tr::now);
+			}
+		}(), ApiWrap::kJoinErrorDuration);
+	}).send();
+}
+
+} // namespace
 
 void CheckChatInvite(
 		not_null<Window::SessionController*> controller,
 		const QString &hash,
 		ChannelData *invitePeekChannel) {
 	const auto session = &controller->session();
-	const auto weak = base::make_weak(controller.get());
+	const auto weak = base::make_weak(controller);
 	session->api().checkChatInvite(hash, [=](const MTPChatInvite &result) {
+		const auto strong = weak.get();
+		if (!strong) {
+			return;
+		}
 		Core::App().hideMediaView();
-		result.match([=](const MTPDchatInvite &data) {
-			const auto strongController = weak.get();
-			if (!strongController) {
-				return;
+		const auto show = [&](not_null<PeerData*> chat) {
+			const auto way = Window::SectionShow::Way::Forward;
+			if (const auto forum = chat->forum()) {
+				strong->showForum(forum, way);
+			} else {
+				strong->showPeerHistory(chat, way);
 			}
+		};
+		result.match([=](const MTPDchatInvite &data) {
 			const auto isGroup = !data.is_broadcast();
-			const auto box = strongController->show(Box<ConfirmInviteBox>(
+			const auto box = strong->show(Box<ConfirmInviteBox>(
 				session,
 				data,
 				invitePeekChannel,
-				[=] { session->api().importChatInvite(hash, isGroup); }));
+				[=] { SubmitChatInvite(weak, session, hash, isGroup); }));
 			if (invitePeekChannel) {
 				box->boxClosing(
 				) | rpl::filter([=] {
@@ -62,21 +148,13 @@ void CheckChatInvite(
 				if (const auto channel = chat->asChannel()) {
 					channel->clearInvitePeek();
 				}
-				if (const auto strong = weak.get()) {
-					strong->showPeerHistory(
-						chat,
-						Window::SectionShow::Way::Forward);
-				}
+				show(chat);
 			}
 		}, [=](const MTPDchatInvitePeek &data) {
 			if (const auto chat = session->data().processChat(data.vchat())) {
 				if (const auto channel = chat->asChannel()) {
 					channel->setInvitePeek(hash, data.vexpires().v);
-					if (const auto strong = weak.get()) {
-						strong->showPeerHistory(
-							chat,
-							Window::SectionShow::Way::Forward);
-					}
+					show(chat);
 				}
 			}
 		});
@@ -86,13 +164,17 @@ void CheckChatInvite(
 		}
 		Core::App().hideMediaView();
 		if (const auto strong = weak.get()) {
-			strong->show(
-				Box<Ui::InformBox>(tr::lng_group_invite_bad_link(tr::now)));
+			strong->show(Ui::MakeInformBox(tr::lng_group_invite_bad_link()));
 		}
 	});
 }
 
 } // namespace Api
+
+struct ConfirmInviteBox::Participant {
+	not_null<UserData*> user;
+	Ui::PeerUserpicView userpic;
+};
 
 ConfirmInviteBox::ConfirmInviteBox(
 	QWidget*,
@@ -100,17 +182,35 @@ ConfirmInviteBox::ConfirmInviteBox(
 	const MTPDchatInvite &data,
 	ChannelData *invitePeekChannel,
 	Fn<void()> submit)
+: ConfirmInviteBox(
+	session,
+	Parse(session, data),
+	invitePeekChannel,
+	std::move(submit)) {
+}
+
+ConfirmInviteBox::ConfirmInviteBox(
+	not_null<Main::Session*> session,
+	ChatInvite &&invite,
+	ChannelData *invitePeekChannel,
+	Fn<void()> submit)
 : _session(session)
 , _submit(std::move(submit))
 , _title(this, st::confirmInviteTitle)
+, _badge(std::make_unique<Info::Profile::Badge>(
+	this,
+	st::infoPeerBadge,
+	_session,
+	rpl::single(Info::Profile::Badge::Content{ BadgeForInvite(invite) }),
+	nullptr,
+	[=] { return false; }))
 , _status(this, st::confirmInviteStatus)
 , _about(this, st::confirmInviteAbout)
 , _aboutRequests(this, st::confirmInviteStatus)
-, _participants(GetParticipants(_session, data))
-, _isChannel(data.is_channel() && !data.is_megagroup())
-, _requestApprove(data.is_request_needed()) {
-	const auto title = qs(data.vtitle());
-	const auto count = data.vparticipants_count().v;
+, _participants(std::move(invite.participants))
+, _isChannel(invite.isChannel && !invite.isMegagroup)
+, _requestApprove(invite.isRequestNeeded) {
+	const auto count = invite.participantsCount;
 	const auto status = [&] {
 		return invitePeekChannel
 			? tr::lng_channel_invite_private(tr::now)
@@ -127,10 +227,10 @@ ConfirmInviteBox::ConfirmInviteBox(
 			? tr::lng_channel_status(tr::now)
 			: tr::lng_group_status(tr::now);
 	}();
-	_title->setText(title);
+	_title->setText(invite.title);
 	_status->setText(status);
-	if (const auto v = qs(data.vabout().value_or_empty()); !v.isEmpty()) {
-		_about->setText(v);
+	if (!invite.about.isEmpty()) {
+		_about->setText(invite.about);
 	} else {
 		_about.destroy();
 	}
@@ -142,9 +242,8 @@ ConfirmInviteBox::ConfirmInviteBox(
 		_aboutRequests.destroy();
 	}
 
-	const auto photo = _session->data().processPhoto(data.vphoto());
-	if (!photo->isNull()) {
-		_photo = photo->createMediaView();
+	if (invite.photo) {
+		_photo = invite.photo->createMediaView();
 		_photo->wanted(Data::PhotoSize::Small, Data::FileOrigin());
 		if (!_photo->image(Data::PhotoSize::Small)) {
 			_session->downloaderTaskFinished(
@@ -154,30 +253,53 @@ ConfirmInviteBox::ConfirmInviteBox(
 		}
 	} else {
 		_photoEmpty = std::make_unique<Ui::EmptyUserpic>(
-			Data::PeerUserpicColor(0),
-			title);
+			Ui::EmptyUserpic::UserpicColor(0),
+			invite.title);
 	}
 }
 
 ConfirmInviteBox::~ConfirmInviteBox() = default;
 
-auto ConfirmInviteBox::GetParticipants(
-	not_null<Main::Session*> session,
-	const MTPDchatInvite &data)
--> std::vector<Participant> {
-	const auto participants = data.vparticipants();
-	if (!participants) {
-		return {};
-	}
-	const auto &v = participants->v;
-	auto result = std::vector<Participant>();
-	result.reserve(v.size());
-	for (const auto &participant : v) {
-		if (const auto user = session->data().processUser(participant)) {
-			result.push_back(Participant{ user });
+ConfirmInviteBox::ChatInvite ConfirmInviteBox::Parse(
+		not_null<Main::Session*> session,
+		const MTPDchatInvite &data) {
+	auto participants = std::vector<Participant>();
+	if (const auto list = data.vparticipants()) {
+		participants.reserve(list->v.size());
+		for (const auto &participant : list->v) {
+			if (const auto user = session->data().processUser(participant)) {
+				participants.push_back(Participant{ user });
+			}
 		}
 	}
-	return result;
+	const auto photo = session->data().processPhoto(data.vphoto());
+	return {
+		.title = qs(data.vtitle()),
+		.about = data.vabout().value_or_empty(),
+		.photo = (photo->isNull() ? nullptr : photo.get()),
+		.participantsCount = data.vparticipants_count().v,
+		.participants = std::move(participants),
+		.isPublic = data.is_public(),
+		.isChannel = data.is_channel(),
+		.isMegagroup = data.is_megagroup(),
+		.isBroadcast = data.is_broadcast(),
+		.isRequestNeeded = data.is_request_needed(),
+		.isFake = data.is_fake(),
+		.isScam = data.is_scam(),
+		.isVerified = data.is_verified(),
+	};
+}
+
+[[nodiscard]] Info::Profile::BadgeType ConfirmInviteBox::BadgeForInvite(
+		const ChatInvite &invite) {
+	using Type = Info::Profile::BadgeType;
+	return invite.isVerified
+		? Type::Verified
+		: invite.isScam
+		? Type::Scam
+		: invite.isFake
+		? Type::Fake
+		: Type::None;
 }
 
 void ConfirmInviteBox::prepare() {
@@ -205,7 +327,7 @@ void ConfirmInviteBox::prepare() {
 			auto name = new Ui::FlatLabel(this, st::confirmInviteUserName);
 			name->resizeToWidth(st::confirmInviteUserPhotoSize + padding);
 			name->setText(participant.user->firstName.isEmpty()
-				? participant.user->name
+				? participant.user->name()
 				: participant.user->firstName);
 			name->moveToLeft(left + (padding / 2), st::confirmInviteUserNameTop);
 			left += _userWidth;
@@ -228,8 +350,26 @@ void ConfirmInviteBox::prepare() {
 
 void ConfirmInviteBox::resizeEvent(QResizeEvent *e) {
 	BoxContent::resizeEvent(e);
-	_title->move((width() - _title->width()) / 2, st::confirmInviteTitleTop);
-	_status->move((width() - _status->width()) / 2, st::confirmInviteStatusTop);
+
+	const auto padding = st::boxRowPadding;
+	auto nameWidth = width() - padding.left() - padding.right();
+	auto badgeWidth = 0;
+	if (const auto widget = _badge->widget()) {
+		badgeWidth = st::infoVerifiedCheckPosition.x() + widget->width();
+		nameWidth -= badgeWidth;
+	}
+	_title->resizeToWidth(std::min(nameWidth, _title->textMaxWidth()));
+	_title->moveToLeft(
+		(width() - _title->width() - badgeWidth) / 2,
+		st::confirmInviteTitleTop);
+	const auto badgeLeft = _title->x() + _title->width();
+	const auto badgeTop = _title->y();
+	const auto badgeBottom = _title->y() + _title->height();
+	_badge->move(badgeLeft, badgeTop, badgeBottom);
+
+	_status->move(
+		(width() - _status->width()) / 2,
+		st::confirmInviteStatusTop);
 	auto bottom = _status->y()
 		+ _status->height()
 		+ st::boxPadding.bottom()
@@ -252,18 +392,16 @@ void ConfirmInviteBox::paintEvent(QPaintEvent *e) {
 
 	if (_photo) {
 		if (const auto image = _photo->image(Data::PhotoSize::Small)) {
-			auto source = [=] {
-				const auto size = st::confirmInvitePhotoSize;
-				const auto roundOption = KotatoImageRoundOption();
-				return image->pix(size, size, { .options = roundOption });
-			}();
+			const auto size = st::confirmInvitePhotoSize;
 			p.drawPixmap(
-				(width() - st::confirmInvitePhotoSize) / 2,
+				(width() - size) / 2,
 				st::confirmInvitePhotoTop,
-				source);
+				image->pix(
+					{ size, size },
+					{ .options = Images::Option::RoundCircle }));
 		}
 	} else if (_photoEmpty) {
-		_photoEmpty->paint(
+		_photoEmpty->paintCircle(
 			p,
 			(width() - st::confirmInvitePhotoSize) / 2,
 			st::confirmInvitePhotoTop,

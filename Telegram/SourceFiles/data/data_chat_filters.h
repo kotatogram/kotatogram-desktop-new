@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/flags.h"
+#include "base/timer.h"
 
 class History;
 
@@ -16,6 +17,10 @@ class MainList;
 class Key;
 } // namespace Dialogs
 
+namespace Ui {
+struct MoreChatsBarContent;
+} // namespace Ui
+
 namespace Data {
 
 class Session;
@@ -23,28 +28,33 @@ struct LocalFolder;
 
 class ChatFilter final {
 public:
-	enum class Flag : ushort {
-		Contacts    = 0x01,
-		NonContacts = 0x02,
-		Groups      = 0x04,
-		Channels    = 0x08,
-		Bots        = 0x10,
-		NoMuted     = 0x20,
-		NoRead      = 0x40,
-		NoArchived  = 0x80,
+	enum class Flag : uint32 {
+		Contacts    = (1 << 0),
+		NonContacts = (1 << 1),
+		Groups      = (1 << 2),
+		Channels    = (1 << 3),
+		Bots        = (1 << 4),
+		NoMuted     = (1 << 5),
+		NoRead      = (1 << 6),
+		NoArchived  = (1 << 7),
+		RulesMask   = ((1 << 8) - 1),
+
+		Chatlist    = (1 << 8),
+		HasMyLinks  = (1 << 9),
+
+		NewChats      = (1 << 10), // Telegram Business exceptions.
+		ExistingChats = (1 << 11),
 
 		// Local flags
-		Owned       = 0x0100,
-		Admin       = 0x0200,
-		NotOwned    = 0x0400,
-		NotAdmin    = 0x0800,
-		Recent      = 0x1000,
-		NoFilter    = 0x2000,
+		Owned       = (1 << 12),
+		Admin       = (1 << 13),
+		NotOwned    = (1 << 14),
+		NotAdmin    = (1 << 15),
+		Recent      = (1 << 16),
+		NoFilter    = (1 << 17),
 	};
 	friend constexpr inline bool is_flag_type(Flag) { return true; };
 	using Flags = base::flags<Flag>;
-
-	static constexpr int kPinnedLimit = 100;
 
 	ChatFilter() = default;
 	ChatFilter(FilterId id, bool isLocal = false);
@@ -64,6 +74,12 @@ public:
 		const LocalFolder &data,
 		not_null<Session*> owner);
 
+	[[nodiscard]] ChatFilter withId(FilterId id) const;
+	[[nodiscard]] ChatFilter withTitle(const QString &title) const;
+	[[nodiscard]] ChatFilter withChatlist(
+		bool chatlist,
+		bool hasMyLinks) const;
+
 	[[nodiscard]] static ChatFilter FromTL(
 		const MTPDialogFilter &data,
 		not_null<Session*> owner,
@@ -76,6 +92,8 @@ public:
 	[[nodiscard]] bool isDefault() const;
 	[[nodiscard]] QString iconEmoji() const;
 	[[nodiscard]] Flags flags() const;
+	[[nodiscard]] bool chatlist() const;
+	[[nodiscard]] bool hasMyLinks() const;
 	[[nodiscard]] const base::flat_set<not_null<History*>> &always() const;
 	[[nodiscard]] const std::vector<not_null<History*>> &pinned() const;
 	[[nodiscard]] const base::flat_set<not_null<History*>> &never() const;
@@ -114,6 +132,17 @@ inline bool operator!=(const ChatFilter &a, const ChatFilter &b) {
 	return !(a == b);
 }
 
+struct ChatFilterLink {
+	FilterId id = 0;
+	QString url;
+	QString title;
+	std::vector<not_null<History*>> chats;
+
+	friend inline bool operator==(
+		const ChatFilterLink &a,
+		const ChatFilterLink &b) = default;
+};
+
 struct SuggestedFilter {
 	ChatFilter filter;
 	QString description;
@@ -127,17 +156,26 @@ public:
 	void setPreloaded(const QVector<MTPDialogFilter> &result);
 
 	void load();
+	void reload();
 	void apply(const MTPUpdate &update);
 	void set(ChatFilter filter);
 	void remove(FilterId id);
+	void moveAllToFront();
 	[[nodiscard]] const std::vector<ChatFilter> &list() const;
 	[[nodiscard]] rpl::producer<> changed() const;
+	[[nodiscard]] rpl::producer<FilterId> isChatlistChanged() const;
+	[[nodiscard]] bool loaded() const;
+	[[nodiscard]] bool has() const;
+
+	[[nodiscard]] FilterId defaultId() const;
+	[[nodiscard]] FilterId lookupId(int index) const;
 
 	bool loadNextExceptions(bool chatsListLoaded);
 
 	void refreshHistory(not_null<History*> history);
 
 	[[nodiscard]] not_null<Dialogs::MainList*> chatsList(FilterId filterId);
+	void clear();
 
 	const ChatFilter &applyUpdatedPinned(
 		FilterId id,
@@ -154,9 +192,33 @@ public:
 		-> const std::vector<SuggestedFilter> &;
 	[[nodiscard]] rpl::producer<> suggestedUpdated() const;
 
+	ChatFilterLink add(
+		FilterId id,
+		const MTPExportedChatlistInvite &update);
+	void edit(
+		FilterId id,
+		const QString &url,
+		const QString &title);
+	void destroy(FilterId id, const QString &url);
+	rpl::producer<std::vector<ChatFilterLink>> chatlistLinks(
+		FilterId id) const;
+	void reloadChatlistLinks(FilterId id);
+
+	[[nodiscard]] rpl::producer<Ui::MoreChatsBarContent> moreChatsContent(
+		FilterId id);
+	[[nodiscard]] const std::vector<not_null<PeerData*>> &moreChats(
+		FilterId id) const;
+	void moreChatsHide(FilterId id, bool localOnly = false);
 	void saveLocal();
 
 private:
+	struct MoreChatsData {
+		std::vector<not_null<PeerData*>> missing;
+		crl::time lastUpdate = 0;
+		mtpRequestId requestId = 0;
+		std::weak_ptr<bool> watching;
+	};
+
 	void load(bool force);
 	void received(const QVector<MTPDialogFilter> &list);
 	bool applyOrder(const QVector<MTPint> &order);
@@ -164,15 +226,20 @@ private:
 	void applyInsert(ChatFilter filter, int position);
 	void applyRemove(int position);
 
+	void checkLoadMoreChatsLists();
+	void loadMoreChatsList(FilterId id);
+
 	const not_null<Session*> _owner;
 
 	std::vector<ChatFilter> _list;
 	base::flat_map<FilterId, std::unique_ptr<Dialogs::MainList>> _chatsLists;
 	rpl::event_stream<> _listChanged;
+	rpl::event_stream<FilterId> _isChatlistChanged;
 	mtpRequestId _loadRequestId = 0;
 	mtpRequestId _saveOrderRequestId = 0;
 	mtpRequestId _saveOrderAfterId = 0;
 	bool _loaded = false;
+	bool _reloading = false;
 
 	mtpRequestId _suggestedRequestId = 0;
 	std::vector<SuggestedFilter> _suggested;
@@ -181,6 +248,14 @@ private:
 
 	std::deque<FilterId> _exceptionsToLoad;
 	mtpRequestId _exceptionsLoadRequestId = 0;
+
+	base::flat_map<FilterId, std::vector<ChatFilterLink>> _chatlistLinks;
+	rpl::event_stream<FilterId> _chatlistLinksUpdated;
+	mtpRequestId _linksRequestId = 0;
+
+	base::flat_map<FilterId, MoreChatsData> _moreChatsData;
+	rpl::event_stream<FilterId> _moreChatsUpdated;
+	base::Timer _moreChatsTimer;
 
 };
 

@@ -9,10 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "editor/photo_editor_common.h"
 #include "platform/platform_file_utilities.h"
+#include "lang/lang_keys.h"
 #include "storage/localimageloader.h"
 #include "core/mime_type.h"
 #include "ui/image/image_prepare.h"
-#include "ui/chat/attach/attach_extensions.h"
 #include "ui/chat/attach/attach_prepare.h"
 #include "core/crash_reports.h"
 
@@ -28,23 +28,12 @@ using Ui::PreparedList;
 
 using Image = PreparedFileInformation::Image;
 
-bool HasExtensionFrom(const QString &file, const QStringList &extensions) {
-	for (const auto &extension : extensions) {
-		const auto ext = file.right(extension.size());
-		if (ext.compare(extension, Qt::CaseInsensitive) == 0) {
-			return true;
-		}
-	}
-	return false;
-}
-
 bool ValidPhotoForAlbum(
 		const Image &image,
 		const QString &mime) {
 	Expects(!image.data.isNull());
 
 	if (image.animated
-		|| Core::IsMimeSticker(mime)
 		|| (!mime.isEmpty() && !mime.startsWith(u"image/"))) {
 		return false;
 	}
@@ -59,13 +48,10 @@ bool ValidVideoForAlbum(const PreparedFileInformation::Video &video) {
 	return Ui::ValidateThumbDimensions(width, height);
 }
 
-QSize PrepareShownDimensions(const QImage &preview) {
-	constexpr auto kMaxWidth = 1280;
-	constexpr auto kMaxHeight = 1280;
-
+QSize PrepareShownDimensions(const QImage &preview, int sideLimit) {
 	const auto result = preview.size();
-	return (result.width() > kMaxWidth || result.height() > kMaxHeight)
-		? result.scaled(kMaxWidth, kMaxHeight, Qt::KeepAspectRatio)
+	return (result.width() > sideLimit || result.height() > sideLimit)
+		? result.scaled(sideLimit, sideLimit, Qt::KeepAspectRatio)
 		: result;
 }
 
@@ -75,10 +61,11 @@ void PrepareDetailsInParallel(PreparedList &result, int previewWidth) {
 	if (result.files.empty()) {
 		return;
 	}
+	const auto sideLimit = PhotoSideLimit(); // Get on main thread.
 	QSemaphore semaphore;
 	for (auto &file : result.files) {
 		crl::async([=, &semaphore, &file] {
-			PrepareDetails(file, previewWidth);
+			PrepareDetails(file, previewWidth, sideLimit);
 			semaphore.release();
 		});
 	}
@@ -88,20 +75,21 @@ void PrepareDetailsInParallel(PreparedList &result, int previewWidth) {
 } // namespace
 
 bool ValidatePhotoEditorMediaDragData(not_null<const QMimeData*> data) {
-	if (data->urls().size() > 1) {
+	const auto urls = Core::ReadMimeUrls(data);
+	if (urls.size() > 1) {
 		return false;
 	} else if (data->hasImage()) {
 		return true;
 	}
 
-	if (data->hasUrls()) {
-		const auto url = data->urls().front();
+	if (!urls.isEmpty()) {
+		const auto url = urls.front();
 		if (url.isLocalFile()) {
 			using namespace Core;
-			const auto info = QFileInfo(Platform::File::UrlToLocal(url));
-			const auto filename = info.fileName();
-			return FileIsImage(filename, MimeTypeForFile(info).name())
-				&& HasExtensionFrom(filename, Ui::ExtensionsForCompression());
+			const auto file = Platform::File::UrlToLocal(url);
+			const auto info = QFileInfo(file);
+			return FileIsImage(file, MimeTypeForFile(info).name())
+				&& QImageReader(file).canRead();
 		}
 	}
 
@@ -111,14 +99,15 @@ bool ValidatePhotoEditorMediaDragData(not_null<const QMimeData*> data) {
 bool ValidateEditMediaDragData(
 		not_null<const QMimeData*> data,
 		Ui::AlbumType albumType) {
-	if (data->urls().size() > 1) {
+	const auto urls = Core::ReadMimeUrls(data);
+	if (urls.size() > 1) {
 		return false;
 	} else if (data->hasImage()) {
 		return (albumType != Ui::AlbumType::Music);
 	}
 
-	if (albumType == Ui::AlbumType::PhotoVideo && data->hasUrls()) {
-		const auto url = data->urls().front();
+	if (albumType == Ui::AlbumType::PhotoVideo && !urls.isEmpty()) {
+		const auto url = urls.front();
 		if (url.isLocalFile()) {
 			using namespace Core;
 			const auto info = QFileInfo(Platform::File::UrlToLocal(url));
@@ -130,7 +119,7 @@ bool ValidateEditMediaDragData(
 }
 
 MimeDataState ComputeMimeDataState(const QMimeData *data) {
-	if (!data || data->hasFormat(qsl("application/x-td-forward"))) {
+	if (!data || data->hasFormat(u"application/x-td-forward"_q)) {
 		return MimeDataState::None;
 	}
 
@@ -138,18 +127,11 @@ MimeDataState ComputeMimeDataState(const QMimeData *data) {
 		return MimeDataState::Image;
 	}
 
-	const auto uriListFormat = qsl("text/uri-list");
-	if (!data->hasFormat(uriListFormat)) {
-		return MimeDataState::None;
-	}
-
-	const auto &urls = data->urls();
+	const auto urls = Core::ReadMimeUrls(data);
 	if (urls.isEmpty()) {
 		return MimeDataState::None;
 	}
 
-	const auto imageExtensions = Ui::ImageExtensions();
-	auto files = QStringList();
 	auto allAreSmallImages = true;
 	for (const auto &url : urls) {
 		if (!url.isLocalFile()) {
@@ -162,13 +144,17 @@ MimeDataState ComputeMimeDataState(const QMimeData *data) {
 			return MimeDataState::None;
 		}
 
+		using namespace Core;
 		const auto filesize = info.size();
-		if (filesize > kFileSizeLimit) {
+		if (filesize > kFileSizePremiumLimit) {
 			return MimeDataState::None;
+		//} else if (filesize > kFileSizeLimit) {
+		//	return MimeDataState::PremiumFile;
 		} else if (allAreSmallImages) {
 			if (filesize > Images::kReadBytesLimit) {
 				allAreSmallImages = false;
-			} else if (!HasExtensionFrom(file, imageExtensions)) {
+			} else if (!FileIsImage(file, MimeTypeForFile(info).name())
+				|| !QImageReader(file).canRead()) {
 				allAreSmallImages = false;
 			}
 		}
@@ -178,7 +164,10 @@ MimeDataState ComputeMimeDataState(const QMimeData *data) {
 		: MimeDataState::Files;
 }
 
-PreparedList PrepareMediaList(const QList<QUrl> &files, int previewWidth) {
+PreparedList PrepareMediaList(
+		const QList<QUrl> &files,
+		int previewWidth,
+		bool premium) {
 	auto locals = QStringList();
 	locals.reserve(files.size());
 	for (const auto &url : files) {
@@ -190,10 +179,13 @@ PreparedList PrepareMediaList(const QList<QUrl> &files, int previewWidth) {
 		}
 		locals.push_back(Platform::File::UrlToLocal(url));
 	}
-	return PrepareMediaList(locals, previewWidth);
+	return PrepareMediaList(locals, previewWidth, premium);
 }
 
-PreparedList PrepareMediaList(const QStringList &files, int previewWidth) {
+PreparedList PrepareMediaList(
+		const QStringList &files,
+		int previewWidth,
+		bool premium) {
 	auto result = PreparedList();
 	result.files.reserve(files.size());
 	for (const auto &file : files) {
@@ -209,11 +201,14 @@ PreparedList PrepareMediaList(const QStringList &files, int previewWidth) {
 				PreparedList::Error::EmptyFile,
 				file
 			};
-		} else if (filesize > kFileSizeLimit) {
-			return {
+		} else if (filesize > kFileSizePremiumLimit
+			|| (filesize > kFileSizeLimit && !premium)) {
+			auto errorResult = PreparedList(
 				PreparedList::Error::TooLargeFile,
-				file
-			};
+				QString());
+			errorResult.files.emplace_back(file);
+			errorResult.files.back().size = filesize;
+			return errorResult;
 		}
 		if (result.files.size() < Ui::MaxAlbumItems()) {
 			result.files.emplace_back(file);
@@ -253,13 +248,14 @@ std::optional<PreparedList> PreparedFileFromFilesDialog(
 		FileDialog::OpenResult &&result,
 		Fn<bool(const Ui::PreparedList&)> checkResult,
 		Fn<void(tr::phrase<>)> errorCallback,
-		int previewWidth) {
+		int previewWidth,
+		bool premium) {
 	if (result.paths.isEmpty() && result.remoteContent.isEmpty()) {
 		return std::nullopt;
 	}
 
 	auto list = result.remoteContent.isEmpty()
-		? PrepareMediaList(result.paths, previewWidth)
+		? PrepareMediaList(result.paths, previewWidth, premium)
 		: PrepareMediaFromImage(
 			QImage(),
 			std::move(result.remoteContent),
@@ -274,7 +270,7 @@ std::optional<PreparedList> PreparedFileFromFilesDialog(
 	}
 }
 
-void PrepareDetails(PreparedFile &file, int previewWidth) {
+void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 	if (!file.path.isEmpty()) {
 		file.information = FileLoadTask::ReadMediaInformation(
 			file.path,
@@ -295,10 +291,9 @@ void PrepareDetails(PreparedFile &file, int previewWidth) {
 			&file.information->media)) {
 		Assert(!image->data.isNull());
 		if (ValidPhotoForAlbum(*image, file.information->filemime)) {
-			UpdateImageDetails(file, previewWidth);
+			UpdateImageDetails(file, previewWidth, sideLimit);
 			file.type = PreparedFile::Type::Photo;
-		} else if (Core::IsMimeSticker(file.information->filemime)
-			|| image->animated) {
+		} else if (image->animated) {
 			file.type = PreparedFile::Type::None;
 		}
 	} else if (const auto video = std::get_if<Video>(
@@ -306,7 +301,10 @@ void PrepareDetails(PreparedFile &file, int previewWidth) {
 		if (ValidVideoForAlbum(*video)) {
 			auto blurred = Images::Blur(
 				Images::Opaque(base::duplicate(video->thumbnail)));
-			file.shownDimensions = PrepareShownDimensions(video->thumbnail);
+			file.originalDimensions = video->thumbnail.size();
+			file.shownDimensions = PrepareShownDimensions(
+				video->thumbnail,
+				sideLimit);
 			file.preview = std::move(blurred).scaledToWidth(
 				previewWidth * cIntRetinaFactor(),
 				Qt::SmoothTransformation);
@@ -319,7 +317,10 @@ void PrepareDetails(PreparedFile &file, int previewWidth) {
 	}
 }
 
-void UpdateImageDetails(PreparedFile &file, int previewWidth) {
+void UpdateImageDetails(
+		PreparedFile &file,
+		int previewWidth,
+		int sideLimit) {
 	const auto image = std::get_if<Image>(&file.information->media);
 	if (!image) {
 		return;
@@ -329,7 +330,8 @@ void UpdateImageDetails(PreparedFile &file, int previewWidth) {
 		? Editor::ImageModified(image->data, image->modifications)
 		: image->data;
 	Assert(!preview.isNull());
-	file.shownDimensions = PrepareShownDimensions(preview);
+	file.originalDimensions = preview.size();
+	file.shownDimensions = PrepareShownDimensions(preview, sideLimit);
 	const auto toWidth = std::min(
 		previewWidth,
 		style::ConvertScale(preview.width())
@@ -359,9 +361,8 @@ bool ApplyModifications(PreparedList &list) {
 			continue;
 		}
 		applied = true;
-		if (!file.path.isEmpty()) {
-			file.path = QString();
-		}
+		file.path = QString();
+		file.content = QByteArray();
 		image->data = Editor::ImageModified(
 			std::move(image->data),
 			image->modifications);

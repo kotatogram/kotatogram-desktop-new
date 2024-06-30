@@ -15,11 +15,12 @@ https://github.com/kotatogram/kotatogram-desktop/blob/dev/LEGAL
 #include "ui/wrap/wrap.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/buttons.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/continuous_sliders.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
+#include "styles/style_calls.h"
 #include "styles/style_settings.h"
 #include "ui/boxes/confirm_box.h"
 #include "lang/lang_keys.h"
@@ -95,7 +96,8 @@ public:
 				field->setText(fontName);
 			}
 		}, _view->lifetime());
-		QObject::connect(field, &Ui::InputField::changed, [=] {
+		field->changes(
+		) | rpl::start_with_next([=] {
 			if (field->getLastText().isEmpty()) {
 				_view->setCurrentItem(-1);
 				return;
@@ -106,7 +108,7 @@ public:
 					[&](const auto &fontName) {
 						return fontName.startsWith(field->getLastText());
 					})));
-		});
+		}, field->lifetime());
 		const auto defaultValue = field->getLastText().trimmed();
 		if (!defaultValue.isEmpty()) {
 			_view->setCurrentItem(fontList.indexOf(defaultValue));
@@ -205,13 +207,13 @@ void FontsBox::prepare() {
 	_fontSizeLabel = _content->add(
 		object_ptr<Ui::LabelSimple>(
 			_content,
-			st::settingsAudioVolumeLabel),
-		st::settingsAudioVolumeLabelPadding);
+			st::ktgSettingsSliderLabel),
+		st::groupCallDelayLabelMargin);
 	_fontSizeSlider = _content->add(
 		object_ptr<Ui::MediaSlider>(
 			_content,
-			st::settingsAudioVolumeSlider),
-		st::settingsAudioVolumeSliderPadding);
+			st::defaultContinuousSlider),
+		st::localStorageLimitMargin);
 	const auto updateFontSizeLabel = [=](int value) {
 		const auto prefix = (value >= 0) ? qsl("+") : QString();
 		const auto pixels = prefix + QString::number(value);
@@ -222,7 +224,7 @@ void FontsBox::prepare() {
 		updateFontSizeLabel(value);
 		_fontSize = value;
 	};
-	_fontSizeSlider->resize(st::settingsAudioVolumeSlider.seekSize);
+	_fontSizeSlider->resize(st::defaultContinuousSlider.seekSize);
 	_fontSizeSlider->setPseudoDiscrete(
 		21,
 		[](int val) { return val - 10; },
@@ -269,12 +271,13 @@ void FontsBox::save() {
 	const auto box = std::make_shared<QPointer<BoxContent>>();
 
 	*box = getDelegate()->show(
-		Box<Ui::ConfirmBox>(
-			tr::lng_settings_need_restart(tr::now),
-			tr::lng_settings_restart_now(tr::now),
-			tr::lng_settings_restart_later(tr::now),
-			[] { Core::Restart(); },
-			[=] { closeBox(); }));
+		Ui::MakeConfirmBox({
+			.text = tr::lng_settings_need_restart(),
+			.confirmed = [] { Core::Restart(); },
+			.cancelled = crl::guard(this, [=] { closeBox(); box->data()->closeBox(); }),
+			.confirmText = tr::lng_settings_restart_now(),
+			.cancelText = tr::lng_settings_restart_later(),
+		}));
 }
 
 void FontsBox::resetToDefault() {
@@ -290,10 +293,11 @@ void FontsBox::resetToDefault() {
 	const auto box = std::make_shared<QPointer<BoxContent>>();
 
 	*box = getDelegate()->show(
-		Box<Ui::ConfirmBox>(
-			tr::lng_settings_need_restart(tr::now),
-			tr::lng_settings_restart_now(tr::now),
-			tr::lng_settings_restart_later(tr::now),
-			[] { Core::Restart(); },
-			[=] { closeBox(); }));
+		Ui::MakeConfirmBox({
+			.text = tr::lng_settings_need_restart(),
+			.confirmed = [] { Core::Restart(); },
+			.cancelled = crl::guard(this, [=] { closeBox(); box->data()->closeBox(); }),
+			.confirmText = tr::lng_settings_restart_now(),
+			.cancelText = tr::lng_settings_restart_later(),
+		}));
 }

@@ -7,12 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "editor/editor_paint.h"
 
+#include "core/mime_type.h"
 #include "ui/boxes/confirm_box.h"
 #include "editor/controllers/controllers.h"
 #include "editor/scene/scene.h"
 #include "editor/scene/scene_item_canvas.h"
 #include "editor/scene/scene_item_image.h"
 #include "editor/scene/scene_item_sticker.h"
+#include "lang/lang_keys.h"
 #include "lottie/lottie_single_player.h"
 #include "storage/storage_media_prepare.h"
 #include "ui/chat/attach/attach_prepare.h"
@@ -26,11 +28,6 @@ namespace {
 
 constexpr auto kMaxBrush = 25.;
 constexpr auto kMinBrush = 1.;
-
-constexpr auto kViewStyle = "QGraphicsView {\
-		background-color: transparent;\
-		border: 0px\
-	}"_cs;
 
 std::shared_ptr<Scene> EnsureScene(
 		PhotoModifications &mods,
@@ -62,7 +59,8 @@ Paint::Paint(
 	_view->show();
 	_view->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	_view->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-	_view->setStyleSheet(kViewStyle.utf8());
+	_view->setFrameStyle(int(QFrame::NoFrame) | QFrame::Plain);
+	_view->viewport()->setAutoFillBackground(false);
 
 	// Undo / Redo.
 	controllers->undoController->performRequestChanges(
@@ -194,8 +192,8 @@ void Paint::handleMimeData(const QMimeData *data) {
 			return;
 		}
 		if (!Ui::ValidateThumbDimensions(image.width(), image.height())) {
-			_controllers->showBox(
-				Box<Ui::InformBox>(tr::lng_edit_media_invalid_file(tr::now)));
+			_controllers->show->showBox(
+				Ui::MakeInformBox(tr::lng_edit_media_invalid_file()));
 			return;
 		}
 
@@ -207,15 +205,18 @@ void Paint::handleMimeData(const QMimeData *data) {
 	};
 
 	using Error = Ui::PreparedList::Error;
-	auto result = data->hasUrls()
+	const auto premium = false; // Don't support > 2GB files here.
+	const auto list = Core::ReadMimeUrls(data);
+	auto result = !list.isEmpty()
 		? Storage::PrepareMediaList(
-			data->urls().mid(0, 1),
-			_imageSize.width() / 2)
+			list.mid(0, 1),
+			_imageSize.width() / 2,
+			premium)
 		: Ui::PreparedList(Error::EmptyFile, QString());
 	if (result.error == Error::None) {
 		add(base::take(result.files.front().preview));
-	} else if (data->hasImage()) {
-		add(qvariant_cast<QImage>(data->imageData()));
+	} else if (auto read = Core::ReadMimeImage(data)) {
+		add(std::move(read.image));
 	}
 }
 

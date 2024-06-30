@@ -14,16 +14,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_list_widget.h"
 
 namespace Ui {
-class SettingsSlider;
 class VerticalLayout;
 class SearchFieldController;
 } // namespace Ui
 
 namespace Info {
-
 class Controller;
+} // namespace Info
 
-namespace Media {
+namespace Info::Media {
 
 class Memento;
 class ListWidget;
@@ -48,7 +47,7 @@ public:
 
 	rpl::producer<Ui::ScrollToRequest> scrollToRequests() const;
 	rpl::producer<SelectedItems> selectedListValue() const;
-	void cancelSelection();
+	void selectionAction(SelectionAction action);
 
 	~InnerWidget();
 
@@ -62,18 +61,10 @@ private:
 	int recountHeight();
 	void refreshHeight();
 	// Allows showing additional shared media links and tabs.
-	// Was done for top level tabs support.
-	// Now used for shared media in Saved Messages.
+	// Used for shared media in Saved Messages.
 	void setupOtherTypes();
 	void createOtherTypes();
 	void createTypeButtons();
-	// Allows showing additional shared media links and tabs.
-	// Was done for top level tabs support.
-	//
-	//void createTabs();
-	//void switchToTab(Memento &&memento);
-	//void refreshSearchField();
-	//void scrollToSearchField();
 
 	Type type() const;
 
@@ -81,13 +72,9 @@ private:
 
 	const not_null<Controller*> _controller;
 
-	//Ui::SettingsSlider *_otherTabs = nullptr;
 	object_ptr<Ui::VerticalLayout> _otherTypes = { nullptr };
-	//object_ptr<Ui::PlainShadow> _otherTabsShadow = { nullptr };
-	//base::unique_qptr<Ui::RpWidget> _searchField = nullptr;
 	object_ptr<ListWidget> _list = { nullptr };
 	object_ptr<EmptyWidget> _empty;
-	//bool _searchEnabled = false;
 
 	bool _inResize = false;
 	bool _isStackBottom = false;
@@ -98,5 +85,4 @@ private:
 
 };
 
-} // namespace Media
-} // namespace Info
+} // namespace Info::Media

@@ -16,7 +16,12 @@ class FlatLabel;
 
 class UnpinMessageBox final : public Ui::BoxContent {
 public:
-	UnpinMessageBox(QWidget*, not_null<PeerData*> peer, MsgId msgId);
+	UnpinMessageBox(
+		QWidget*,
+		not_null<PeerData*> peer,
+		MsgId topicRootId,
+		MsgId msgId,
+		Fn<void()> onHidden);
 
 protected:
 	void prepare() override;
@@ -26,11 +31,12 @@ protected:
 
 private:
 	void unpinMessage();
-	void hideMessage();
 
 	const not_null<PeerData*> _peer;
 	MTP::Sender _api;
+	MsgId _topicRootId = 0;
 	MsgId _msgId = 0;
+	Fn<void()> _onHidden;
 
 	object_ptr<Ui::FlatLabel> _text;
 

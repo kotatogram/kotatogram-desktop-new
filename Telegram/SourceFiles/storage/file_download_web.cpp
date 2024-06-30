@@ -8,7 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/file_download_web.h"
 
 #include "storage/cache/storage_cache_types.h"
-#include "base/qt/qt_common_adapters.h"
+#include "base/timer.h"
 #include "base/weak_ptr.h"
 
 #include <QtNetwork/QAuthenticator>
@@ -276,7 +276,7 @@ not_null<QNetworkReply*> WebLoadManager::send(int id, const QString &url) {
 		result,
 		&QNetworkReply::downloadProgress,
 		handleProgress);
-	QObject::connect(result, base::QNetworkReply_error, handleError);
+	QObject::connect(result, &QNetworkReply::errorOccurred, handleError);
 	return result;
 }
 
@@ -488,7 +488,7 @@ void webFileLoader::startLoading() {
 	_manager->enqueue(this);
 }
 
-int webFileLoader::currentOffset() const {
+int64 webFileLoader::currentOffset() const {
 	return _ready;
 }
 
@@ -506,7 +506,7 @@ void webFileLoader::loadFinished(const QByteArray &data) {
 }
 
 void webFileLoader::loadFailed() {
-	cancel(true);
+	cancel(FailureReason::OtherFailure);
 }
 
 Storage::Cache::Key webFileLoader::cacheKey() const {

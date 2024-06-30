@@ -16,6 +16,7 @@ namespace Core {
 namespace {
 
 const auto kInMediaCacheLocation = u"*media_cache*"_q;
+constexpr auto kMaxFileSize = 4000 * int64(1024 * 1024);
 
 } // namespace
 
@@ -39,23 +40,34 @@ FileLocation::FileLocation(const QString &name) : fname(name) {
 		size = 0;
 	} else {
 		setBookmark(Platform::PathBookmark(name));
+		resolveFromInfo(QFileInfo(name));
+	}
+}
 
-		QFileInfo f(name);
-		if (f.exists()) {
-			qint64 s = f.size();
-			if (s > INT_MAX) {
-				fname = QString();
-				_bookmark = nullptr;
-				size = 0;
-			} else {
-				modified = f.lastModified();
-				size = qint32(s);
-			}
-		} else {
+FileLocation::FileLocation(const QFileInfo &info) : fname(info.filePath()) {
+	if (fname.isEmpty()) {
+		size = 0;
+	} else {
+		setBookmark(Platform::PathBookmark(fname));
+		resolveFromInfo(info);
+	}
+}
+
+void FileLocation::resolveFromInfo(const QFileInfo &info) {
+	if (info.exists()) {
+		const auto s = info.size();
+		if (s > kMaxFileSize) {
 			fname = QString();
 			_bookmark = nullptr;
 			size = 0;
+		} else {
+			modified = info.lastModified();
+			size = s;
 		}
+	} else {
+		fname = QString();
+		_bookmark = nullptr;
+		size = 0;
 	}
 }
 
@@ -77,12 +89,12 @@ bool FileLocation::check() const {
 	if (!f.isReadable()) return false;
 
 	quint64 s = f.size();
-	if (s > INT_MAX) {
+	if (s > kMaxFileSize) {
 		DEBUG_LOG(("File location check: Wrong size %1").arg(s));
 		return false;
 	}
 
-	if (qint32(s) != size) {
+	if (s != size) {
 		DEBUG_LOG(("File location check: Wrong size %1 when should be %2").arg(s).arg(size));
 		return false;
 	}

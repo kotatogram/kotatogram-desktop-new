@@ -54,10 +54,12 @@ private:
 			_box->addSelectItem(row, anim::type::instant);
 		}
 		void peerListFinishSelectedRowsBunch() override;
+		std::shared_ptr<Main::SessionShow> peerListUiShow() override;
 
 	private:
 		const not_null<PeerListsBox*> _box;
 		const not_null<PeerListController*> _controller;
+		const std::shared_ptr<Main::SessionShow> _show;
 
 	};
 	struct List {

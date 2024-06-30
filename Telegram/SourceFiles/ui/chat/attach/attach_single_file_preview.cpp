@@ -19,9 +19,10 @@ namespace Ui {
 
 SingleFilePreview::SingleFilePreview(
 	QWidget *parent,
+	const style::ComposeControls &st,
 	const PreparedFile &file,
 	AttachControls::Type type)
-: AbstractSingleFilePreview(parent, type) {
+: AbstractSingleFilePreview(parent, st, type) {
 	preparePreview(file);
 }
 
@@ -41,8 +42,7 @@ void SingleFilePreview::preparePreview(const PreparedFile &file) {
 	if (filepath.isEmpty()) {
 		auto filename = "image.png";
 		data.name = filename;
-		data.statusText = FormatImageSizeText(preview.size()
-			/ preview.devicePixelRatio());
+		data.statusText = FormatImageSizeText(file.originalDimensions);
 		data.fileIsImage = true;
 	} else {
 		auto fileinfo = QFileInfo(filepath);

@@ -51,7 +51,7 @@ CloudTheme CloudTheme::Parse(
 		settings.match([&](const MTPDthemeSettings &data) {
 			if (const auto colors = data.vmessage_colors()) {
 				for (const auto &color : colors->v) {
-					result.push_back(ColorFromSerialized(color));
+					result.push_back(Ui::ColorFromSerialized(color));
 				}
 			}
 		});
@@ -59,12 +59,12 @@ CloudTheme CloudTheme::Parse(
 	};
 	const auto accentColor = [&](const MTPThemeSettings &settings) {
 		return settings.match([&](const MTPDthemeSettings &data) {
-			return ColorFromSerialized(data.vaccent_color().v);
+			return Ui::ColorFromSerialized(data.vaccent_color());
 		});
 	};
 	const auto outgoingAccentColor = [&](const MTPThemeSettings &settings) {
 		return settings.match([&](const MTPDthemeSettings &data) {
-			return MaybeColorFromSerialized(data.voutbox_accent_color());
+			return Ui::MaybeColorFromSerialized(data.voutbox_accent_color());
 		});
 	};
 	const auto basedOnDark = [&](const MTPThemeSettings &settings) {
@@ -190,8 +190,7 @@ void CloudThemes::reloadCurrent() {
 	const auto &fields = Window::Theme::Background()->themeObject().cloud;
 	_session->api().request(MTPaccount_GetTheme(
 		MTP_string(Format()),
-		MTP_inputTheme(MTP_long(fields.id), MTP_long(fields.accessHash)),
-		MTP_long(fields.documentId)
+		MTP_inputTheme(MTP_long(fields.id), MTP_long(fields.accessHash))
 	)).done([=](const MTPTheme &result) {
 		applyUpdate(result);
 	}).fail([=] {
@@ -220,14 +219,12 @@ void CloudThemes::resolve(
 	_session->api().request(_resolveRequestId).cancel();
 	_resolveRequestId = _session->api().request(MTPaccount_GetTheme(
 		MTP_string(Format()),
-		MTP_inputThemeSlug(MTP_string(slug)),
-		MTP_long(0)
+		MTP_inputThemeSlug(MTP_string(slug))
 	)).done([=](const MTPTheme &result) {
 		showPreview(controller, result);
 	}).fail([=](const MTP::Error &error) {
-		if (error.type() == qstr("THEME_FORMAT_INVALID")) {
-			controller->show(Box<Ui::InformBox>(
-				ktr("ktg_theme_no_desktop")));
+		if (error.type() == u"THEME_FORMAT_INVALID"_q) {
+			controller->show(Ui::MakeInformBox(ktr("ktg_theme_no_desktop")));
 		}
 	}).send();
 }
@@ -251,8 +248,7 @@ void CloudThemes::showPreview(
 			controller,
 			cloud));
 	} else {
-		controller->show(Box<Ui::InformBox>(
-			ktr("ktg_theme_no_desktop")));
+		controller->show(Ui::MakeInformBox(ktr("ktg_theme_no_desktop")));
 	}
 }
 

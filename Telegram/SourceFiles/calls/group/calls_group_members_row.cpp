@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/paint/blobs.h"
 #include "ui/text/text_options.h"
 #include "ui/effects/ripple_animation.h"
+#include "ui/painter.h"
 #include "lang/lang_keys.h"
 #include "webrtc/webrtc_video_track.h"
 #include "styles/style_calls.h"
@@ -349,7 +350,7 @@ void MembersRow::updateBlobAnimation(crl::time now) {
 }
 
 void MembersRow::ensureUserpicCache(
-		std::shared_ptr<Data::CloudImageView> &view,
+		Ui::PeerUserpicView &view,
 		int size) {
 	Expects(_blobsAnimation != nullptr);
 
@@ -400,7 +401,7 @@ void MembersRow::paintBlobs(
 
 void MembersRow::paintScaledUserpic(
 		Painter &p,
-		std::shared_ptr<Data::CloudImageView> &userpic,
+		Ui::PeerUserpicView &userpic,
 		int x,
 		int y,
 		int outerWidth,
@@ -441,13 +442,14 @@ void MembersRow::paintScaledUserpic(
 }
 
 void MembersRow::paintMuteIcon(
-		Painter &p,
+		QPainter &p,
 		QRect iconRect,
 		MembersRowStyle style) {
 	_delegate->rowPaintIcon(p, iconRect, computeIconState(style));
 }
 
-auto MembersRow::generatePaintUserpicCallback() -> PaintRoundImageCallback {
+auto MembersRow::generatePaintUserpicCallback(bool forceRound)
+-> PaintRoundImageCallback {
 	return [=](Painter &p, int x, int y, int outerWidth, int size) {
 		const auto outer = outerWidth;
 		paintComplexUserpic(p, x, y, outer, size, size, PanelMode::Default);
@@ -654,7 +656,7 @@ void MembersRow::paintComplexStatusText(
 		(_mutedByMe
 			? tr::lng_group_call_muted_by_me_status(tr::now)
 			: !about.isEmpty()
-			? font->m.elidedText(about, Qt::ElideRight, availableWidth)
+			? font->elided(about, availableWidth)
 			: _delegate->rowIsMe(peer())
 			? tr::lng_status_connecting(tr::now)
 			: tr::lng_group_call_invited_status(tr::now)));
@@ -746,7 +748,7 @@ void MembersRow::rightActionAddRipple(
 		QPoint point,
 		Fn<void()> updateCallback) {
 	if (!_actionRipple) {
-		auto mask = Ui::RippleAnimation::ellipseMask(QSize(
+		auto mask = Ui::RippleAnimation::EllipseMask(QSize(
 			st::groupCallActiveButton.rippleAreaSize,
 			st::groupCallActiveButton.rippleAreaSize));
 		_actionRipple = std::make_unique<Ui::RippleAnimation>(

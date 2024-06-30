@@ -6,7 +6,6 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/localstorage.h"
-//
 
 #include "kotato/kotato_version.h"
 #include "storage/serialize_common.h"
@@ -18,10 +17,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_media.h"
 #include "base/platform/base_platform_info.h"
 #include "base/random.h"
-#include "ui/effects/animation_value.h"
+#include "ui/power_saving.h"
 #include "core/update_checker.h"
 #include "core/file_location.h"
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "media/audio/media_audio.h"
 #include "mtproto/mtproto_config.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -52,7 +52,7 @@ constexpr auto kWallPaperLegacySerializeTagId = int32(-111);
 constexpr auto kWallPaperSerializeTagId = int32(-112);
 constexpr auto kWallPaperSidesLimit = 10'000;
 
-const auto kThemeNewPathRelativeTag = qstr("special://new_tag");
+const auto kThemeNewPathRelativeTag = u"special://new_tag"_q;
 
 using namespace Storage::details;
 using Storage::FileKey;
@@ -145,7 +145,7 @@ void applyReadContext(ReadSettingsContext &&context) {
 
 bool _readOldSettings(bool remove, ReadSettingsContext &context) {
 	bool result = false;
-	QFile file(cWorkingDir() + qsl("tdata/config"));
+	auto file = QFile(cWorkingDir() + u"tdata/config"_q);
 	if (file.open(QIODevice::ReadOnly)) {
 		LOG(("App Info: reading old config..."));
 		QDataStream stream(&file);
@@ -242,9 +242,9 @@ void _readOldUserSettingsFields(
 bool _readOldUserSettings(bool remove, ReadSettingsContext &context) {
 	bool result = false;
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto testPrefix = (cTestMode() ? qsl("_test") : QString());
+	//const auto testPrefix = (cTestMode() ? u"_test"_q : QString());
 	const auto testPrefix = QString();
-	QFile file(cWorkingDir() + cDataFile() + testPrefix + qsl("_config"));
+	QFile file(cWorkingDir() + cDataFile() + testPrefix + u"_config"_q);
 	if (file.open(QIODevice::ReadOnly)) {
 		LOG(("App Info: reading old user config..."));
 		qint32 version = 0;
@@ -323,7 +323,7 @@ void _readOldMtpDataFields(
 bool _readOldMtpData(bool remove, ReadSettingsContext &context) {
 	bool result = false;
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto testPostfix = (cTestMode() ? qsl("_test") : QString());
+	//const auto testPostfix = (cTestMode() ? u"_test"_q : QString());
 	const auto testPostfix = QString();
 	QFile file(cWorkingDir() + cDataFile() + testPostfix);
 	if (file.open(QIODevice::ReadOnly)) {
@@ -357,7 +357,7 @@ void start() {
 
 	_localLoader = new TaskQueue(kFileLoaderQueueStopTimeout);
 
-	_basePath = cWorkingDir() + qsl("tdata/");
+	_basePath = cWorkingDir() + u"tdata/"_q;
 	if (!QDir().exists(_basePath)) QDir().mkpath(_basePath);
 
 	_oldKotatoVersion = readKotatoVersion();
@@ -366,7 +366,7 @@ void start() {
 	ReadSettingsContext context;
 	FileReadDescriptor settingsData;
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto name = cTestMode() ? qsl("settings_test") : qsl("settings");
+	//const auto name = cTestMode() ? u"settings_test"_q : u"settings"_q;
 	const auto name = u"settings"_q;
 	if (!ReadFile(settingsData, name, _basePath)) {
 		_readOldSettings(true, context);
@@ -447,7 +447,7 @@ void writeSettings() {
 	if (!QDir().exists(_basePath)) QDir().mkpath(_basePath);
 
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto name = cTestMode() ? qsl("settings_test") : qsl("settings");
+	//const auto name = cTestMode() ? u"settings_test"_q : u"settings"_q;
 	const auto name = u"settings"_q;
 	FileWriteDescriptor settings(name, _basePath);
 	if (_settingsSalt.isEmpty() || !SettingsKey) {
@@ -478,6 +478,8 @@ void writeSettings() {
 	}
 	size += sizeof(quint32) + sizeof(qint32) * 8;
 
+	const auto powerSaving = PowerSaving::Current().value();
+
 	EncryptedDescriptor data(size);
 	data.stream << quint32(dbiAutoStart) << qint32(cAutoStart());
 	data.stream << quint32(dbiStartMinimized) << qint32(cStartMinimized());
@@ -489,7 +491,7 @@ void writeSettings() {
 	data.stream << quint32(dbiFallbackProductionConfig) << configSerialized;
 	data.stream << quint32(dbiApplicationSettings) << applicationSettings;
 	data.stream << quint32(dbiDialogLastPath) << cDialogLastPath();
-	data.stream << quint32(dbiAnimationsDisabled) << qint32(anim::Disabled() ? 1 : 0);
+	data.stream << quint32(dbiPowerSaving) << qint32(powerSaving);
 
 	data.stream
 		<< quint32(dbiThemeKey)
@@ -582,8 +584,9 @@ void writeAutoupdatePrefix(const QString &prefix) {
 QString readAutoupdatePrefix() {
 	Expects(!Core::UpdaterDisabled());
 
+	static const auto RegExp = QRegularExpression("/+$");
 	auto result = readAutoupdatePrefixRaw();
-	return result.replace(QRegularExpression("/+$"), QString());
+	return result.replace(RegExp, QString());
 }
 
 void writeBackground(const Data::WallPaper &paper, const QImage &image) {
@@ -616,7 +619,7 @@ void writeBackground(const Data::WallPaper &paper, const QImage &image) {
 		dst = dst.subspan(sizeof(qint32));
 		bytes::copy(dst, bytes::object_as_span(&height));
 		dst = dst.subspan(sizeof(qint32));
-		const auto src = bytes::make_span(image.constBits(), srcsize);
+		const auto src = bytes::make_span(copy.constBits(), srcsize);
 		if (srcsize == dstsize) {
 			bytes::copy(dst, src);
 		} else {

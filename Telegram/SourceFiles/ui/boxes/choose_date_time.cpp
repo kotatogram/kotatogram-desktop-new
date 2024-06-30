@@ -11,36 +11,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/event_filter.h"
 #include "ui/boxes/calendar_box.h"
 #include "ui/widgets/buttons.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/time_input.h"
 #include "ui/ui_utility.h"
 #include "lang/lang_keys.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 
+#include <QtWidgets/QTextEdit>
+
 namespace Ui {
 namespace {
 
 constexpr auto kMinimalSchedule = TimeId(10);
-/*
-tr::phrase<> MonthDay(int index) {
-	switch (index) {
-	case 1: return tr::lng_month_day1;
-	case 2: return tr::lng_month_day2;
-	case 3: return tr::lng_month_day3;
-	case 4: return tr::lng_month_day4;
-	case 5: return tr::lng_month_day5;
-	case 6: return tr::lng_month_day6;
-	case 7: return tr::lng_month_day7;
-	case 8: return tr::lng_month_day8;
-	case 9: return tr::lng_month_day9;
-	case 10: return tr::lng_month_day10;
-	case 11: return tr::lng_month_day11;
-	case 12: return tr::lng_month_day12;
-	}
-	Unexpected("Index in MonthDay.");
-}
-*/
 
 QString DayString(const QDate &date) {
 	return langDayOfMonthFull(date);
@@ -53,6 +36,15 @@ QString TimeString(QTime time) {
 }
 
 } // namespace
+
+ChooseDateTimeStyleArgs::ChooseDateTimeStyleArgs()
+: labelStyle(&st::boxLabel)
+, dateFieldStyle(&st::scheduleDateField)
+, timeFieldStyle(&st::scheduleTimeField)
+, separatorStyle(&st::scheduleTimeSeparator)
+, atStyle(&st::scheduleAtLabel)
+, calendarStyle(&st::defaultCalendarColors) {
+}
 
 ChooseDateTimeBoxDescriptor ChooseDateTimeBox(
 		not_null<GenericBox*> box,
@@ -72,25 +64,25 @@ ChooseDateTimeBoxDescriptor ChooseDateTimeBox(
 		box->addRow(object_ptr<FlatLabel>(
 			box,
 			std::move(args.description),
-			st::boxLabel));
+			*args.style.labelStyle));
 	}
 	const auto parsed = base::unixtime::parse(args.time);
 	const auto state = box->lifetime().make_state<State>(State{
 		.date = parsed.date(),
 		.day = CreateChild<InputField>(
 			content,
-			st::scheduleDateField),
+			*args.style.dateFieldStyle),
 		.time = CreateChild<TimeInput>(
 			content,
 			TimeString(parsed.time()),
-			st::scheduleTimeField,
-			st::scheduleDateField,
-			st::scheduleTimeSeparator,
+			*args.style.timeFieldStyle,
+			*args.style.dateFieldStyle,
+			*args.style.separatorStyle,
 			st::scheduleTimeSeparatorPadding),
 		.at = CreateChild<FlatLabel>(
 			content,
 			tr::lng_schedule_at(),
-			st::scheduleAtLabel),
+			*args.style.atStyle),
 	});
 
 	state->date.value(
@@ -151,8 +143,10 @@ ChooseDateTimeBoxDescriptor ChooseDateTimeBox(
 
 	const auto calendar =
 		content->lifetime().make_state<QPointer<CalendarBox>>();
-	QObject::connect(state->day, &InputField::focused, [=] {
-		if (*calendar) {
+	const auto calendarStyle = args.style.calendarStyle;
+	state->day->focusedChanges(
+	) | rpl::start_with_next([=](bool focused) {
+		if (*calendar || !focused) {
 			return;
 		}
 		*calendar = box->getDelegate()->show(
@@ -165,12 +159,13 @@ ChooseDateTimeBoxDescriptor ChooseDateTimeBox(
 				}),
 				.minDate = minDate(),
 				.maxDate = maxDate(),
+				.stColors = *calendarStyle,
 			}));
 		(*calendar)->boxClosing(
 		) | rpl::start_with_next(crl::guard(state->time, [=] {
 			state->time->setFocusFast();
 		}), (*calendar)->lifetime());
-	});
+	}, state->day->lifetime());
 
 	const auto collect = [=] {
 		const auto timeValue = state->time->valueCurrent().split(':');

@@ -12,8 +12,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "storage/serialize_common.h"
 #include "ui/chat/chat_theme.h"
+#include "ui/color_int_conversion.h"
 #include "core/application.h"
 #include "main/main_session.h"
+
+namespace Ui {
+
+QColor ColorFromSerialized(MTPint serialized) {
+	return ColorFromSerialized(serialized.v);
+}
+
+std::optional<QColor> MaybeColorFromSerialized(
+		const tl::conditional<MTPint> &mtp) {
+	return mtp ? ColorFromSerialized(*mtp) : std::optional<QColor>();
+}
+
+} // namespace Ui
 
 namespace Data {
 namespace {
@@ -38,6 +52,8 @@ constexpr auto kIncorrectDefaultBackground = FromLegacyBackgroundId(105);
 constexpr auto kVersionTag = qint32(0x7FFFFFFF);
 constexpr auto kVersion = 1;
 
+using Ui::MaybeColorFromSerialized;
+
 [[nodiscard]] quint32 SerializeColor(const QColor &color) {
 	return (quint32(std::clamp(color.red(), 0, 255)) << 16)
 		| (quint32(std::clamp(color.green(), 0, 255)) << 8)
@@ -57,7 +73,8 @@ constexpr auto kVersion = 1;
 	}
 	result.reserve(4);
 	result.push_back(*c1);
-	const auto c2 = MaybeColorFromSerialized(data.vsecond_background_color());
+	const auto c2 = MaybeColorFromSerialized(
+		data.vsecond_background_color());
 	if (!c2) {
 		return result;
 	}
@@ -67,7 +84,8 @@ constexpr auto kVersion = 1;
 		return result;
 	}
 	result.push_back(*c3);
-	const auto c4 = MaybeColorFromSerialized(data.vfourth_background_color());
+	const auto c4 = MaybeColorFromSerialized(
+		data.vfourth_background_color());
 	if (!c4) {
 		return result;
 	}
@@ -180,6 +198,21 @@ WallPaperId WallPaper::id() const {
 	return _id;
 }
 
+QString WallPaper::emojiId() const {
+	return _emojiId;
+}
+
+bool WallPaper::equals(const WallPaper &paper) const {
+	return (_flags == paper._flags)
+		&& (_slug == paper._slug)
+		&& (_emojiId == paper._emojiId)
+		&& (_backgroundColors == paper._backgroundColors)
+		&& (_rotation == paper._rotation)
+		&& (_intensity == paper._intensity)
+		&& (_blurred == paper._blurred)
+		&& (_document == paper._document);
+}
+
 const std::vector<QColor> WallPaper::backgroundColors() const {
 	return _backgroundColors;
 }
@@ -233,34 +266,57 @@ bool WallPaper::hasShareUrl() const {
 	return !_slug.isEmpty();
 }
 
-QString WallPaper::shareUrl(not_null<Main::Session*> session) const {
-	if (!hasShareUrl()) {
-		return QString();
-	}
-	const auto base = session->createInternalLinkFull("bg/" + _slug);
-	auto params = QStringList();
+QStringList WallPaper::collectShareParams() const {
+	auto result = QStringList();
 	if (isPattern()) {
 		if (!backgroundColors().empty()) {
-			params.push_back(
+			result.push_back(
 				"bg_color=" + StringFromColors(backgroundColors()));
 		}
 		if (_intensity) {
-			params.push_back("intensity=" + QString::number(_intensity));
+			result.push_back("intensity=" + QString::number(_intensity));
 		}
 	}
 	if (_rotation && backgroundColors().size() == 2) {
-		params.push_back("rotation=" + QString::number(_rotation));
+		result.push_back("rotation=" + QString::number(_rotation));
 	}
 	auto mode = QStringList();
 	if (_blurred) {
 		mode.push_back("blur");
 	}
 	if (!mode.isEmpty()) {
-		params.push_back("mode=" + mode.join('+'));
+		result.push_back("mode=" + mode.join('+'));
 	}
-	return params.isEmpty()
-		? base
-		: base + '?' + params.join('&');
+	return result;
+}
+
+bool WallPaper::isNull() const {
+	return !_id && _slug.isEmpty() && _backgroundColors.empty();
+}
+
+QString WallPaper::key() const {
+	if (isNull()) {
+		return QString();
+	}
+	const auto base = _slug.isEmpty()
+		? (_id
+			? QString::number(_id)
+			: StringFromColors(backgroundColors()))
+		: ("bg/" + _slug);
+	auto params = collectShareParams();
+	if (_document && !isPattern()) {
+		params += u"&intensity="_q + QString::number(_intensity);
+	}
+	return params.isEmpty() ? base : (base + '?' + params.join('&'));
+}
+
+QString WallPaper::shareUrl(not_null<Main::Session*> session) const {
+	if (!hasShareUrl()) {
+		return QString();
+	}
+	const auto base = session->createInternalLinkFull("bg/" + _slug);
+	const auto params = collectShareParams();
+	return params.isEmpty() ? base : (base + '?' + params.join('&'));
 }
 
 void WallPaper::loadDocumentThumbnail() const {
@@ -309,6 +365,9 @@ MTPWallPaperSettings WallPaper::mtpSettings() const {
 	};
 	return MTP_wallPaperSettings(
 		MTP_flags((_blurred ? Flag::f_blur : Flag(0))
+			| Flag::f_intensity
+			| Flag::f_rotation
+			| (_emojiId.isEmpty() ? Flag() : Flag::f_emoticon)
 			| flagForIndex(0)
 			| flagForIndex(1)
 			| flagForIndex(2)
@@ -318,7 +377,8 @@ MTPWallPaperSettings WallPaper::mtpSettings() const {
 		serializeForIndex(2),
 		serializeForIndex(3),
 		MTP_int(_intensity),
-		MTP_int(_rotation));
+		MTP_int(_rotation),
+		MTP_string(_emojiId));
 }
 
 WallPaper WallPaper::withUrlParams(
@@ -330,7 +390,7 @@ WallPaper WallPaper::withUrlParams(
 	if (auto mode = params.value("mode"); !mode.isEmpty()) {
 		const auto list = mode.replace('+', ' ').split(' ');
 		for (const auto &change : list) {
-			if (change == qstr("blur")) {
+			if (change == u"blur"_q) {
 				result._blurred = true;
 			}
 		}
@@ -439,11 +499,11 @@ std::optional<WallPaper> WallPaper::Create(
 	if (const auto settings = data.vsettings()) {
 		settings->match([&](const MTPDwallPaperSettings &data) {
 			result._blurred = data.is_blur();
+			if (const auto intensity = data.vintensity()) {
+				result._intensity = intensity->v;
+			}
 			if (result.isPattern()) {
 				result._backgroundColors = ColorsFromMTP(data);
-				if (const auto intensity = data.vintensity()) {
-					result._intensity = intensity->v;
-				}
 				if (const auto rotation = data.vrotation()) {
 					result._rotation = rotation->v;
 				}
@@ -466,6 +526,7 @@ std::optional<WallPaper> WallPaper::Create(const MTPDwallPaperNoFile &data) {
 			if (const auto rotation = data.vrotation()) {
 				result._rotation = rotation->v;
 			}
+			result._emojiId = qs(data.vemoticon().value_or_empty());
 		});
 	}
 	return result;
@@ -637,6 +698,12 @@ std::optional<WallPaper> WallPaper::FromColorsSlug(const QString &slug) {
 	return result;
 }
 
+WallPaper WallPaper::FromEmojiId(const QString &emojiId) {
+	auto result = WallPaper(0);
+	result._emojiId = emojiId;
+	return result;
+}
+
 WallPaper WallPaper::ConstructDefault() {
 	auto result = WallPaper(
 		kDefaultBackground
@@ -710,29 +777,6 @@ QImage GenerateDitheredGradient(const Data::WallPaper &paper) {
 	return Ui::GenerateDitheredGradient(
 		paper.backgroundColors(),
 		paper.gradientRotation());
-}
-
-QColor ColorFromSerialized(quint32 serialized) {
-	return QColor(
-		int((serialized >> 16) & 0xFFU),
-		int((serialized >> 8) & 0xFFU),
-		int(serialized & 0xFFU));
-}
-
-QColor ColorFromSerialized(MTPint serialized) {
-	return ColorFromSerialized(serialized.v);
-}
-
-std::optional<QColor> MaybeColorFromSerialized(
-		quint32 serialized) {
-	return (serialized == quint32(-1))
-		? std::nullopt
-		: std::make_optional(ColorFromSerialized(serialized));
-}
-
-std::optional<QColor> MaybeColorFromSerialized(
-		const tl::conditional<MTPint> &mtp) {
-	return mtp ? std::make_optional(ColorFromSerialized(*mtp)) : std::nullopt;
 }
 
 namespace details {

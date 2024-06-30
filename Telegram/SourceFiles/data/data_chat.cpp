@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/data_group_call.h"
 #include "data/data_message_reactions.h"
+#include "data/notify/data_notify_settings.h"
 #include "history/history.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
@@ -39,7 +40,10 @@ ChatData::ChatData(not_null<Data::Session*> owner, PeerId id)
 
 void ChatData::setPhoto(const MTPChatPhoto &photo) {
 	photo.match([&](const MTPDchatPhoto &data) {
-		updateUserpic(data.vphoto_id().v, data.vdc_id().v);
+		updateUserpic(
+			data.vphoto_id().v,
+			data.vdc_id().v,
+			data.is_has_video());
 	}, [&](const MTPDchatPhotoEmpty &) {
 		clearUserpic();
 	});
@@ -53,15 +57,10 @@ ChatAdminRightsInfo ChatData::defaultAdminRights(not_null<UserData*> user) {
 		| Flag::ChangeInfo
 		| Flag::DeleteMessages
 		| Flag::BanUsers
-		| Flag::InviteUsers
+		| Flag::InviteByLinkOrAdd
 		| Flag::PinMessages
 		| Flag::ManageCall
 		| (isCreator ? Flag::AddAdmins : Flag(0)));
-}
-
-bool ChatData::canWrite() const {
-	// Duplicated in Data::CanWriteValue().
-	return amIn() && !amRestricted(ChatRestriction::SendMessages);
 }
 
 bool ChatData::allowsForwarding() const {
@@ -92,11 +91,7 @@ bool ChatData::canDeleteMessages() const {
 }
 
 bool ChatData::canAddMembers() const {
-	return amIn() && !amRestricted(ChatRestriction::InviteUsers);
-}
-
-bool ChatData::canSendPolls() const {
-	return amIn() && !amRestricted(ChatRestriction::SendPolls);
+	return amIn() && !amRestricted(ChatRestriction::AddParticipants);
 }
 
 bool ChatData::canAddAdmins() const {
@@ -109,11 +104,11 @@ bool ChatData::canBanMembers() const {
 }
 
 bool ChatData::anyoneCanAddMembers() const {
-	return !(defaultRestrictions() & ChatRestriction::InviteUsers);
+	return !(defaultRestrictions() & ChatRestriction::AddParticipants);
 }
 
 void ChatData::setName(const QString &newName) {
-	updateNameDelayed(newName.isEmpty() ? name : newName, QString(), QString());
+	updateNameDelayed(newName.isEmpty() ? name() : newName, {}, {});
 }
 
 void ChatData::applyEditAdmin(not_null<UserData*> user, bool isAdmin) {
@@ -143,7 +138,7 @@ void ChatData::setInviteLink(const QString &newInviteLink) {
 
 bool ChatData::canHaveInviteLink() const {
 	return amCreator()
-		|| (adminRights() & ChatAdminRight::InviteUsers);
+		|| (adminRights() & ChatAdminRight::InviteByLinkOrAdd);
 }
 
 void ChatData::setAdminRights(ChatAdminRights rights) {
@@ -203,7 +198,8 @@ void ChatData::setMigrateToChannel(ChannelData *channel) {
 
 void ChatData::setGroupCall(
 		const MTPInputGroupCall &call,
-		TimeId scheduleDate) {
+		TimeId scheduleDate,
+		bool rtmp) {
 	if (migrateTo()) {
 		return;
 	}
@@ -224,7 +220,8 @@ void ChatData::setGroupCall(
 			this,
 			data.vid().v,
 			data.vaccess_hash().v,
-			scheduleDate);
+			scheduleDate,
+			rtmp);
 		owner().registerGroupCall(_call.get());
 		session().changes().peerUpdated(this, UpdateFlag::GroupCall);
 		addFlags(Flag::CallActive);
@@ -252,16 +249,8 @@ PeerId ChatData::groupCallDefaultJoinAs() const {
 	return _callDefaultJoinAs;
 }
 
-void ChatData::setBotCommands(const MTPVector<MTPBotInfo> &data) {
-	if (Data::UpdateBotCommands(_botCommands, data)) {
-		owner().botCommandsChanged(this);
-	}
-}
-
-void ChatData::setBotCommands(
-		UserId botId,
-		const MTPVector<MTPBotCommand> &data) {
-	if (Data::UpdateBotCommands(_botCommands, botId, data)) {
+void ChatData::setBotCommands(const std::vector<Data::BotCommands> &list) {
+	if (_botCommands.update(list)) {
 		owner().botCommandsChanged(this);
 	}
 }
@@ -287,20 +276,23 @@ void ChatData::setPendingRequestsCount(
 	}
 }
 
-void ChatData::setAllowedReactions(base::flat_set<QString> list) {
-	if (_allowedReactions != list) {
-		const auto toggled = (_allowedReactions.empty() != list.empty());
-		_allowedReactions = std::move(list);
-		if (toggled) {
-			owner().reactions().updateAllInHistory(
-				this,
-				!_allowedReactions.empty());
+void ChatData::setAllowedReactions(Data::AllowedReactions value) {
+	if (_allowedReactions != value) {
+		const auto enabled = [](const Data::AllowedReactions &allowed) {
+			return (allowed.type != Data::AllowedReactionsType::Some)
+				|| !allowed.some.empty();
+		};
+		const auto was = enabled(_allowedReactions);
+		_allowedReactions = std::move(value);
+		const auto now = enabled(_allowedReactions);
+		if (was != now) {
+			owner().reactions().updateAllInHistory(this, now);
 		}
 		session().changes().peerUpdated(this, UpdateFlag::Reactions);
 	}
 }
 
-const base::flat_set<QString> &ChatData::allowedReactions() const {
+const Data::AllowedReactions &ChatData::allowedReactions() const {
 	return _allowedReactions;
 }
 
@@ -452,9 +444,12 @@ void ApplyChatUpdate(not_null<ChatData*> chat, const MTPDchatFull &update) {
 
 	chat->setMessagesTTL(update.vttl_period().value_or_empty());
 	if (const auto info = update.vbot_info()) {
-		chat->setBotCommands(*info);
+		auto &&commands = ranges::views::all(
+			info->v
+		) | ranges::views::transform(Data::BotCommandsFromTL);
+		chat->setBotCommands(std::move(commands) | ranges::to_vector);
 	} else {
-		chat->setBotCommands(MTP_vector<MTPBotInfo>());
+		chat->setBotCommands({});
 	}
 	using Flag = ChatDataFlag;
 	const auto mask = Flag::CanSetUsername;
@@ -475,17 +470,19 @@ void ApplyChatUpdate(not_null<ChatData*> chat, const MTPDchatFull &update) {
 	}
 	chat->checkFolder(update.vfolder_id().value_or_empty());
 	chat->setThemeEmoji(qs(update.vtheme_emoticon().value_or_empty()));
-	chat->setAllowedReactions(
-		Data::Reactions::ParseAllowed(update.vavailable_reactions()));
+	chat->setTranslationDisabled(update.is_translations_disabled());
+	if (const auto allowed = update.vavailable_reactions()) {
+		chat->setAllowedReactions(Data::Parse(*allowed));
+	} else {
+		chat->setAllowedReactions({});
+	}
 	chat->fullUpdated();
 	chat->setAbout(qs(update.vabout()));
 	chat->setPendingRequestsCount(
 		update.vrequests_pending().value_or_empty(),
 		update.vrecent_requesters().value_or_empty());
 
-	chat->session().api().applyNotifySettings(
-		MTP_inputNotifyPeer(chat->input),
-		update.vnotify_settings());
+	chat->owner().notifySettings().apply(chat, update.vnotify_settings());
 }
 
 void ApplyChatUpdate(

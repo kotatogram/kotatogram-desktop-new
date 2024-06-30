@@ -8,9 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "platform/platform_main_window.h"
-#include "base/unique_qptr.h"
 #include "ui/layers/layer_widget.h"
-#include "ui/effects/animation_value.h"
 
 class MainWidget;
 
@@ -18,10 +16,6 @@ namespace Intro {
 class Widget;
 enum class EnterPoint : uchar;
 } // namespace Intro
-
-namespace Media {
-class SystemMediaControlsManager;
-} // namespace Media
 
 namespace Window {
 class MediaPreviewWidget;
@@ -42,6 +36,8 @@ class LayerStackWidget;
 
 class MediaPreviewWidget;
 
+extern const char kOptionAutoScrollInactiveChat[];
+
 class MainWindow : public Platform::MainWindow {
 public:
 	explicit MainWindow(not_null<Window::Controller*> controller);
@@ -53,8 +49,8 @@ public:
 
 	void setupPasscodeLock();
 	void clearPasscodeLock();
-	void setupIntro(Intro::EnterPoint point);
-	void setupMain(MsgId singlePeerShowAtMsgId);
+	void setupIntro(Intro::EnterPoint point, QPixmap oldContentCache);
+	void setupMain(MsgId singlePeerShowAtMsgId, QPixmap oldContentCache);
 
 	void showSettings();
 
@@ -62,29 +58,34 @@ public:
 
 	MainWidget *sessionContent() const;
 
-	[[nodiscard]] bool doWeMarkAsRead();
-
+	void checkActivation() override;
+	[[nodiscard]] bool markingAsRead() const;
 
 	bool takeThirdSectionFromLayer();
 
-	void checkHistoryActivation();
-
 	void sendPaths();
 
-	bool contentOverlapped(const QRect &globalRect);
-	bool contentOverlapped(QWidget *w, QPaintEvent *e) {
-		return contentOverlapped(QRect(w->mapToGlobal(e->rect().topLeft()), e->rect().size()));
+	[[nodiscard]] bool contentOverlapped(const QRect &globalRect);
+	[[nodiscard]] bool contentOverlapped(QWidget *w, QPaintEvent *e) {
+		return contentOverlapped(
+			QRect(w->mapToGlobal(e->rect().topLeft()), e->rect().size()));
 	}
-	bool contentOverlapped(QWidget *w, const QRegion &r) {
-		return contentOverlapped(QRect(w->mapToGlobal(r.boundingRect().topLeft()), r.boundingRect().size()));
+	[[nodiscard]] bool contentOverlapped(QWidget *w, const QRegion &r) {
+		return contentOverlapped(QRect(
+			w->mapToGlobal(r.boundingRect().topLeft()),
+			r.boundingRect().size()));
 	}
 
 	void showMainMenu();
-	void updateTrayMenu() override;
 	void fixOrder() override;
 
-	void showLayer(
-		std::unique_ptr<Ui::LayerWidget> &&layer,
+	[[nodiscard]] QPixmap grabForSlideAnimation();
+
+	void showOrHideBoxOrLayer(
+		std::variant<
+			v::null_t,
+			object_ptr<Ui::BoxContent>,
+			std::unique_ptr<Ui::LayerWidget>> &&layer,
 		Ui::LayerOptions options,
 		anim::type animated);
 	void showSpecialLayer(
@@ -93,13 +94,9 @@ public:
 	bool showSectionInExistingLayer(
 		not_null<Window::SectionMemento*> memento,
 		const Window::SectionShow &params);
-	void ui_showBox(
-		object_ptr<Ui::BoxContent> box,
-		Ui::LayerOptions options,
-		anim::type animated);
 	void ui_hideSettingsAndLayer(anim::type animated);
 	void ui_removeLayerBlackout();
-	bool ui_isLayerShown();
+	[[nodiscard]] bool ui_isLayerShown() const;
 	bool showMediaPreview(
 		Data::FileOrigin origin,
 		not_null<DocumentData*> document);
@@ -115,40 +112,16 @@ protected:
 	void closeEvent(QCloseEvent *e) override;
 
 	void initHook() override;
-	void activeChangedHook() override;
 	void clearWidgetsHook() override;
 
 private:
-	[[nodiscard]] bool skipTrayClick() const;
-
-	void createTrayIconMenu();
-	void handleTrayIconActication(
-		QSystemTrayIcon::ActivationReason reason) override;
-
 	void applyInitialWorkMode();
 	void ensureLayerCreated();
 	void destroyLayer();
 
-	void showBoxOrLayer(
-		std::variant<
-			v::null_t,
-			object_ptr<Ui::BoxContent>,
-			std::unique_ptr<Ui::LayerWidget>> &&layer,
-		Ui::LayerOptions options,
-		anim::type animated);
-
 	void themeUpdated(const Window::Theme::BackgroundUpdate &data);
 
-	void toggleDisplayNotifyFromTray();
-	void toggleSoundNotifyFromTray();
-
-	QPixmap grabInner();
-
-	std::unique_ptr<Media::SystemMediaControlsManager> _mediaControlsManager;
-
-	crl::time _lastTrayClickTime = 0;
 	QPoint _lastMousePosition;
-	bool _activeForTrayIconAction = true;
 
 	object_ptr<Window::PasscodeLockWidget> _passcodeLock = { nullptr };
 	object_ptr<Intro::Widget> _intro = { nullptr };
@@ -158,10 +131,4 @@ private:
 
 	object_ptr<Window::Theme::WarningWidget> _testingThemeWarning = { nullptr };
 
-	rpl::event_stream<> _updateTrayMenuTextActions;
-
 };
-
-namespace App {
-MainWindow *wnd();
-} // namespace App

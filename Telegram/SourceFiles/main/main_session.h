@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include <rpl/event_stream.h>
 #include <rpl/filter.h>
 #include <rpl/variable.h>
 #include "base/timer.h"
@@ -32,7 +31,6 @@ class Templates;
 namespace Data {
 class Session;
 class Changes;
-class CloudImageView;
 } // namespace Data
 
 namespace Storage {
@@ -51,7 +49,16 @@ struct TermsLock;
 namespace Stickers {
 class EmojiPack;
 class DicePacks;
+class GiftBoxPack;
 } // namespace Stickers;
+
+namespace InlineBots {
+class AttachWebView;
+} // namespace InlineBots
+
+namespace Ui {
+struct ColorIndicesCompressed;
+} // namespace Ui
 
 namespace Main {
 
@@ -76,6 +83,13 @@ public:
 	[[nodiscard]] Domain &domain() const;
 	[[nodiscard]] Storage::Domain &domainLocal() const;
 
+	[[nodiscard]] bool premium() const;
+	[[nodiscard]] bool premiumPossible() const;
+	[[nodiscard]] rpl::producer<bool> premiumPossibleValue() const;
+	[[nodiscard]] bool premiumBadgesShown() const;
+	[[nodiscard]] bool premiumCanBuy() const;
+
+	[[nodiscard]] bool isTestMode() const;
 	[[nodiscard]] uint64 uniqueId() const; // userId() with TestDC shift.
 	[[nodiscard]] UserId userId() const;
 	[[nodiscard]] PeerId userPeerId() const;
@@ -108,6 +122,9 @@ public:
 	[[nodiscard]] Stickers::DicePacks &diceStickersPacks() const {
 		return *_diceStickersPacks;
 	}
+	[[nodiscard]] Stickers::GiftBoxPack &giftBoxStickersPacks() const {
+		return *_giftBoxStickersPacks;
+	}
 	[[nodiscard]] Data::Session &data() const {
 		return *_data;
 	}
@@ -116,6 +133,9 @@ public:
 	}
 	[[nodiscard]] SendAsPeers &sendAsPeers() const {
 		return *_sendAsPeers;
+	}
+	[[nodiscard]] InlineBots::AttachWebView &attachWebView() const {
+		return *_attachWebView;
 	}
 
 	void saveSettings();
@@ -167,15 +187,19 @@ public:
 		return _lifetime;
 	}
 
-	base::Observable<DocumentData*> documentUpdated;
+	[[nodiscard]] bool supportMode() const;
+	[[nodiscard]] Support::Helper &supportHelper() const;
+	[[nodiscard]] Support::Templates &supportTemplates() const;
 
-	bool supportMode() const;
-	Support::Helper &supportHelper() const;
-	Support::Templates &supportTemplates() const;
+	[[nodiscard]] auto colorIndicesValue()
+		-> rpl::producer<Ui::ColorIndicesCompressed>;
 
 private:
 	static constexpr auto kDefaultSaveDelay = crl::time(1000);
 
+	void parseColorIndices(const MTPDhelp_peerColors &data);
+
+	const UserId _userId;
 	const not_null<Account*> _account;
 
 	const std::unique_ptr<SessionSettings> _settings;
@@ -189,17 +213,19 @@ private:
 
 	// _data depends on _downloader / _uploader.
 	const std::unique_ptr<Data::Session> _data;
-	const UserId _userId;
 	const not_null<UserData*> _user;
 
 	// _emojiStickersPack depends on _data.
 	const std::unique_ptr<Stickers::EmojiPack> _emojiStickersPack;
 	const std::unique_ptr<Stickers::DicePacks> _diceStickersPacks;
+	const std::unique_ptr<Stickers::GiftBoxPack> _giftBoxStickersPacks;
 	const std::unique_ptr<SendAsPeers> _sendAsPeers;
+	const std::unique_ptr<InlineBots::AttachWebView> _attachWebView;
 
 	const std::unique_ptr<Support::Helper> _supportHelper;
 
-	std::shared_ptr<Data::CloudImageView> _selfUserpicView;
+	std::shared_ptr<QImage> _selfUserpicView;
+	rpl::variable<bool> _premiumPossible = false;
 
 	rpl::event_stream<bool> _termsLockChanges;
 	std::unique_ptr<Window::TermsLock> _termsLock;

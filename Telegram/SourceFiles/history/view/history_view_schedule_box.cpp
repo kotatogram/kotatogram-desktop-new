@@ -10,18 +10,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_common.h"
 #include "data/data_peer.h"
 #include "data/data_user.h"
-#include "data/data_scheduled_messages.h" // kScheduledUntilOnlineTimestamp
 #include "lang/lang_keys.h"
 #include "base/event_filter.h"
 #include "base/qt/qt_key_modifiers.h"
 #include "base/unixtime.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/wrap/padding_wrap.h"
-#include "ui/boxes/choose_date_time.h"
-#include "chat_helpers/send_context_menu.h"
+#include "menu/menu_send.h"
 #include "styles/style_info.h"
 #include "styles/style_layers.h"
 #include "styles/style_chat.h"
@@ -32,12 +30,13 @@ namespace {
 
 void FillSendUntilOnlineMenu(
 		not_null<Ui::IconButton*> button,
-		Fn<void()> callback) {
+		Fn<void()> callback,
+		const ScheduleBoxStyleArgs &style) {
 	const auto menu = std::make_shared<base::unique_qptr<Ui::PopupMenu>>();
 	button->setClickedCallback([=] {
 		*menu = base::make_unique_q<Ui::PopupMenu>(
 			button,
-			st::popupMenuWithIcons);
+			*style.popupMenuStyle);
 		(*menu)->addAction(
 			tr::lng_scheduled_send_until_online(tr::now),
 			std::move(callback),
@@ -49,22 +48,31 @@ void FillSendUntilOnlineMenu(
 
 } // namespace
 
+ScheduleBoxStyleArgs::ScheduleBoxStyleArgs()
+: topButtonStyle(&st::infoTopBarMenu)
+, popupMenuStyle(&st::popupMenuWithIcons)
+, chooseDateTimeArgs({}) {
+}
+
 TimeId DefaultScheduleTime() {
 	return base::unixtime::now() + 600;
 }
 
 bool CanScheduleUntilOnline(not_null<PeerData*> peer) {
-	return !peer->isSelf()
-		&& peer->isUser()
-		&& !peer->asUser()->isBot()
-		&& (peer->asUser()->onlineTill > 0);
+	if (const auto user = peer->asUser()) {
+		return !user->isSelf()
+			&& !user->isBot()
+			&& !user->lastseen().isHidden();
+	}
+	return false;
 }
 
 void ScheduleBox(
 		not_null<Ui::GenericBox*> box,
 		SendMenu::Type type,
 		Fn<void(Api::SendOptions)> done,
-		TimeId time) {
+		TimeId time,
+		ScheduleBoxStyleArgs style) {
 	const auto save = [=](bool silent, TimeId scheduleDate) {
 		if (!scheduleDate) {
 			return;
@@ -84,21 +92,24 @@ void ScheduleBox(
 		.submit = tr::lng_schedule_button(),
 		.done = [=](TimeId result) { save(false, result); },
 		.time = time,
+		.style = style.chooseDateTimeArgs,
 	});
 
+	using T = SendMenu::Type;
 	SendMenu::SetupMenuAndShortcuts(
 		descriptor.submit.data(),
-		[=] { return SendMenu::Type::SilentOnly; },
+		[t = type == T::Disabled ? T::Disabled : T::SilentOnly] { return t; },
 		[=] { save(true, descriptor.collect()); },
+		nullptr,
 		nullptr);
 
 	if (type == SendMenu::Type::ScheduledToUser) {
-		const auto sendUntilOnline = box->addTopButton(st::infoTopBarMenu);
-		const auto timestamp
-			= Data::ScheduledMessages::kScheduledUntilOnlineTimestamp;
+		const auto sendUntilOnline = box->addTopButton(*style.topButtonStyle);
+		const auto timestamp = Api::kScheduledUntilOnlineTimestamp;
 		FillSendUntilOnlineMenu(
 			sendUntilOnline.data(),
-			[=] { save(false, timestamp); });
+			[=] { save(false, timestamp); },
+			style);
 	}
 }
 

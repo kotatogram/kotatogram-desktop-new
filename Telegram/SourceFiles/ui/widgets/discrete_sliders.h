@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
+#include "ui/round_rect.h"
 #include "ui/effects/animations.h"
 #include "styles/style_widgets.h"
 
@@ -17,7 +18,7 @@ class RippleAnimation;
 
 class DiscreteSlider : public RpWidget {
 public:
-	DiscreteSlider(QWidget *parent);
+	DiscreteSlider(QWidget *parent, bool snapToLabel);
 
 	void addSection(const QString &label);
 	void setSections(const std::vector<QString> &labels);
@@ -28,7 +29,7 @@ public:
 	void setActiveSectionFast(int index);
 	void finishAnimating();
 
-	auto sectionActivated() const {
+	[[nodiscard]] rpl::producer<int> sectionActivated() const {
 		return _sectionActivated.events();
 	}
 
@@ -48,10 +49,15 @@ protected:
 		Ui::Text::String label;
 		std::unique_ptr<RippleAnimation> ripple;
 	};
+	struct Range {
+		int left = 0;
+		int width = 0;
+	};
 
-	int getCurrentActiveLeft();
+	[[nodiscard]] Range getFinalActiveRange() const;
+	[[nodiscard]] Range getCurrentActiveRange() const;
 
-	int getSectionsCount() const {
+	[[nodiscard]] int getSectionsCount() const {
 		return _sections.size();
 	}
 
@@ -66,6 +72,7 @@ protected:
 
 	void stopAnimation() {
 		_a_left.stop();
+		_a_width.stop();
 	}
 
 	void setSelectOnPress(bool selectOnPress);
@@ -81,12 +88,14 @@ private:
 	std::vector<Section> _sections;
 	int _activeIndex = 0;
 	bool _selectOnPress = true;
+	bool _snapToLabel = false;
 
 	rpl::event_stream<int> _sectionActivated;
 
 	int _pressed = -1;
 	int _selected = 0;
 	Ui::Animations::Simple _a_left;
+	Ui::Animations::Simple _a_width;
 
 	int _timerId = -1;
 	crl::time _callbackAfterMs = 0;
@@ -115,6 +124,8 @@ private:
 	std::vector<float64> countSectionsWidths(int newWidth) const;
 
 	const style::SettingsSlider &_st;
+	std::optional<Ui::RoundRect> _bar;
+	std::optional<Ui::RoundRect> _barActive;
 	int _rippleTopRoundRadius = 0;
 
 

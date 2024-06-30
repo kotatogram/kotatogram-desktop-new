@@ -28,6 +28,8 @@ struct MarkedTextContext {
 
 	Main::Session *session = nullptr;
 	HashtagMentionType type = HashtagMentionType::Telegram;
+	Fn<void()> customEmojiRepaint;
+	int customEmojiLoopLimit = 0;
 };
 
 class UiIntegration final : public Ui::Integration {
@@ -45,7 +47,6 @@ public:
 
 	bool screenIsLocked() override;
 	style::CustomFontSettings fontSettings() override;
-	QString timeFormat() override;
 
 	std::shared_ptr<ClickHandler> createLinkHandler(
 		const EntityLinkData &data,
@@ -53,10 +54,17 @@ public:
 	bool handleUrlClick(
 		const QString &url,
 		const QVariant &context) override;
+	bool copyPreOnClick(const QVariant &context) override;
 	rpl::producer<> forcePopupMenuHideRequests() override;
-	QString convertTagToMimeTag(const QString &tagId) override;
 	const Ui::Emoji::One *defaultEmojiVariant(
 		const Ui::Emoji::One *emoji) override;
+	std::unique_ptr<Ui::Text::CustomEmoji> createCustomEmoji(
+		const QString &data,
+		const std::any &context) override;
+	Fn<void()> createSpoilerRepaint(const std::any &context) override;
+	bool allowClickHandlerActivation(
+		const std::shared_ptr<ClickHandler> &handler,
+		const ClickContext &context) override;
 
 	QString phraseContextCopyText() override;
 	QString phraseContextCopyEmail() override;
@@ -70,8 +78,22 @@ public:
 	QString phraseFormattingItalic() override;
 	QString phraseFormattingUnderline() override;
 	QString phraseFormattingStrikeOut() override;
+	QString phraseFormattingBlockquote() override;
 	QString phraseFormattingMonospace() override;
 	QString phraseFormattingSpoiler() override;
+	QString phraseButtonOk() override;
+	QString phraseButtonClose() override;
+	QString phraseButtonCancel() override;
+	QString phrasePanelCloseWarning() override;
+	QString phrasePanelCloseUnsaved() override;
+	QString phrasePanelCloseAnyway() override;
+	QString phraseBotSharePhone() override;
+	QString phraseBotSharePhoneTitle() override;
+	QString phraseBotSharePhoneConfirm() override;
+	QString phraseBotAllowWrite() override;
+	QString phraseBotAllowWriteTitle() override;
+	QString phraseBotAllowWriteConfirm() override;
+	QString phraseQuoteHeaderCopy() override;
 
 };
 

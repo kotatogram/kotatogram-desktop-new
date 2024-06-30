@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "calls/group/ui/desktop_capture_choose_source.h"
 #include "ui/effects/animations.h"
 #include "ui/gl/gl_window.h"
+#include "ui/layers/show.h"
 #include "ui/rp_widget.h"
 
 class Image;
@@ -28,12 +29,12 @@ class PowerSaveBlocker;
 
 namespace Data {
 class PhotoMedia;
-class CloudImageView;
 class GroupCall;
 } // namespace Data
 
 namespace Ui {
 class BoxContent;
+class LayerWidget;
 enum class LayerOption;
 using LayerOptions = base::flags<LayerOption>;
 class AbstractButton;
@@ -52,13 +53,20 @@ class ScrollArea;
 class GenericBox;
 class LayerManager;
 class GroupCallScheduledLeft;
-namespace Toast {
-class Instance;
-} // namespace Toast
-namespace Platform {
-struct SeparateTitleControls;
-} // namespace Platform
 } // namespace Ui
+
+namespace Ui::Toast {
+class Instance;
+struct Config;
+} // namespace Ui::Toast
+
+namespace Ui::Platform {
+struct SeparateTitleControls;
+} // namespace Ui::Platform
+
+namespace Main {
+class SessionShow;
+} // namespace Main
 
 namespace style {
 struct CallSignalBars;
@@ -74,25 +82,46 @@ enum class PanelMode;
 enum class StickedTooltip;
 class MicLevelTester;
 
-class Panel final : private Ui::DesktopCapture::ChooseSourceDelegate {
+class Panel final
+	: public base::has_weak_ptr
+	, private Ui::DesktopCapture::ChooseSourceDelegate {
 public:
 	Panel(not_null<GroupCall*> call);
 	~Panel();
 
+	[[nodiscard]] not_null<Ui::RpWidget*> widget() const;
 	[[nodiscard]] not_null<GroupCall*> call() const;
+	[[nodiscard]] bool isVisible() const;
 	[[nodiscard]] bool isActive() const;
 
-	void showToast(TextWithEntities &&text, crl::time duration = 0);
+	base::weak_ptr<Ui::Toast::Instance> showToast(
+		const QString &text,
+		crl::time duration = 0);
+	base::weak_ptr<Ui::Toast::Instance> showToast(
+		TextWithEntities &&text,
+		crl::time duration = 0);
+	base::weak_ptr<Ui::Toast::Instance> showToast(
+		Ui::Toast::Config &&config);
+
 	void showBox(object_ptr<Ui::BoxContent> box);
 	void showBox(
 		object_ptr<Ui::BoxContent> box,
 		Ui::LayerOptions options,
 		anim::type animated = anim::type::normal);
+	void showLayer(
+		std::unique_ptr<Ui::LayerWidget> layer,
+		Ui::LayerOptions options,
+		anim::type animated = anim::type::normal);
+	void hideLayer(anim::type animated = anim::type::normal);
+	[[nodiscard]] bool isLayerShown() const;
 
 	void minimize();
+	void toggleFullScreen();
 	void close();
 	void showAndActivate();
 	void closeBeforeDestroy();
+
+	[[nodiscard]] std::shared_ptr<Main::SessionShow> uiShow();
 
 	rpl::lifetime &lifetime();
 
@@ -111,7 +140,6 @@ private:
 	};
 
 	[[nodiscard]] not_null<Ui::RpWindow*> window() const;
-	[[nodiscard]] not_null<Ui::RpWidget*> widget() const;
 
 	[[nodiscard]] PanelMode mode() const;
 
@@ -130,10 +158,9 @@ private:
 
 	bool handleClose();
 	void startScheduledNow();
-	void trackControls(bool track);
+	void trackControls(bool track, bool force = false);
 	void raiseControls();
 	void enlargeVideo();
-	void minimizeVideo();
 
 	void trackControl(Ui::RpWidget *widget, rpl::lifetime &lifetime);
 	void trackControlOver(not_null<Ui::RpWidget*> control, bool over);
@@ -152,6 +179,7 @@ private:
 	void updateButtonsStyles();
 	void updateMembersGeometry();
 	void refreshControlsBackground();
+	void refreshTitleBackground();
 	void setupControlsBackgroundWide();
 	void setupControlsBackgroundNarrow();
 	void showControls();
@@ -159,6 +187,8 @@ private:
 	void refreshVideoButtons(
 		std::optional<bool> overrideWideMode = std::nullopt);
 	void refreshTopButton();
+	void createPinOnTop();
+	void setupEmptyRtmp();
 	void toggleWideControls(bool shown);
 	void updateWideControlsVisibility();
 	[[nodiscard]] bool videoButtonInNarrowMode() const;
@@ -175,6 +205,7 @@ private:
 	[[nodiscard]] QRect computeTitleRect() const;
 	void refreshTitle();
 	void refreshTitleGeometry();
+	void refreshTitleColors();
 	void setupRealCallViewers();
 	void subscribeToChanges(not_null<Data::GroupCall*> real);
 
@@ -197,31 +228,38 @@ private:
 	Ui::GL::Window _window;
 	const std::unique_ptr<Ui::LayerManager> _layerBg;
 	rpl::variable<PanelMode> _mode;
+	rpl::variable<bool> _fullScreenOrMaximized = false;
+	bool _unpinnedMaximized = false;
 
 #ifndef Q_OS_MAC
-	std::unique_ptr<Ui::Platform::SeparateTitleControls> _controls;
+	rpl::variable<int> _controlsTop = 0;
+	const std::unique_ptr<Ui::Platform::SeparateTitleControls> _controls;
 #endif // !Q_OS_MAC
 
 	const std::unique_ptr<base::PowerSaveBlocker> _powerSaveBlocker;
 
 	rpl::lifetime _callLifetime;
 
+	object_ptr<Ui::RpWidget> _titleBackground = { nullptr };
 	object_ptr<Ui::FlatLabel> _title = { nullptr };
+	object_ptr<Ui::FlatLabel> _titleSeparator = { nullptr };
+	object_ptr<Ui::FlatLabel> _viewers = { nullptr };
 	object_ptr<Ui::FlatLabel> _subtitle = { nullptr };
 	object_ptr<Ui::AbstractButton> _recordingMark = { nullptr };
 	object_ptr<Ui::IconButton> _menuToggle = { nullptr };
+	object_ptr<Ui::IconButton> _pinOnTop = { nullptr };
 	object_ptr<Ui::DropdownMenu> _menu = { nullptr };
 	rpl::variable<bool> _wideMenuShown = false;
 	object_ptr<Ui::AbstractButton> _joinAsToggle = { nullptr };
 	object_ptr<Members> _members = { nullptr };
 	std::unique_ptr<Viewport> _viewport;
-	rpl::lifetime _trackControlsLifetime;
 	rpl::lifetime _trackControlsOverStateLifetime;
 	rpl::lifetime _trackControlsMenuLifetime;
 	object_ptr<Ui::FlatLabel> _startsIn = { nullptr };
 	object_ptr<Ui::RpWidget> _countdown = { nullptr };
 	std::shared_ptr<Ui::GroupCallScheduledLeft> _countdownData;
 	object_ptr<Ui::FlatLabel> _startsWhen = { nullptr };
+	object_ptr<Ui::RpWidget> _emptyRtmp = { nullptr };
 	ChooseJoinAsProcess _joinAsProcess;
 	std::optional<QRect> _lastSmallGeometry;
 	std::optional<QRect> _lastLargeGeometry;
@@ -247,9 +285,12 @@ private:
 	Fn<void()> _callShareLinkCallback;
 
 	const std::unique_ptr<Toasts> _toasts;
-	base::weak_ptr<Ui::Toast::Instance> _lastToast;
 
 	std::unique_ptr<MicLevelTester> _micLevelTester;
+
+	style::complex_color _controlsBackgroundColor;
+	base::Timer _hideControlsTimer;
+	rpl::lifetime _hideControlsTimerLifetime;
 
 	rpl::lifetime _peerLifetime;
 

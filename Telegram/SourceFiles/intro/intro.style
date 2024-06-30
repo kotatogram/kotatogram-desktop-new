@@ -37,8 +37,6 @@ introCoverTitle: FlatLabel(defaultFlatLabel) {
 	align: align(center);
 	style: TextStyle(defaultTextStyle) {
 		font: font(22px semibold);
-		linkFont: font(22px semibold);
-		linkFontOver: font(22px semibold underline);
 	}
 }
 introCoverTitleTop: 136px;
@@ -47,8 +45,6 @@ introCoverDescription: FlatLabel(defaultFlatLabel) {
 	align: align(center);
 	style: TextStyle(defaultTextStyle) {
 		font: font(15px);
-		linkFont: font(15px);
-		linkFontOver: font(15px underline);
 		lineHeight: 24px;
 	}
 }
@@ -57,8 +53,6 @@ introTitle: FlatLabel(defaultFlatLabel) {
 	textFg: introTitleFg;
 	style: TextStyle(defaultTextStyle) {
 		font: font(17px semibold);
-		linkFont: font(17px semibold);
-		linkFontOver: font(17px semibold underline);
 	}
 }
 introTitleTop: 1px;
@@ -88,10 +82,17 @@ introCoverDuration: 200;
 
 introNextButton: RoundButton(defaultActiveButton) {
 	width: 300px;
-	height: 56px;
-
-	textTop: 17px;
-	font: font(17px semibold);
+	height: 42px;
+	radius: 6px;
+	textTop: 11px;
+	font: font(boxFontSize semibold);
+}
+introFragmentIcon: icon{{ "fragment", activeButtonFg }};
+introFragmentIconOver: icon{{ "fragment", activeButtonFgOver }};
+introFragmentButton: RoundButton(introNextButton) {
+	icon: introFragmentIcon;
+	iconOver: introFragmentIconOver;
+	iconPosition: point(-10px, 9px);
 }
 
 introStepFieldTop: 96px;
@@ -118,6 +119,12 @@ introPassword: introCountry;
 introPasswordTop: 74px;
 introPasswordHintTop: 151px;
 
+introCodeDigitFont: font(20px);
+introCodeDigitHeight: 50px;
+introCodeDigitBorderWidth: 4px;
+introCodeDigitSkip: 10px;
+introCodeDigitAnimatioDuration: 120;
+
 introPasswordHint: FlatLabel(introDescription) {
 	textFg: windowFg;
 }
@@ -141,11 +148,8 @@ introTermsBottom: 20px;
 introCountryIcon: icon {{ "intro_country_dropdown", menuIconFg }};
 introCountryIconPosition: point(8px, 37px);
 
-introSelectDelta: 30px;
-
 introErrorTop: 235px;
 introErrorBelowLinkTop: 220px;
-introErrorDuration: 200;
 
 introError: FlatLabel(introDescription) {
 }
@@ -180,8 +184,6 @@ introQrTitle: FlatLabel(defaultFlatLabel) {
 	minWidth: introQrTitleWidth;
 	style: TextStyle(defaultTextStyle) {
 		font: font(20px semibold);
-		linkFont: font(20px semibold);
-		linkFontOver: font(20px semibold underline);
 	}
 }
 introQrErrorTop: 336px;

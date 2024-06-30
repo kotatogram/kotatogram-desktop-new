@@ -10,7 +10,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "countries/countries_instance.h"
 
-#include <QRegularExpression>
 #include <QtCore/QLocale>
 #include <locale>
 #include <sstream>
@@ -79,28 +78,25 @@ QString FormatProgressText(qint64 ready, qint64 total) {
 		total);
 }
 
-QString FormatDateTime(
-		QDateTime date,
-		QString dateFormat,
-		QString timeFormat) {
+QString FormatDateTime(QDateTime date) {
 	const auto now = QDateTime::currentDateTime();
 	if (date.date() == now.date()) {
 		return tr::lng_mediaview_today(
 			tr::now,
 			lt_time,
-			date.time().toString(timeFormat));
+			QLocale().toString(date.time(), QLocale::ShortFormat));
 	} else if (date.date().addDays(1) == now.date()) {
 		return tr::lng_mediaview_yesterday(
 			tr::now,
 			lt_time,
-			date.time().toString(timeFormat));
+			QLocale().toString(date.time(), QLocale::ShortFormat));
 	} else {
 		return tr::lng_mediaview_date_time(
 			tr::now,
 			lt_date,
-			date.date().toString(dateFormat),
+			QLocale().toString(date.date(), QLocale::ShortFormat),
 			lt_time,
-			date.time().toString(timeFormat));
+			QLocale().toString(date.time(), QLocale::ShortFormat));
 	}
 }
 
@@ -117,7 +113,18 @@ QString FormatDurationWords(qint64 duration) {
 		auto secondsCount = tr::lng_duration_minsec_seconds(tr::now, lt_count, seconds);
 		return tr::lng_duration_minutes_seconds(tr::now, lt_minutes_count, minutesCount, lt_seconds_count, secondsCount);
 	}
-	return tr::lng_duration_seconds(tr::now, lt_count, duration);
+	return tr::lng_seconds(tr::now, lt_count, duration);
+}
+
+QString FormatDurationWordsSlowmode(qint64 duration) {
+	if (duration > 59) {
+		auto minutes = (duration / 60);
+		auto minutesCount = tr::lng_duration_minsec_minutes(tr::now, lt_count, minutes);
+		auto seconds = (duration % 60);
+		auto secondsCount = tr::lng_duration_minsec_seconds(tr::now, lt_count, seconds);
+		return tr::lng_duration_minutes_seconds(tr::now, lt_minutes_count, minutesCount, lt_seconds_count, secondsCount);
+	}
+	return tr::lng_slowmode_seconds(tr::now, lt_count, duration);
 }
 
 QString FormatDurationAndSizeText(qint64 duration, qint64 size) {
@@ -381,7 +388,98 @@ QString FormatPhone(const QString &phone) {
 	if (phone.at(0) == '0') {
 		return phone;
 	}
-	return Countries::Instance().format({ .phone = phone }).formatted;
+	return Countries::Instance().format({
+		.phone = (phone.at(0) == '+') ? phone.mid(1) : phone,
+	}).formatted;
+}
+
+QString FormatTTL(float64 ttl) {
+	if (ttl < 86400) {
+		return tr::lng_hours(tr::now, lt_count, int(ttl / 3600));
+	} else if (ttl < 86400 * 7) {
+		return tr::lng_days(tr::now, lt_count, int(ttl / (86400)));
+	} else if (ttl < 86400 * 31) {
+		const auto days = int(ttl / 86400);
+		if ((int(ttl) % 7) == 0) {
+			return tr::lng_weeks(tr::now, lt_count, int(days / 7));
+		} else {
+			return tr::lng_weeks(tr::now, lt_count, int(days / 7))
+				+ ' '
+				+ tr::lng_days(tr::now, lt_count, int(days % 7));
+		}
+	} else if (ttl < (86400 * 31) * 12) {
+		return tr::lng_months(tr::now, lt_count, int(ttl / (86400 * 31)));
+	} else {
+		return tr::lng_years({}, lt_count, std::round(ttl / (86400 * 365)));
+	}
+}
+
+QString FormatTTLAfter(float64 ttl) {
+	return (ttl <= 3600 * 23)
+		? tr::lng_settings_ttl_after_hours(tr::now, lt_count, int(ttl / 3600))
+		: (ttl <= (86400) * 6)
+		? tr::lng_settings_ttl_after_days(
+			tr::now,
+			lt_count,
+			int(ttl / (86400)))
+		: (ttl <= (86400 * 7) * 3)
+		? tr::lng_settings_ttl_after_weeks(
+			tr::now,
+			lt_count,
+			int(ttl / (86400 * 7)))
+		: (ttl <= (86400 * 31) * 11)
+		? tr::lng_settings_ttl_after_months(
+			tr::now,
+			lt_count,
+			int(ttl / (86400 * 31)))
+		: tr::lng_settings_ttl_after_years(
+			tr::now,
+			lt_count,
+			std::round(ttl / (86400 * 365)));
+}
+
+QString FormatTTLTiny(float64 ttl) {
+	return (ttl <= 3600 * 9)
+		? tr::lng_hours_tiny(tr::now, lt_count, int(ttl / 3600))
+		: (ttl <= (86400) * 6)
+		? tr::lng_days_tiny(tr::now, lt_count, int(ttl / (86400)))
+		: (ttl <= (86400 * 7) * 3)
+		? tr::lng_weeks_tiny(tr::now, lt_count, int(ttl / (86400 * 7)))
+		: (ttl <= (86400 * 31) * 11)
+		? tr::lng_months_tiny({}, lt_count, int(ttl / (86400 * 31)))
+		: (ttl <= 86400 * 366)
+		? tr::lng_years_tiny({}, lt_count, std::round(ttl / (86400 * 365)))
+		: QString();
+}
+
+QString FormatMuteFor(float64 sec) {
+	return (sec <= 60)
+		? tr::lng_seconds(tr::now, lt_count, sec)
+		: (sec <= 60 * 59)
+		? tr::lng_minutes(tr::now, lt_count, int(sec / 60))
+		: FormatTTL(sec);
+}
+
+QString FormatMuteForTiny(float64 sec) {
+	return (sec <= 60)
+		? QString()
+		: (sec <= 60 * 59)
+		? tr::lng_minutes_tiny(tr::now, lt_count, std::round(sec / 60))
+		: (sec <= 3600 * 23)
+		? tr::lng_hours_tiny(tr::now, lt_count, std::round(sec / 3600))
+		: (sec <= 86400 * 6)
+		? tr::lng_days_tiny(tr::now, lt_count, std::round(sec / 86400))
+		: (sec <= (86400 * 7) * 3)
+		? tr::lng_weeks_tiny(tr::now, lt_count, std::round(sec / (86400 * 7)))
+		: (sec <= (86400 * 31) * 11)
+		? tr::lng_months_tiny({}, lt_count, std::round(sec / (86400 * 31)))
+		: (sec <= 86400 * 366)
+		? tr::lng_years_tiny({}, lt_count, std::round(sec / (86400 * 365)))
+		: QString();
+}
+
+QString FormatResetCloudPasswordIn(float64 sec) {
+	return (sec >= 3600) ? FormatTTL(sec) : FormatDurationText(sec);
 }
 
 } // namespace Ui

@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/rp_widget.h"
 #include "ui/abstract_button.h"
+#include "ui/cached_round_corners.h"
 #include "ui/widgets/tooltip.h"
 #include "ui/effects/animations.h"
 #include "ui/effects/panel_animation.h"
@@ -75,7 +76,6 @@ public:
 
 	void setResultSelectedCallback(Fn<void(ResultSelected)> callback);
 	void setSendMenuType(Fn<SendMenu::Type()> &&callback);
-	void setCurrentDialogsEntryState(Dialogs::EntryState state);
 
 	[[nodiscard]] rpl::producer<bool> requesting() const {
 		return _requesting.events();
@@ -86,7 +86,7 @@ protected:
 
 private:
 	void moveByBottom();
-	void paintContent(Painter &p);
+	void paintContent(QPainter &p);
 
 	style::margins innerPadding() const;
 
@@ -128,7 +128,6 @@ private:
 
 	int _contentMaxHeight = 0;
 	int _contentHeight = 0;
-	bool _horizontal = false;
 
 	int _width = 0;
 	int _height = 0;
@@ -144,6 +143,7 @@ private:
 
 	object_ptr<Ui::ScrollArea> _scroll;
 	QPointer<Inner> _inner;
+	Ui::CornersPixmaps _innerRounding;
 
 	std::map<QString, std::unique_ptr<CacheEntry>> _inlineCache;
 	base::Timer _inlineRequestTimer;

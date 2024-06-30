@@ -34,7 +34,7 @@ namespace Export {
 namespace View {
 namespace {
 
-constexpr auto kMegabyte = 1024 * 1024;
+constexpr auto kMegabyte = int64(1024) * 1024;
 
 [[nodiscard]] PeerId ReadPeerId(
 		not_null<Main::Session*> session,
@@ -75,13 +75,16 @@ void ChooseFormatBox(
 	box->setTitle(tr::lng_export_option_choose_format());
 	addFormatOption(tr::lng_export_option_html(tr::now), Format::Html);
 	addFormatOption(tr::lng_export_option_json(tr::now), Format::Json);
-	box->addButton(tr::lng_settings_save(), [=] { done(group->value()); });
+	addFormatOption(
+		tr::lng_export_option_html_and_json(tr::now),
+		Format::HtmlAndJson);
+	box->addButton(tr::lng_settings_save(), [=] { done(group->current()); });
 	box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 }
 
 } // namespace
 
-int SizeLimitByIndex(int index) {
+int64 SizeLimitByIndex(int index) {
 	Expects(index >= 0 && index < kSizeValueCount);
 
 	index += 1;
@@ -98,8 +101,10 @@ int SizeLimitByIndex(int index) {
 			return 300 + (index - 60) * 20;
 		} else if (index <= 80) {
 			return 500 + (index - 70) * 50;
-		} else {
+		} else if (index <= 90) {
 			return 1000 + (index - 80) * 100;
+		} else {
+			return 2000 + (index - 90) * 200;
 		}
 	}();
 	return megabytes * kMegabyte;
@@ -171,6 +176,11 @@ void SettingsWidget::setupFullExportOptions(
 		tr::lng_export_option_contacts(tr::now),
 		Type::Contacts,
 		tr::lng_export_option_contacts_about(tr::now));
+	addOptionWithAbout(
+		container,
+		tr::lng_export_option_stories(tr::now),
+		Type::Stories,
+		tr::lng_export_option_stories_about(tr::now));
 	addHeader(container, tr::lng_export_header_chats(tr::now));
 	addOption(
 		container,
@@ -298,9 +308,8 @@ void SettingsWidget::addLocationLabel(
 				Ui::Text::WithEntities),
 			st::exportLocationLabel),
 		st::exportLocationPadding);
-	label->setClickHandlerFilter([=](auto&&...) {
+	label->overrideLinkClickHandler([=] {
 		chooseFolder();
-		return false;
 	});
 #endif // OS_MAC_STORE
 }
@@ -341,7 +350,11 @@ void SettingsWidget::addFormatAndLocationLabel(
 		return data.format;
 	}) | rpl::distinct_until_changed(
 	) | rpl::map([](Format format) {
-		const auto text = (format == Format::Html) ? "HTML" : "JSON";
+		const auto text = (format == Format::Html)
+			? "HTML"
+			: (format == Format::Json)
+			? "JSON"
+			: tr::lng_export_option_html_and_json(tr::now);
 		return Ui::Text::Link(text, u"internal:edit_format"_q);
 	});
 	const auto label = container->add(
@@ -355,18 +368,14 @@ void SettingsWidget::addFormatAndLocationLabel(
 				Ui::Text::WithEntities),
 			st::exportLocationLabel),
 		st::exportLocationPadding);
-	label->setClickHandlerFilter([=](
-		const ClickHandlerPtr &handler,
-		Qt::MouseButton) {
-		const auto url = handler->dragText();
-		if (url == qstr("internal:edit_export_path")) {
+	label->overrideLinkClickHandler([=](const QString &url) {
+		if (url == u"internal:edit_export_path"_q) {
 			chooseFolder();
-		} else if (url == qstr("internal:edit_format")) {
+		} else if (url == u"internal:edit_format"_q) {
 			chooseFormat();
 		} else {
 			Unexpected("Click handler URL in export limits edit.");
 		}
-		return false;
 	});
 #endif // OS_MAC_STORE
 }
@@ -381,7 +390,7 @@ void SettingsWidget::addLimitsLabel(
 			? rpl::single(langDayOfMonthFull(
 				base::unixtime::parse(from).date()))
 			: tr::lng_export_beginning()
-		) | Ui::Text::ToLink(qsl("internal:edit_from"));
+		) | Ui::Text::ToLink(u"internal:edit_from"_q);
 	}) | rpl::flatten_latest();
 
 	auto tillLink = value() | rpl::map([](const Settings &data) {
@@ -392,7 +401,7 @@ void SettingsWidget::addLimitsLabel(
 			? rpl::single(langDayOfMonthFull(
 				base::unixtime::parse(till).date()))
 			: tr::lng_export_end()
-		) | Ui::Text::ToLink(qsl("internal:edit_till"));
+		) | Ui::Text::ToLink(u"internal:edit_till"_q);
 	}) | rpl::flatten_latest();
 
 	auto datesText = tr::lng_export_limits(
@@ -411,11 +420,8 @@ void SettingsWidget::addLimitsLabel(
 			std::move(datesText),
 			st::exportLocationLabel),
 		st::exportLimitsPadding);
-	label->setClickHandlerFilter([=](
-			const ClickHandlerPtr &handler,
-			Qt::MouseButton) {
-		const auto url = handler->dragText();
-		if (url == qstr("internal:edit_from")) {
+	label->overrideLinkClickHandler([=](const QString &url) {
+		if (url == u"internal:edit_from"_q) {
 			const auto done = [=](TimeId limit) {
 				changeData([&](Settings &settings) {
 					settings.singlePeerFrom = limit;
@@ -427,7 +433,7 @@ void SettingsWidget::addLimitsLabel(
 				readData().singlePeerTill,
 				tr::lng_export_from_beginning(),
 				done);
-		} else if (url == qstr("internal:edit_till")) {
+		} else if (url == u"internal:edit_till"_q) {
 			const auto done = [=](TimeId limit) {
 				changeData([&](Settings &settings) {
 					settings.singlePeerTill = limit;
@@ -442,7 +448,6 @@ void SettingsWidget::addLimitsLabel(
 		} else {
 			Unexpected("Click handler URL in export limits edit.");
 		}
-		return false;
 	});
 }
 
@@ -693,7 +698,7 @@ void SettingsWidget::addSizeSlider(
 		kSizeValueCount,
 		SizeLimitByIndex,
 		readData().media.sizeLimit,
-		[=](int limit) {
+		[=](int64 limit) {
 			changeData([&](Settings &data) {
 				data.media.sizeLimit = limit;
 			});
@@ -704,10 +709,13 @@ void SettingsWidget::addSizeSlider(
 		st::exportFileSizeLabel);
 	value() | rpl::map([](const Settings &data) {
 		return data.media.sizeLimit;
-	}) | rpl::start_with_next([=](int sizeLimit) {
+	}) | rpl::start_with_next([=](int64 sizeLimit) {
 		const auto limit = sizeLimit / kMegabyte;
 		const auto size = QString::number(limit) + " MB";
-		const auto text = tr::lng_export_option_size_limit(tr::now, lt_size, size);
+		const auto text = tr::lng_export_option_size_limit(
+			tr::now,
+			lt_size,
+			size);
 		label->setText(text);
 	}, slider->lifetime());
 
@@ -739,6 +747,7 @@ void SettingsWidget::refreshButtons(
 			st::defaultBoxButton)
 		: nullptr;
 	if (start) {
+		start->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 		start->show();
 		_startClicks = start->clicks() | rpl::to_empty;
 
@@ -754,6 +763,7 @@ void SettingsWidget::refreshButtons(
 		container.get(),
 		tr::lng_cancel(),
 		st::defaultBoxButton);
+	cancel->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	cancel->show();
 	_cancelClicks = cancel->clicks() | rpl::to_empty;
 

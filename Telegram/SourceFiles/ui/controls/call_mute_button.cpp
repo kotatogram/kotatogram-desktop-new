@@ -1,15 +1,18 @@
-// This file is part of Desktop App Toolkit,
-// a set of libraries for developing nice desktop applications.
-//
-// For license and copyright information please follow this link:
-// https://github.com/desktop-app/legal/blob/master/LEGAL
-//
+/*
+This file is part of Telegram Desktop,
+the official desktop application for the Telegram messaging service.
+
+For license and copyright information please follow this link:
+https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+*/
 #include "ui/controls/call_mute_button.h"
 
 #include "base/flat_map.h"
 #include "ui/abstract_button.h"
+#include "ui/effects/shake_animation.h"
 #include "ui/paint/blobs.h"
 #include "ui/painter.h"
+#include "ui/power_saving.h"
 #include "ui/widgets/call_button.h"
 #include "ui/widgets/labels.h"
 #include "base/random.h"
@@ -47,7 +50,6 @@ constexpr auto kGlowAlpha = 150;
 constexpr auto kOverrideColorBgAlpha = 76;
 constexpr auto kOverrideColorRippleAlpha = 50;
 
-constexpr auto kShiftDuration = crl::time(300);
 constexpr auto kSwitchStateDuration = crl::time(120);
 constexpr auto kSwitchLabelDuration = crl::time(180);
 
@@ -249,8 +251,8 @@ void AnimatedLabel::setText(const QString &text) {
 	if (_text.toString() == text) {
 		return;
 	}
-	_previousText = _text;
-	_text.setText(_st.style, text, _options);
+	_previousText = std::move(_text);
+	_text = Ui::Text::String(_st.style, text, _options);
 
 	const auto width = std::max(
 		_st.style.font->width(_text.toString()),
@@ -516,15 +518,13 @@ CallMuteButton::CallMuteButton(
 	parent,
 	_st->active.bgSize,
 	rpl::combine(
-		rpl::single(anim::Disabled()) | rpl::then(anim::Disables()),
+		PowerSaving::OnValue(PowerSaving::kCalls),
 		std::move(hideBlobs),
 		_state.value(
 		) | rpl::map([](const CallMuteButtonState &state) {
 			return IsInactive(state.type);
 		})
-	) | rpl::map([](bool animDisabled, bool hide, bool isBadState) {
-		return isBadState || !(!animDisabled && !hide);
-	})))
+	) | rpl::map(rpl::mappers::_1 || rpl::mappers::_2 || rpl::mappers::_3)))
 , _content(base::make_unique_q<AbstractButton>(parent))
 , _colors(Colors())
 , _iconState(iconStateFrom(initial.type)) {
@@ -788,7 +788,7 @@ void CallMuteButton::init() {
 
 			const auto radialShowProgress = (radialShowFrom == radialShowTo)
 				? radialShowTo
-				: anim::interpolateF(radialShowFrom, radialShowTo, value);
+				: anim::interpolateToF(radialShowFrom, radialShowTo, value);
 			if (radialShowProgress != _radialInfo.rawShowProgress.current()) {
 				_radialInfo.rawShowProgress = radialShowProgress;
 				_blobs->setSwitchConnectingProgress(Clamp(
@@ -825,7 +825,17 @@ void CallMuteButton::init() {
 	) | rpl::start_with_next([=](QRect clip) {
 		Painter p(_content);
 
-		_icons[_iconState.index]->paint(p, _muteIconRect.x(), _muteIconRect.y());
+		const auto expand = _state.current().expandType;
+		if (expand == CallMuteButtonExpandType::Expanded) {
+			st::callMuteFromFullScreen.paintInCenter(p, _muteIconRect);
+		} else if (expand == CallMuteButtonExpandType::Normal) {
+			st::callMuteToFullScreen.paintInCenter(p, _muteIconRect);
+		} else {
+			_icons[_iconState.index]->paint(
+				p,
+				_muteIconRect.x(),
+				_muteIconRect.y());
+		}
 
 		if (_radialInfo.state.has_value() && _switchAnimation.animating()) {
 			const auto radialProgress = _radialInfo.realShowProgress;
@@ -987,29 +997,10 @@ void CallMuteButton::shake() {
 	if (_shakeAnimation.animating()) {
 		return;
 	}
-	const auto update = [=] {
-		const auto fullProgress = _shakeAnimation.value(1.) * 6;
-		const auto segment = std::clamp(int(std::floor(fullProgress)), 0, 5);
-		const auto part = fullProgress - segment;
-		const auto from = (segment == 0)
-			? 0.
-			: (segment == 1 || segment == 3 || segment == 5)
-			? 1.
-			: -1.;
-		const auto to = (segment == 0 || segment == 2 || segment == 4)
-			? 1.
-			: (segment == 1 || segment == 3)
-			? -1.
-			: 0.;
-		const auto shift = from * (1. - part) + to * part;
-		_labelShakeShift = int(base::SafeRound(shift * st::shakeShift));
+	_shakeAnimation.start(DefaultShakeCallback([=](int shift) {
+		_labelShakeShift = shift;
 		updateLabelsGeometry();
-	};
-	_shakeAnimation.start(
-		update,
-		0.,
-		1.,
-		kShiftDuration);
+	}), 0., 1., st::shakeDuration);
 }
 
 CallMuteButton::HandleMouseState CallMuteButton::HandleMouseStateFromType(

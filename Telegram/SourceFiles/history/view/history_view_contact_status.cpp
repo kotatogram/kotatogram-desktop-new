@@ -11,17 +11,26 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/labels.h"
+#include "ui/wrap/padding_wrap.h"
 #include "ui/layers/generic_box.h"
 #include "ui/toast/toast.h"
 #include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/layers/generic_box.h"
+#include "core/ui_integration.h"
+#include "data/notify/data_notify_settings.h"
 #include "data/data_peer.h"
 #include "data/data_user.h"
 #include "data/data_chat.h"
 #include "data/data_channel.h"
+#include "data/data_changes.h"
+#include "data/data_document.h"
 #include "data/data_session.h"
+#include "data/data_forum_topic.h"
+#include "data/data_peer_values.h"
+#include "data/stickers/data_custom_emoji.h"
+#include "settings/settings_premium.h"
 #include "window/window_peer_menu.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
@@ -31,13 +40,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "boxes/peers/edit_contact_box.h"
 #include "styles/style_chat.h"
+#include "styles/style_chat_helpers.h"
 #include "styles/style_layers.h"
 #include "styles/style_info.h"
+#include "styles/style_menu_icons.h"
 
 namespace HistoryView {
 namespace {
 
-bool BarCurrentlyHidden(not_null<PeerData*> peer) {
+[[nodiscard]] bool BarCurrentlyHidden(not_null<PeerData*> peer) {
 	const auto settings = peer->settings();
 	if (!settings) {
 		return false;
@@ -55,6 +66,68 @@ bool BarCurrentlyHidden(not_null<PeerData*> peer) {
 		return true;
 	}
 	return false;
+}
+
+[[nodiscard]] rpl::producer<TextWithEntities> ResolveIsCustom(
+		not_null<Data::Session*> owner,
+		DocumentId id) {
+	return owner->customEmojiManager().resolve(
+		id
+	) | rpl::map([=](not_null<DocumentData*> document) {
+		const auto sticker = document->sticker();
+		Assert(sticker != nullptr);
+
+		const auto &manager = document->owner().customEmojiManager();
+		const auto setId = manager.coloredSetId();
+		const auto text = (setId == sticker->set.id)
+			? QString()
+			: sticker->alt;
+		if (text.isEmpty()) {
+			return TextWithEntities();
+		}
+		return TextWithEntities{
+			.text = text,
+			.entities = { EntityInText(
+				EntityType::CustomEmoji,
+				0,
+				text.size(),
+				Data::SerializeCustomEmojiId(document)) },
+		};
+	});
+}
+
+[[nodiscard]] rpl::producer<TextWithEntities> PeerCustomStatus(
+		not_null<PeerData*> peer) {
+	if (peer->isChat()) {
+		return rpl::single(TextWithEntities());
+	}
+	const auto owner = &peer->owner();
+	return peer->session().changes().peerFlagsValue(
+		peer,
+		Data::PeerUpdate::Flag::EmojiStatus
+	) | rpl::map([=] {
+		const auto id = peer->emojiStatusId();
+		return id
+			? ResolveIsCustom(owner, id)
+			: rpl::single(TextWithEntities());
+	}) | rpl::flatten_latest() | rpl::distinct_until_changed();
+}
+
+[[nodiscard]] object_ptr<Ui::AbstractButton> MakeIconButton(
+		QWidget *parent,
+		const style::icon &icon) {
+	auto result = object_ptr<Ui::RippleButton>(
+		parent,
+		st::historyContactStatusButton.ripple);
+	const auto raw = result.data();
+	raw->paintRequest(
+	) | rpl::start_with_next([=, &icon] {
+		auto p = QPainter(raw);
+		p.fillRect(raw->rect(), st::historyContactStatusButton.bgColor);
+		raw->paintRipple(p, 0, 0);
+		icon.paintInCenter(p, raw->rect());
+	}, raw->lifetime());
+	return result;
 }
 
 } // namespace
@@ -77,7 +150,10 @@ class ContactStatus::Bar final : public Ui::RpWidget {
 public:
 	Bar(QWidget *parent, const QString &name);
 
-	void showState(State state);
+	void showState(
+		State state,
+		TextWithEntities status,
+		Fn<std::any(Fn<void()> customEmojiRepaint)> context);
 
 	[[nodiscard]] rpl::producer<> unarchiveClicks() const;
 	[[nodiscard]] rpl::producer<> addClicks() const;
@@ -86,19 +162,29 @@ public:
 	[[nodiscard]] rpl::producer<> reportClicks() const;
 	[[nodiscard]] rpl::producer<> closeClicks() const;
 	[[nodiscard]] rpl::producer<> requestInfoClicks() const;
+	[[nodiscard]] rpl::producer<> emojiStatusClicks() const;
 
 private:
 	int resizeGetHeight(int newWidth) override;
 
+	void emojiStatusRepaint();
+
 	QString _name;
 	object_ptr<Ui::FlatButton> _add;
 	object_ptr<Ui::FlatButton> _unarchive;
+	object_ptr<Ui::AbstractButton> _unarchiveIcon;
 	object_ptr<Ui::FlatButton> _block;
 	object_ptr<Ui::FlatButton> _share;
 	object_ptr<Ui::FlatButton> _report;
+	object_ptr<Ui::AbstractButton> _reportIcon;
 	object_ptr<Ui::IconButton> _close;
 	object_ptr<BgButton> _requestChatBg;
 	object_ptr<Ui::FlatLabel> _requestChatInfo;
+	object_ptr<Ui::PaddingWrap<Ui::FlatLabel>> _emojiStatusInfo;
+	object_ptr<Ui::PlainShadow> _emojiStatusShadow;
+	bool _emojiStatusRepaintScheduled = false;
+	bool _narrow = false;
+	rpl::event_stream<> _emojiStatusClicks;
 
 };
 
@@ -136,6 +222,7 @@ ContactStatus::Bar::Bar(
 	this,
 	tr::lng_new_contact_unarchive(tr::now).toUpper(),
 	st::historyContactStatusButton)
+, _unarchiveIcon(MakeIconButton(this, st::menuIconUnarchive))
 , _block(
 	this,
 	tr::lng_new_contact_block(tr::now).toUpper(),
@@ -148,29 +235,70 @@ ContactStatus::Bar::Bar(
 	this,
 	QString(),
 	st::historyContactStatusBlock)
+, _reportIcon(MakeIconButton(this, st::menuIconReportAttention))
 , _close(this, st::historyReplyCancel)
 , _requestChatBg(this, st::historyContactStatusButton)
 , _requestChatInfo(
-		this,
-		QString(),
-		st::historyContactStatusLabel) {
+	this,
+	QString(),
+	st::historyContactStatusLabel)
+, _emojiStatusInfo(
+	this,
+	object_ptr<Ui::FlatLabel>(this, u""_q, st::historyEmojiStatusInfoLabel),
+	QMargins(
+		st::historyContactStatusMinSkip,
+		st::topBarArrowPadding.top(),
+		st::historyContactStatusMinSkip,
+		st::topBarArrowPadding.top()))
+, _emojiStatusShadow(this) {
 	_requestChatInfo->setAttribute(Qt::WA_TransparentForMouseEvents);
+	_emojiStatusInfo->paintRequest(
+	) | rpl::start_with_next([=, raw = _emojiStatusInfo.data()](QRect clip) {
+		_emojiStatusRepaintScheduled = false;
+		QPainter(raw).fillRect(clip, st::historyComposeButtonBg);
+	}, lifetime());
 }
 
-void ContactStatus::Bar::showState(State state) {
+void ContactStatus::Bar::showState(
+		State state,
+		TextWithEntities status,
+		Fn<std::any(Fn<void()> customEmojiRepaint)> context) {
 	using Type = State::Type;
 	const auto type = state.type;
 	_add->setVisible(type == Type::AddOrBlock || type == Type::Add);
-	_unarchive->setVisible(type == Type::UnarchiveOrBlock
-		|| type == Type::UnarchiveOrReport);
+	const auto unarchive = (type == Type::UnarchiveOrBlock)
+		|| (type == Type::UnarchiveOrReport);
+	_unarchive->setVisible(!_narrow && unarchive);
+	_unarchiveIcon->setVisible(_narrow && unarchive);
 	_block->setVisible(type == Type::AddOrBlock
 		|| type == Type::UnarchiveOrBlock);
 	_share->setVisible(type == Type::SharePhoneNumber);
-	_close->setVisible(type != Type::RequestChatInfo);
-	_report->setVisible(type == Type::ReportSpam
-		|| type == Type::UnarchiveOrReport);
+	_close->setVisible(!_narrow && type != Type::RequestChatInfo);
+	const auto report = (type == Type::ReportSpam)
+		|| (type == Type::UnarchiveOrReport);
+	_report->setVisible(!_narrow && report);
+	_reportIcon->setVisible(_narrow && report);
 	_requestChatInfo->setVisible(type == Type::RequestChatInfo);
 	_requestChatBg->setVisible(type == Type::RequestChatInfo);
+	const auto has = !status.empty();
+	_emojiStatusShadow->setVisible(
+		has && (type == Type::AddOrBlock || type == Type::UnarchiveOrBlock));
+	if (has) {
+		_emojiStatusInfo->entity()->setMarkedText(
+			tr::lng_new_contact_about_status(
+				tr::now,
+				lt_emoji,
+				status,
+				lt_link,
+				Ui::Text::Link(
+					tr::lng_new_contact_about_status_link(tr::now)),
+				Ui::Text::WithEntities),
+			context([=] { emojiStatusRepaint(); }));
+		_emojiStatusInfo->entity()->overrideLinkClickHandler([=] {
+			_emojiStatusClicks.fire({});
+		});
+	}
+	_emojiStatusInfo->setVisible(has);
 	_add->setText((type == Type::Add)
 		? tr::lng_new_contact_add_name(tr::now, lt_user, _name).toUpper()
 		: tr::lng_new_contact_add(tr::now).toUpper());
@@ -191,7 +319,10 @@ void ContactStatus::Bar::showState(State state) {
 }
 
 rpl::producer<> ContactStatus::Bar::unarchiveClicks() const {
-	return _unarchive->clicks() | rpl::to_empty;
+	return rpl::merge(
+		_unarchive->clicks(),
+		_unarchiveIcon->clicks()
+	) | rpl::to_empty;
 }
 
 rpl::producer<> ContactStatus::Bar::addClicks() const {
@@ -207,7 +338,10 @@ rpl::producer<> ContactStatus::Bar::shareClicks() const {
 }
 
 rpl::producer<> ContactStatus::Bar::reportClicks() const {
-	return _report->clicks() | rpl::to_empty;
+	return rpl::merge(
+		_report->clicks(),
+		_reportIcon->clicks()
+	) | rpl::to_empty;
 }
 
 rpl::producer<> ContactStatus::Bar::closeClicks() const {
@@ -218,14 +352,39 @@ rpl::producer<> ContactStatus::Bar::requestInfoClicks() const {
 	return _requestChatBg->clicks() | rpl::to_empty;
 }
 
+rpl::producer<> ContactStatus::Bar::emojiStatusClicks() const {
+	return _emojiStatusClicks.events();
+}
+
 int ContactStatus::Bar::resizeGetHeight(int newWidth) {
-	_close->moveToRight(0, 0);
+	_close->moveToRight(0, 0, newWidth);
+	const auto narrow = (newWidth < _close->width() * 2);
+	if (_narrow != narrow) {
+		_narrow = narrow;
+		_close->setVisible(_requestChatInfo->isHidden() && !_narrow);
+		const auto report = !_report->isHidden() || !_reportIcon->isHidden();
+		_report->setVisible(!_narrow && report);
+		_reportIcon->setVisible(_narrow && report);
+		const auto unarchive = !_unarchive->isHidden()
+			|| !_unarchiveIcon->isHidden();
+		_unarchive->setVisible(!_narrow && unarchive);
+		_unarchiveIcon->setVisible(_narrow && unarchive);
+	}
+
+	if (!_unarchiveIcon->isHidden()) {
+		const auto half = newWidth / 2;
+		_unarchiveIcon->setGeometry(0, 0, half, _close->height());
+		_reportIcon->setGeometry(half, 0, newWidth - half, _close->height());
+	} else if (!_reportIcon->isHidden()) {
+		_reportIcon->setGeometry(0, 0, newWidth, _close->height());
+	}
 
 	const auto closeWidth = _close->width();
+	const auto closeHeight = _close->height();
 	const auto available = newWidth - closeWidth;
 	const auto skip = st::historyContactStatusMinSkip;
 	if (available <= 2 * skip) {
-		return _close->height();
+		return closeHeight;
 	}
 	const auto buttonWidth = [&](const object_ptr<Ui::FlatButton> &button) {
 		return button->textWidth() + 2 * skip;
@@ -236,7 +395,7 @@ int ContactStatus::Bar::resizeGetHeight(int newWidth) {
 			const object_ptr<Ui::FlatButton> &button,
 			int buttonWidth,
 			int rightTextMargin = 0) {
-		button->setGeometry(accumulatedLeft, 0, buttonWidth, height());
+		button->setGeometry(accumulatedLeft, 0, buttonWidth, closeHeight);
 		button->setTextMargins({ 0, 0, rightTextMargin, 0 });
 		accumulatedLeft += buttonWidth;
 	};
@@ -286,7 +445,17 @@ int ContactStatus::Bar::resizeGetHeight(int newWidth) {
 		placeOne(_report);
 	}
 	if (_requestChatInfo->isHidden()) {
-		return _close->height();
+		_emojiStatusInfo->resizeToWidth(newWidth);
+		_emojiStatusInfo->move(0, _close->height());
+		_emojiStatusShadow->setGeometry(
+			0,
+			closeHeight,
+			newWidth,
+			st::lineWidth);
+		_emojiStatusShadow->move(0, _close->height());
+		return closeHeight + (_emojiStatusInfo->isHidden()
+			? 0
+			: _emojiStatusInfo->height());
 	}
 	const auto vskip = st::topBarArrowPadding.top();
 	_requestChatInfo->resizeToWidth(available - 2 * skip);
@@ -296,25 +465,31 @@ int ContactStatus::Bar::resizeGetHeight(int newWidth) {
 	return newHeight;
 }
 
-ContactStatus::ContactStatus(
-	not_null<Window::SessionController*> window,
-	not_null<Ui::RpWidget*> parent,
-	not_null<PeerData*> peer)
-: _controller(window)
-, _bar(parent, object_ptr<Bar>(parent, peer->shortName()))
-, _shadow(parent) {
-	setupWidgets(parent);
-	setupState(peer);
-	setupHandlers(peer);
+void ContactStatus::Bar::emojiStatusRepaint() {
+	if (_emojiStatusRepaintScheduled) {
+		return;
+	}
+	_emojiStatusRepaintScheduled = true;
+	_emojiStatusInfo->entity()->update();
 }
 
-void ContactStatus::setupWidgets(not_null<Ui::RpWidget*> parent) {
+SlidingBar::SlidingBar(
+	not_null<Ui::RpWidget*> parent,
+	object_ptr<Ui::RpWidget> wrapped)
+: _wrapped(parent, std::move(wrapped))
+, _shadow(parent) {
+	setup(parent);
+	_wrapped.hide(anim::type::instant);
+	_shadow.hide();
+}
+
+void SlidingBar::setup(not_null<Ui::RpWidget*> parent) {
 	parent->widthValue(
 	) | rpl::start_with_next([=](int width) {
-		_bar.resizeToWidth(width);
-	}, _bar.lifetime());
+		_wrapped.resizeToWidth(width);
+	}, _wrapped.lifetime());
 
-	_bar.geometryValue(
+	_wrapped.geometryValue(
 	) | rpl::start_with_next([=](QRect geometry) {
 		_shadow.setGeometry(
 			geometry.x(),
@@ -323,10 +498,61 @@ void ContactStatus::setupWidgets(not_null<Ui::RpWidget*> parent) {
 			st::lineWidth);
 	}, _shadow.lifetime());
 
-	_bar.shownValue(
-	) | rpl::start_with_next([=](bool shown) {
-		_shadow.setVisible(shown);
-	}, _shadow.lifetime());
+	_shadow.showOn(rpl::combine(
+		_wrapped.shownValue(),
+		_wrapped.heightValue(),
+		rpl::mappers::_1 && rpl::mappers::_2 > 0
+	) | rpl::filter([=](bool shown) {
+		return (shown == _shadow.isHidden());
+	}));
+}
+
+void SlidingBar::toggleContent(bool visible) {
+	_contentShown = visible;
+	if (_shown) {
+		_wrapped.toggle(visible, anim::type::normal);
+	}
+}
+
+void SlidingBar::raise() {
+	_wrapped.raise();
+	_shadow.raise();
+}
+
+void SlidingBar::setVisible(bool visible) {
+	_shown = visible;
+	if (!_shown) {
+		_wrapped.hide(anim::type::instant);
+	} else if (_contentShown) {
+		_wrapped.show(anim::type::instant);
+	} else if (!_wrapped.isHidden() && !_wrapped.animating()) {
+		_wrapped.hide(anim::type::instant);
+	}
+}
+
+void SlidingBar::move(int x, int y) {
+	_wrapped.move(x, y);
+	_shadow.move(x, y + _wrapped.height());
+}
+
+int SlidingBar::height() const {
+	return _wrapped.height();
+}
+
+rpl::producer<int> SlidingBar::heightValue() const {
+	return _wrapped.heightValue();
+}
+
+ContactStatus::ContactStatus(
+	not_null<Window::SessionController*> window,
+	not_null<Ui::RpWidget*> parent,
+	not_null<PeerData*> peer,
+	bool showInForum)
+: _controller(window)
+, _inner(Ui::CreateChild<Bar>(parent.get(), peer->shortName()))
+, _bar(parent, object_ptr<Bar>::fromRaw(_inner)) {
+	setupState(peer, showInForum);
+	setupHandlers(peer);
 }
 
 auto ContactStatus::PeerState(not_null<PeerData*> peer)
@@ -387,21 +613,37 @@ auto ContactStatus::PeerState(not_null<PeerData*> peer)
 	});
 }
 
-void ContactStatus::setupState(not_null<PeerData*> peer) {
+void ContactStatus::setupState(not_null<PeerData*> peer, bool showInForum) {
 	if (!BarCurrentlyHidden(peer)) {
 		peer->session().api().requestPeerSettings(peer);
 	}
 
-	_bar.entity()->showState(State());
-	PeerState(
-		peer
-	) | rpl::start_with_next([=](State state) {
+	_context = [=](Fn<void()> customEmojiRepaint) {
+		return Core::MarkedTextContext{
+			.session = &peer->session(),
+			.customEmojiRepaint = customEmojiRepaint,
+		};
+	};
+	_inner->showState({}, {}, _context);
+	const auto channel = peer->asChannel();
+	rpl::combine(
+		PeerState(peer),
+		PeerCustomStatus(peer),
+		((channel && !showInForum)
+			? Data::PeerFlagValue(channel, ChannelData::Flag::Forum)
+			: (rpl::single(false) | rpl::type_erased()))
+	) | rpl::start_with_next([=](
+			State state,
+			TextWithEntities status,
+			bool hiddenByForum) {
 		_state = state;
-		if (state.type == State::Type::None) {
-			_bar.hide(anim::type::normal);
+		_status = status;
+		_hiddenByForum = hiddenByForum;
+		if (state.type == State::Type::None || hiddenByForum) {
+			_bar.toggleContent(false);
 		} else {
-			_bar.entity()->showState(state);
-			_bar.show(anim::type::normal);
+			_inner->showState(state, std::move(status), _context);
+			_bar.toggleContent(true);
 		}
 	}, _bar.lifetime());
 }
@@ -416,17 +658,18 @@ void ContactStatus::setupHandlers(not_null<PeerData*> peer) {
 	setupReportHandler(peer);
 	setupCloseHandler(peer);
 	setupRequestInfoHandler(peer);
+	setupEmojiStatusHandler(peer);
 }
 
 void ContactStatus::setupAddHandler(not_null<UserData*> user) {
-	_bar.entity()->addClicks(
+	_inner->addClicks(
 	) | rpl::start_with_next([=] {
 		_controller->window().show(Box(EditContactBox, _controller, user));
 	}, _bar.lifetime());
 }
 
 void ContactStatus::setupBlockHandler(not_null<UserData*> user) {
-	_bar.entity()->blockClicks(
+	_inner->blockClicks(
 	) | rpl::start_with_next([=] {
 		_controller->window().show(Box(
 			Window::PeerMenuBlockUserBox,
@@ -438,41 +681,43 @@ void ContactStatus::setupBlockHandler(not_null<UserData*> user) {
 }
 
 void ContactStatus::setupShareHandler(not_null<UserData*> user) {
-	_bar.entity()->shareClicks(
+	_inner->shareClicks(
 	) | rpl::start_with_next([=] {
+		const auto show = _controller->uiShow();
 		const auto share = [=](Fn<void()> &&close) {
 			user->setSettings(0);
 			user->session().api().request(MTPcontacts_AcceptContact(
 				user->inputUser
 			)).done([=](const MTPUpdates &result) {
 				user->session().api().applyUpdates(result);
-
-				Ui::Toast::Show(tr::lng_new_contact_share_done(
+				show->showToast(tr::lng_new_contact_share_done(
 					tr::now,
 					lt_user,
 					user->shortName()));
 			}).send();
 			close();
 		};
-		_controller->window().show(Box<Ui::ConfirmBox>(
-			tr::lng_new_contact_share_sure(
+		show->showBox(Ui::MakeConfirmBox({
+			.text = tr::lng_new_contact_share_sure(
 				tr::now,
 				lt_phone,
 				Ui::Text::WithEntities(
 					Ui::FormatPhone(user->session().user()->phone())),
 				lt_user,
-				Ui::Text::Bold(user->name),
+				Ui::Text::Bold(user->name()),
 				Ui::Text::WithEntities),
-			tr::lng_box_ok(tr::now),
-			share));
+			.confirmed = share,
+			.confirmText = tr::lng_box_ok(),
+		}));
 	}, _bar.lifetime());
 }
 
 void ContactStatus::setupUnarchiveHandler(not_null<PeerData*> peer) {
-	_bar.entity()->unarchiveClicks(
-	) | rpl::start_with_next([=] {
-		Window::ToggleHistoryArchived(peer->owner().history(peer), false);
-		peer->owner().resetNotifySettingsToDefault(peer);
+	_inner->unarchiveClicks(
+	) | rpl::start_with_next([=, show = _controller->uiShow()] {
+		using namespace Window;
+		ToggleHistoryArchived(show, peer->owner().history(peer), false);
+		peer->owner().notifySettings().resetToDefault(peer);
 		if (const auto settings = peer->settings()) {
 			const auto flags = PeerSetting::AutoArchived
 				| PeerSetting::BlockContact
@@ -483,11 +728,12 @@ void ContactStatus::setupUnarchiveHandler(not_null<PeerData*> peer) {
 }
 
 void ContactStatus::setupReportHandler(not_null<PeerData*> peer) {
-	_bar.entity()->reportClicks(
+	_inner->reportClicks(
 	) | rpl::start_with_next([=] {
 		Expects(!peer->isUser());
 
-		const auto callback = crl::guard(&_bar, [=](Fn<void()> &&close) {
+		const auto show = _controller->uiShow();
+		const auto callback = crl::guard(_inner, [=](Fn<void()> &&close) {
 			close();
 
 			peer->session().api().request(MTPmessages_ReportSpam(
@@ -501,7 +747,7 @@ void ContactStatus::setupReportHandler(not_null<PeerData*> peer) {
 				peer->session().api().deleteConversation(peer, false);
 			});
 
-			Ui::Toast::Show(tr::lng_report_spam_done(tr::now));
+			show->showToast(tr::lng_report_spam_done(tr::now));
 
 			// Destroys _bar.
 			_controller->showBackFromStack();
@@ -509,20 +755,21 @@ void ContactStatus::setupReportHandler(not_null<PeerData*> peer) {
 		if (const auto user = peer->asUser()) {
 			peer->session().api().blockedPeers().block(user);
 		}
-		const auto text = ((peer->isChat() || peer->isMegagroup())
+		auto text = ((peer->isChat() || peer->isMegagroup())
 			? tr::lng_report_spam_sure_group
-			: tr::lng_report_spam_sure_channel)(tr::now);
-		_controller->window().show(Box<Ui::ConfirmBox>(
-			text,
-			tr::lng_report_spam_ok(tr::now),
-			st::attentionBoxButton,
-			callback));
+			: tr::lng_report_spam_sure_channel)();
+		show->showBox(Ui::MakeConfirmBox({
+			.text= std::move(text),
+			.confirmed = callback,
+			.confirmText = tr::lng_report_spam_ok(),
+			.confirmStyle = &st::attentionBoxButton,
+		}));
 	}, _bar.lifetime());
 }
 
 void ContactStatus::setupCloseHandler(not_null<PeerData*> peer) {
 	const auto request = _bar.lifetime().make_state<mtpRequestId>(0);
-	_bar.entity()->closeClicks(
+	_inner->closeClicks(
 	) | rpl::filter([=] {
 		return !(*request);
 	}) | rpl::start_with_next([=] {
@@ -535,7 +782,7 @@ void ContactStatus::setupCloseHandler(not_null<PeerData*> peer) {
 
 void ContactStatus::setupRequestInfoHandler(not_null<PeerData*> peer) {
 	const auto request = _bar.lifetime().make_state<mtpRequestId>(0);
-	_bar.entity()->requestInfoClicks(
+	_inner->requestInfoClicks(
 	) | rpl::filter([=] {
 		return !(*request);
 	}) | rpl::start_with_next([=] {
@@ -570,33 +817,62 @@ void ContactStatus::setupRequestInfoHandler(not_null<PeerData*> peer) {
 	}, _bar.lifetime());
 }
 
+void ContactStatus::setupEmojiStatusHandler(not_null<PeerData*> peer) {
+	_inner->emojiStatusClicks(
+	) | rpl::start_with_next([=] {
+		Settings::ShowEmojiStatusPremium(_controller, peer);
+	}, _bar.lifetime());
+}
+
 void ContactStatus::show() {
-	const auto visible = (_state.type != State::Type::None);
 	if (!_shown) {
 		_shown = true;
-		if (visible) {
-			_bar.entity()->showState(_state);
+		if (_state.type != State::Type::None && !_hiddenByForum) {
+			_inner->showState(_state, _status, _context);
+			_bar.toggleContent(true);
 		}
 	}
-	_bar.toggle(visible, anim::type::instant);
+	_bar.show();
 }
 
-void ContactStatus::raise() {
-	_bar.raise();
-	_shadow.raise();
+void ContactStatus::hide() {
+	_bar.hide();
 }
 
-void ContactStatus::move(int x, int y) {
-	_bar.move(x, y);
-	_shadow.move(x, y + _bar.height());
+TopicReopenBar::TopicReopenBar(
+	not_null<Ui::RpWidget*> parent,
+	not_null<Data::ForumTopic*> topic)
+: _topic(topic)
+, _reopen(Ui::CreateChild<Ui::FlatButton>(
+	parent.get(),
+	tr::lng_forum_topic_reopen(tr::now),
+	st::historyContactStatusButton))
+, _bar(parent, object_ptr<Ui::FlatButton>::fromRaw(_reopen)) {
+	setupState();
+	setupHandler();
 }
 
-int ContactStatus::height() const {
-	return _bar.height();
+void TopicReopenBar::setupState() {
+	const auto channel = _topic->channel();
+	auto canToggle = (_topic->my() || channel->amCreator())
+		? (rpl::single(true) | rpl::type_erased())
+		: channel->adminRightsValue(
+		) | rpl::map([=] { return _topic->canToggleClosed(); });
+
+	rpl::combine(
+		_topic->session().changes().topicFlagsValue(
+			_topic,
+			Data::TopicUpdate::Flag::Closed),
+		std::move(canToggle)
+	) | rpl::start_with_next([=](const auto &, bool can) {
+		_bar.toggleContent(can && _topic->closed());
+	}, _bar.lifetime());
 }
 
-rpl::producer<int> ContactStatus::heightValue() const {
-	return _bar.heightValue();
+void TopicReopenBar::setupHandler() {
+	_reopen->setClickedCallback([=] {
+		_topic->setClosedAndSave(false);
+	});
 }
 
 } // namespace HistoryView

@@ -33,7 +33,11 @@ public:
 	crl::time frameRealTime() const override;
 	crl::time framePresentationTime() const override;
 
-	bool renderFrame(QImage &to, bool &hasAlpha, const QSize &size) override;
+	bool renderFrame(
+		QImage &to,
+		bool &hasAlpha,
+		int &index,
+		const QSize &size) override;
 
 	crl::time durationMs() const override;
 
@@ -72,8 +76,8 @@ private:
 		return (_rotation == Rotation::Degrees90) || (_rotation == Rotation::Degrees270);
 	}
 
-	static int _read(void *opaque, uint8_t *buf, int buf_size);
-	static int64_t _seek(void *opaque, int64_t offset, int whence);
+	static int Read(void *opaque, uint8_t *buf, int buf_size);
+	static int64_t Seek(void *opaque, int64_t offset, int whence);
 
 	Mode _mode = Mode::Silent;
 
@@ -85,6 +89,7 @@ private:
 	AVCodecContext *_codecContext = nullptr;
 	int _streamId = 0;
 	FFmpeg::FramePointer _frame;
+	int _frameIndex = -1;
 	bool _opened = false;
 	bool _hadFrame = false;
 	bool _frameRead = false;

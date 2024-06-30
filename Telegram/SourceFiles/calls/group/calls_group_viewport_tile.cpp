@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "webrtc/webrtc_video_track.h"
 #include "lang/lang_keys.h"
 #include "ui/round_rect.h"
+#include "ui/painter.h"
 #include "ui/effects/cross_line.h"
 #include "styles/style_calls.h"
 
@@ -27,13 +28,16 @@ Viewport::VideoTile::VideoTile(
 	VideoTileTrack track,
 	rpl::producer<QSize> trackSize,
 	rpl::producer<bool> pinned,
-	Fn<void()> update)
+	Fn<void()> update,
+	bool self)
 : _endpoint(endpoint)
 , _update(std::move(update))
-, _track(track)
-, _trackSize(std::move(trackSize)) {
-	Expects(track.track != nullptr);
-	Expects(track.row != nullptr);
+, _track(std::move(track))
+, _trackSize(std::move(trackSize))
+, _rtmp(endpoint.rtmp())
+, _self(self) {
+	Expects(_track.track != nullptr);
+	Expects(_track.row != nullptr);
 
 	using namespace rpl::mappers;
 	_track.track->stateValue(
@@ -44,6 +48,10 @@ Viewport::VideoTile::VideoTile(
 	}, _lifetime);
 
 	setup(std::move(pinned));
+}
+
+bool Viewport::VideoTile::mirror() const {
+	return _self && (_endpoint.type == VideoEndpointType::Camera);
 }
 
 QRect Viewport::VideoTile::pinOuter() const {

@@ -7,11 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/launcher.h"
 
+#include "kotato/kotato_radius.h"
 #include "kotato/kotato_settings.h"
 #include "kotato/kotato_version.h"
 #include "platform/platform_launcher.h"
 #include "platform/platform_specific.h"
-#include "platform/linux/linux_desktop_environment.h"
+#include "base/options.h"
 #include "base/platform/base_platform_info.h"
 #include "base/platform/base_platform_file_utilities.h"
 #include "ui/main_queue_processor.h"
@@ -22,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/options.h"
 
 #include <QtCore/QLoggingCategory>
+#include <QtCore/QStandardPaths>
 
 namespace Core {
 namespace {
@@ -30,6 +32,14 @@ constexpr auto kApiIdVarName = "KTGDESKTOP_API_ID"_cs;
 constexpr auto kApiHashVarName = "KTGDESKTOP_API_HASH"_cs;
 
 uint64 InstallationTag = 0;
+
+base::options::toggle OptionFreeType({
+	.id = kOptionFreeType,
+	.name = "FreeType font engine",
+	.description = "Use the font engine from Linux instead of the system one.",
+	.scope = base::options::windows | base::options::macos,
+	.restartRequired = true,
+});
 
 class FilteredCommandLineArguments {
 public:
@@ -58,7 +68,7 @@ FilteredCommandLineArguments::FilteredCommandLineArguments(
 	}
 
 #if defined Q_OS_WIN || defined Q_OS_MAC
-	if (cUseFreeType()) {
+	if (OptionFreeType.value()) {
 		pushArgument("-platform");
 #ifdef Q_OS_WIN
 		pushArgument("windows:fontengine=freetype");
@@ -66,12 +76,7 @@ FilteredCommandLineArguments::FilteredCommandLineArguments(
 		pushArgument("cocoa:fontengine=freetype");
 #endif // !Q_OS_WIN
 	}
-#elif defined Q_OS_UNIX
-	if (Platform::DesktopEnvironment::IsGnome() && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
-		pushArgument("-platform");
-		pushArgument("xcb;wayland");
-	}
-#endif // Q_OS_WIN || Q_OS_MAC || Q_OS_UNIX
+#endif // Q_OS_WIN || Q_OS_MAC
 
 	pushArgument(nullptr);
 }
@@ -91,7 +96,7 @@ void FilteredCommandLineArguments::pushArgument(const char *text) {
 }
 
 QString DebugModeSettingPath() {
-	return cWorkingDir() + qsl("tdata/withdebug");
+	return cWorkingDir() + u"tdata/withdebug"_q;
 }
 
 void WriteDebugModeSetting() {
@@ -117,29 +122,33 @@ void ComputeDebugMode() {
 }
 
 void ComputeExternalUpdater() {
-	QFile file(qsl("/etc/kotatogram-desktop/externalupdater"));
-
-	if (file.exists() && file.open(QIODevice::ReadOnly)) {
-		QTextStream fileStream(&file);
-		while (!fileStream.atEnd()) {
-			const auto path = fileStream.readLine();
-
-			if (path == (cExeDir() + cExeName())) {
-				SetUpdaterDisabledAtStartup();
-				return;
+	auto locations = QStandardPaths::standardLocations(
+		QStandardPaths::AppDataLocation);
+	if (locations.isEmpty()) {
+		locations << QString();
+	}
+	locations[0] = QDir::cleanPath(cWorkingDir());
+	locations << QDir::cleanPath(cExeDir());
+	for (const auto &location : locations) {
+		const auto dir = location + u"/externalupdater.d"_q;
+		for (const auto &info : QDir(dir).entryInfoList(QDir::Files)) {
+			QFile file(info.absoluteFilePath());
+			if (file.open(QIODevice::ReadOnly)) {
+				QTextStream fileStream(&file);
+				while (!fileStream.atEnd()) {
+					const auto path = fileStream.readLine();
+					if (path == (cExeDir() + cExeName())) {
+						SetUpdaterDisabledAtStartup();
+						return;
+					}
+				}
 			}
 		}
 	}
 }
 
-void ComputeFreeType() {
-	if (QFile::exists(cWorkingDir() + qsl("tdata/withfreetype"))) {
-		cSetUseFreeType(true);
-	}
-}
-
 QString InstallBetaVersionsSettingPath() {
-	return cWorkingDir() + qsl("tdata/devversion");
+	return cWorkingDir() + u"tdata/devversion"_q;
 }
 
 void WriteInstallBetaVersionsSetting() {
@@ -165,7 +174,7 @@ void ComputeInstallBetaVersions() {
 
 void ComputeInstallationTag() {
 	InstallationTag = 0;
-	auto file = QFile(cWorkingDir() + qsl("tdata/usertag"));
+	auto file = QFile(cWorkingDir() + u"tdata/usertag"_q);
 	if (file.open(QIODevice::ReadOnly)) {
 		const auto result = file.read(
 			reinterpret_cast<char*>(&InstallationTag),
@@ -193,7 +202,7 @@ void ComputeInstallationTag() {
 
 bool MoveLegacyAlphaFolder(const QString &folder, const QString &file) {
 	const auto was = cExeDir() + folder;
-	const auto now = cExeDir() + qsl("TelegramForcePortable");
+	const auto now = cExeDir() + u"TelegramForcePortable"_q;
 	if (QDir(was).exists() && !QDir(now).exists()) {
 		const auto oldFile = was + "/tdata/" + file;
 		const auto newFile = was + "/tdata/alpha";
@@ -214,8 +223,8 @@ bool MoveLegacyAlphaFolder(const QString &folder, const QString &file) {
 }
 
 bool MoveLegacyAlphaFolder() {
-	if (!MoveLegacyAlphaFolder(qsl("TelegramAlpha_data"), qsl("alpha"))
-		|| !MoveLegacyAlphaFolder(qsl("TelegramBeta_data"), qsl("beta"))) {
+	if (!MoveLegacyAlphaFolder(u"TelegramAlpha_data"_q, u"alpha"_q)
+		|| !MoveLegacyAlphaFolder(u"TelegramBeta_data"_q, u"beta"_q)) {
 		return false;
 	}
 	return true;
@@ -226,15 +235,15 @@ bool CheckPortableVersionFolder() {
 		return false;
 	}
 
-	const auto portable = cExeDir() + qsl("TelegramForcePortable");
-	QFile key(portable + qsl("/tdata/alpha"));
+	const auto portable = cExeDir() + u"TelegramForcePortable"_q;
+	QFile key(portable + u"/tdata/alpha"_q);
 	if (cAlphaVersion()) {
 		/*
 		Assert(*AlphaPrivateKey != 0);
 		*/
 
-		cForceWorkingDir(portable + '/');
-		QDir().mkpath(cWorkingDir() + qstr("tdata"));
+		cForceWorkingDir(portable);
+		QDir().mkpath(cWorkingDir() + u"tdata"_q);
 		/*
 		cSetAlphaPrivateKey(QByteArray(AlphaPrivateKey));
 		if (!key.open(QIODevice::WriteOnly)) {
@@ -251,7 +260,7 @@ bool CheckPortableVersionFolder() {
 	if (!QDir(portable).exists()) {
 		return true;
 	}
-	cForceWorkingDir(portable + '/');
+	cForceWorkingDir(portable);
 	if (!key.exists()) {
 		return true;
 	}
@@ -280,7 +289,20 @@ bool CheckPortableVersionFolder() {
 	return true;
 }
 
+base::options::toggle OptionFractionalScalingEnabled({
+	.id = kOptionFractionalScalingEnabled,
+	.name = "Enable precise High DPI scaling",
+	.description = "Follow system interface scale settings exactly.",
+	.scope = base::options::windows | base::options::linux,
+	.restartRequired = true,
+});
+
 } // namespace
+
+const char kOptionFractionalScalingEnabled[] = "fractional-scaling-enabled";
+const char kOptionFreeType[] = "freetype";
+
+Launcher *Launcher::InstanceSetter::Instance = nullptr;
 
 std::unique_ptr<Launcher> Launcher::Create(int argc, char *argv[]) {
 	return std::make_unique<Platform::Launcher>(argc, argv);
@@ -289,22 +311,23 @@ std::unique_ptr<Launcher> Launcher::Create(int argc, char *argv[]) {
 Launcher::Launcher(int argc, char *argv[])
 : _argc(argc)
 , _argv(argv)
-, _baseIntegration(_argc, _argv) {
+, _arguments(readArguments(_argc, _argv))
+, _baseIntegration(_argc, _argv)
+, _initialWorkingDir(QDir::currentPath() + '/') {
 	crl::toggle_fp_exceptions(true);
 
 	base::Integration::Set(&_baseIntegration);
 }
 
-void Launcher::init() {
-	_arguments = readArguments(_argc, _argv);
+Launcher::~Launcher() {
+	InstanceSetter::Instance = nullptr;
+}
 
+void Launcher::init() {
 	prepareSettings();
 	initQtMessageLogging();
 
-	QApplication::setApplicationName(qsl("KotatogramDesktop"));
-	QApplication::setAttribute(Qt::AA_DisableHighDpiScaling, true);
-	QApplication::setHighDpiScaleFactorRoundingPolicy(
-		Qt::HighDpiScaleFactorRoundingPolicy::Floor);
+	QApplication::setApplicationName(u"KotatogramDesktop"_q);
 
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
 	// fallback session management is useless for tdesktop since it doesn't have
@@ -317,6 +340,24 @@ void Launcher::init() {
 #endif // Qt < 6.0.0
 
 	initHook();
+}
+
+void Launcher::initHighDpi() {
+#if QT_VERSION < QT_VERSION_CHECK(6, 2, 0)
+	qputenv("QT_DPI_ADJUSTMENT_POLICY", "AdjustDpi");
+#endif // Qt < 6.2.0
+
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+	QApplication::setAttribute(Qt::AA_EnableHighDpiScaling, true);
+#endif // Qt < 6.0.0
+
+	if (OptionFractionalScalingEnabled.value()) {
+		QApplication::setHighDpiScaleFactorRoundingPolicy(
+			Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+	} else {
+		QApplication::setHighDpiScaleFactorRoundingPolicy(
+			Qt::HighDpiScaleFactorRoundingPolicy::RoundPreferFloor);
+	}
 }
 
 int Launcher::exec() {
@@ -332,20 +373,17 @@ int Launcher::exec() {
 	}
 
 	// Must be started before Platform is started.
-	Logs::start(this);
+	Logs::start();
 	base::options::init(cWorkingDir() + "tdata/experimental_options.json");
 	Kotato::JsonSettings::Load();
+	Kotato::RefreshRadius();
 
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	if (::Kotato::JsonSettings::GetBool("qt_scale")) {
-		QApplication::setAttribute(Qt::AA_DisableHighDpiScaling, false);
-		QApplication::setAttribute(Qt::AA_EnableHighDpiScaling, true);
-	}
-#endif
+	// Must be called after options are inited.
+	initHighDpi();
 
 	if (Logs::DebugEnabled()) {
 		const auto openalLogPath = QDir::toNativeSeparators(
-			cWorkingDir() + qsl("DebugLogs/last_openal_log.txt"));
+			cWorkingDir() + u"DebugLogs/last_openal_log.txt"_q);
 
 		qputenv("ALSOFT_LOGLEVEL", "3");
 
@@ -378,7 +416,7 @@ int Launcher::exec() {
 	if (!UpdaterDisabled() && cRestartingUpdate()) {
 		DEBUG_LOG(("Sandbox Info: executing updater to install update."));
 		if (!launchUpdater(UpdaterLaunch::PerformUpdate)) {
-			base::Platform::DeleteDirectory(cWorkingDir() + qsl("tupdates/temp"));
+			base::Platform::DeleteDirectory(cWorkingDir() + u"tupdates/temp"_q);
 		}
 	} else if (cRestarting()) {
 		DEBUG_LOG(("Sandbox Info: executing Kotatogram because of restart."));
@@ -393,12 +431,23 @@ int Launcher::exec() {
 	return result;
 }
 
+bool Launcher::validateCustomWorkingDir() {
+	if (customWorkingDir()) {
+		if (_customWorkingDir == cWorkingDir()) {
+			_customWorkingDir = QString();
+			return false;
+		}
+		cForceWorkingDir(_customWorkingDir);
+		return true;
+	}
+	return false;
+}
+
 void Launcher::workingFolderReady() {
 	srand((unsigned int)time(nullptr));
 
 	ComputeDebugMode();
 	ComputeExternalUpdater();
-	ComputeFreeType();
 	ComputeInstallBetaVersions();
 	ComputeInstallationTag();
 }
@@ -430,28 +479,21 @@ QStringList Launcher::readArguments(int argc, char *argv[]) const {
 	return result;
 }
 
-QString Launcher::argumentsString() const {
-	return _arguments.join(' ');
+const QStringList &Launcher::arguments() const {
+	return _arguments;
+}
+
+QString Launcher::initialWorkingDir() const {
+	return _initialWorkingDir;
 }
 
 bool Launcher::customWorkingDir() const {
-	return _customWorkingDir;
+	return !_customWorkingDir.isEmpty();
 }
 
 void Launcher::prepareSettings() {
 	auto path = base::Platform::CurrentExecutablePath(_argc, _argv);
 	LOG(("Executable path before check: %1").arg(path));
-	if (!path.isEmpty()) {
-		auto info = QFileInfo(path);
-		if (info.isSymLink()) {
-			info = QFileInfo(info.symLinkTarget());
-		}
-		if (info.exists()) {
-			const auto dir = info.absoluteDir().absolutePath();
-			gExeDir = (dir.endsWith('/') ? dir : (dir + '/'));
-			gExeName = info.fileName();
-		}
-	}
 	if (cExeName().isEmpty()) {
 		LOG(("WARNING: Could not compute executable path, some features will be disabled."));
 	}
@@ -465,17 +507,9 @@ void Launcher::initQtMessageLogging() {
 			QtMsgType type,
 			const QMessageLogContext &context,
 			const QString &msg) {
-		const auto InvokeOriginal = [&] {
-#ifndef _DEBUG
-			if (Logs::DebugEnabled()) {
-				return;
-			}
-#endif // _DEBUG
-			if (OriginalMessageHandler) {
-				OriginalMessageHandler(type, context, msg);
-			}
-		};
-		InvokeOriginal();
+		if (OriginalMessageHandler) {
+			OriginalMessageHandler(type, context, msg);
+		}
 		if (Logs::DebugEnabled() || !Logs::started()) {
 			if (!Logs::WritingEntry()) {
 				// Sometimes Qt logs something inside our own logging.
@@ -490,14 +524,13 @@ uint64 Launcher::installationTag() const {
 }
 
 void Launcher::processArguments() {
-		enum class KeyFormat {
+	enum class KeyFormat {
 		NoValues,
 		OneValue,
 		AllLeftValues,
 	};
 	auto parseMap = std::map<QByteArray, KeyFormat> {
 		{ "-debug"          , KeyFormat::NoValues },
-		{ "-freetype"       , KeyFormat::NoValues },
 		{ "-key"            , KeyFormat::OneValue },
 		{ "-autostart"      , KeyFormat::NoValues },
 		{ "-fixprevious"    , KeyFormat::NoValues },
@@ -537,10 +570,13 @@ void Launcher::processArguments() {
 		}
 	}
 
-	gUseFreeType = parseResult.contains("-freetype");
+	static const auto RegExp = QRegularExpression("[^a-z0-9\\-_]");
 	gDebugMode = parseResult.contains("-debug");
-	gKeyFile = parseResult.value("-key", {}).join(QString()).toLower();
-	gKeyFile = gKeyFile.replace(QRegularExpression("[^a-z0-9\\-_]"), {});
+	gKeyFile = parseResult
+		.value("-key", {})
+		.join(QString())
+		.toLower()
+		.replace(RegExp, {});
 	gLaunchMode = parseResult.contains("-autostart") ? LaunchModeAutoStart
 		: parseResult.contains("-fixprevious") ? LaunchModeFixPrevious
 		: parseResult.contains("-cleanup") ? LaunchModeCleanup
@@ -550,21 +586,18 @@ void Launcher::processArguments() {
 	gStartInTray = parseResult.contains("-startintray");
 	gQuit = parseResult.contains("-quit");
 	gSendPaths = parseResult.value("-sendpath", {});
-	gWorkingDir = parseResult.value("-workdir", {}).join(QString());
-	if (!gWorkingDir.isEmpty()) {
-		if (QDir().exists(gWorkingDir)) {
-			_customWorkingDir = true;
-		} else {
-			gWorkingDir = QString();
-		}
+	_customWorkingDir = parseResult.value("-workdir", {}).join(QString());
+	if (!_customWorkingDir.isEmpty()) {
+		_customWorkingDir = QDir(_customWorkingDir).absolutePath() + '/';
 	}
 	gStartUrl = parseResult.value("--", {}).join(QString());
 
 	const auto scaleKey = parseResult.value("-scale", {});
 	if (scaleKey.size() > 0) {
+		using namespace style;
 		const auto value = scaleKey[0].toInt();
-		gConfigScale = ((value < 75) || (value > 300))
-			? style::kScaleAuto
+		gConfigScale = ((value < kScaleMin) || (value > kScaleMax))
+			? kScaleAuto
 			: value;
 	}
 
@@ -580,7 +613,7 @@ void Launcher::processArguments() {
 
 int Launcher::executeApplication() {
 	FilteredCommandLineArguments arguments(_argc, _argv);
-	Sandbox sandbox(this, arguments.count(), arguments.values());
+	Sandbox sandbox(arguments.count(), arguments.values());
 	Ui::MainQueueProcessor processor;
 	base::ConcurrentTimerEnvironment environment;
 	return sandbox.start();

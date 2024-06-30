@@ -8,15 +8,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/effects/animations.h"
-#include "styles/style_widgets.h"
+
+namespace style {
+struct RoundCheckbox;
+struct RoundImageCheckbox;
+} // namespace style
+
+class Painter;
+enum class ImageRoundRadius;
 
 namespace Ui {
+
+struct OutlineSegment;
 
 class RoundCheckbox {
 public:
 	RoundCheckbox(const style::RoundCheckbox &st, Fn<void()> updateCallback);
 
-	void paint(Painter &p, int x, int y, int outerWidth, float64 masterScale = 1.);
+	void paint(QPainter &p, int x, int y, int outerWidth, float64 masterScale = 1.) const;
 
 	void setDisplayInactive(bool displayInactive);
 	bool checked() const {
@@ -45,10 +54,19 @@ private:
 class RoundImageCheckbox {
 public:
 	using PaintRoundImage = Fn<void(Painter &p, int x, int y, int outerWidth, int size)>;
-	RoundImageCheckbox(const style::RoundImageCheckbox &st, Fn<void()> updateCallback, PaintRoundImage &&paintRoundImage);
+	RoundImageCheckbox(
+		const style::RoundImageCheckbox &st,
+		Fn<void()> updateCallback,
+		PaintRoundImage &&paintRoundImage,
+		Fn<std::optional<int>(int size)> roundingRadius = nullptr);
+	RoundImageCheckbox(RoundImageCheckbox&&);
+	~RoundImageCheckbox();
 
-	void paint(Painter &p, int x, int y, int outerWidth);
+	void paint(Painter &p, int x, int y, int outerWidth) const;
 	float64 checkedAnimationRatio() const;
+
+	void setColorOverride(std::optional<QBrush> fg);
+	void setCustomizedSegments(std::vector<OutlineSegment> segments);
 
 	bool checked() const {
 		return _check.checked();
@@ -67,11 +85,15 @@ private:
 	const style::RoundImageCheckbox &_st;
 	Fn<void()> _updateCallback;
 	PaintRoundImage _paintRoundImage;
+	Fn<std::optional<int>(int size)> _roundingRadius;
 
 	QPixmap _wideCache;
 	Ui::Animations::Simple _selection;
 
 	RoundCheckbox _check;
+
+	//std::optional<QBrush> _fgOverride;
+	std::vector<OutlineSegment> _segments;
 
 };
 

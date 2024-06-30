@@ -12,6 +12,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class AudioMsgId;
 class DocumentData;
+class History;
+
+namespace Media {
+enum class RepeatMode;
+enum class OrderMode;
+} // namespace Media
 
 namespace Media {
 namespace Audio {
@@ -42,17 +48,7 @@ class PowerSaveBlocker;
 namespace Media {
 namespace Player {
 
-enum class RepeatMode {
-	None,
-	One,
-	All,
-};
-
-enum class OrderMode {
-	Default,
-	Reverse,
-	Shuffle,
-};
+extern const char kOptionDisableAutoplayNext[];
 
 class Instance;
 struct TrackState;
@@ -66,7 +62,7 @@ void SaveLastPlaybackPosition(
 
 not_null<Instance*> instance();
 
-class Instance : private base::Subscriber {
+class Instance final {
 public:
 	enum class Seeking {
 		Start,
@@ -163,9 +159,10 @@ public:
 	[[nodiscard]] rpl::producer<Seeking> seekingChanges(
 		AudioMsgId::Type type) const;
 
-	[[nodiscard]] bool pauseGifByRoundVideo() const;
-
-	void documentLoadProgress(DocumentData *document);
+	[[nodiscard]] rpl::producer<> closePlayerRequests() const {
+		return _closePlayerRequests.events();
+	}
+	void stopAndClose();
 
 private:
 	using SharedMediaType = Storage::SharedMediaType;
@@ -193,6 +190,7 @@ private:
 		rpl::lifetime sessionLifetime;
 		rpl::event_stream<> playlistChanges;
 		History *history = nullptr;
+		MsgId topicRootId = 0;
 		History *migrated = nullptr;
 		Main::Session *session = nullptr;
 		bool isPlaying = false;
@@ -293,7 +291,10 @@ private:
 	void requestRoundVideoResize() const;
 	void requestRoundVideoRepaint() const;
 
-	void setHistory(not_null<Data*> data, History *history);
+	void setHistory(
+		not_null<Data*> data,
+		History *history,
+		Main::Session *sessionFallback = nullptr);
 	void setSession(not_null<Data*> data, Main::Session *session);
 
 	Data _songData;
@@ -307,6 +308,7 @@ private:
 	rpl::event_stream<AudioMsgId::Type> _playerStartedPlay;
 	rpl::event_stream<TrackState> _updatedNotifier;
 	rpl::event_stream<SeekingChanges> _seekingChanges;
+	rpl::event_stream<> _closePlayerRequests;
 	rpl::lifetime _lifetime;
 
 };

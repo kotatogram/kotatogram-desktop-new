@@ -119,7 +119,7 @@ void VideoBubble::applySizeConstraints(QSize min, QSize max) {
 }
 
 void VideoBubble::paint() {
-	Painter p(&_content);
+	auto p = QPainter(&_content);
 
 	prepareFrame();
 	if (!_frame.isNull()) {
@@ -127,12 +127,13 @@ void VideoBubble::paint() {
 		const auto inner = _content.rect().marginsRemoved(padding);
 		Ui::Shadow::paint(p, inner, _content.width(), st::boxRoundShadow);
 		const auto factor = cIntRetinaFactor();
+		const auto left = _mirrored
+			? (_frame.width() - (inner.width() * factor))
+			: 0;
 		p.drawImage(
 			inner,
 			_frame,
-			QRect(
-				QPoint(_frame.width() - (inner.width() * factor), 0),
-				inner.size() * factor));
+			QRect(QPoint(left, 0), inner.size() * factor));
 	}
 	_track->markFrameShown();
 }
@@ -154,27 +155,26 @@ void VideoBubble::prepareFrame() {
 	};
 	const auto frame = _track->frame(request);
 	if (_frame.width() < size.width() || _frame.height() < size.height()) {
-		_frame = QImage(
-			size * cIntRetinaFactor(),
-			QImage::Format_ARGB32_Premultiplied);
+		_frame = QImage(size, QImage::Format_ARGB32_Premultiplied);
+		_frame.fill(Qt::transparent);
 	}
 	Assert(_frame.width() >= frame.width()
 		&& _frame.height() >= frame.height());
-	const auto toPerLine = _frame.bytesPerLine();
-	const auto fromPerLine = frame.bytesPerLine();
+	const auto dstPerLine = _frame.bytesPerLine();
+	const auto srcPerLine = frame.bytesPerLine();
 	const auto lineSize = frame.width() * 4;
-	auto to = _frame.bits();
-	auto from = frame.bits();
-	const auto till = from + frame.height() * fromPerLine;
-	for (; from != till; from += fromPerLine, to += toPerLine) {
-		memcpy(to, from, lineSize);
+	auto dst = _frame.bits();
+	auto src = frame.bits();
+	const auto till = src + frame.height() * srcPerLine;
+	for (; src != till; src += srcPerLine, dst += dstPerLine) {
+		memcpy(dst, src, lineSize);
 	}
 	_frame = Images::Round(
 		std::move(_frame),
 		ImageRoundRadius::Large,
 		RectPart::AllCorners,
 		QRect(QPoint(), size)
-	).mirrored(true, false);
+	).mirrored(_mirrored, false);
 }
 
 void VideoBubble::setState(Webrtc::VideoState state) {

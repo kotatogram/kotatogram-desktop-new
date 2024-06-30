@@ -15,8 +15,7 @@ https://github.com/kotatogram/kotatogram-desktop/blob/dev/LEGAL
 #include "data/data_peer_id.h"
 #include "base/parse_helper.h"
 #include "base/timer.h"
-#include "facades.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "data/data_chat_filters.h"
 #include "platform/platform_file_utilities.h"
 
@@ -155,22 +154,6 @@ CheckHandler IntLimitMin(int min) {
 	};
 }
 
-CheckHandler ScalesLimit() {
-	return [=] (QVariant value) -> QVariant {
-		auto newArrayValue = QJsonArray();
-		if (value.canConvert<QJsonArray>()) {
-			auto arrayValue = value.toJsonArray();
-			for (auto i = arrayValue.begin(); i != arrayValue.end() && arrayValue.size() <= 6; ++i) {
-				const auto scaleNumber = (*i).toDouble(); 
-				if (scaleNumber >= style::kScaleMin && scaleNumber <= style::kScaleMax) {
-					newArrayValue.append(scaleNumber);
-				}
-			}
-		}
-		return newArrayValue;
-	};
-}
-
 CheckHandler ReplacesLimit() {
 	return [=] (QVariant value) -> QVariant {
 		auto newArrayValue = QJsonArray();
@@ -198,23 +181,6 @@ CheckHandler ReplacesLimit() {
 	};
 }
 
-CheckHandler FileDialogLimit() {
-	return [=] (QVariant value) -> QVariant {
-		using Platform::FileDialog::ImplementationType;
-		auto newValue = int(ImplementationType::Default);
-		if (value.canConvert<int>()) {
-			auto intValue = value.toInt();
-			if (intValue >= int(ImplementationType::Default)
-				&& intValue < int(ImplementationType::Count)) {
-
-				newValue = intValue;
-			} else if (intValue >= int(ImplementationType::Count)) {
-				newValue = int(ImplementationType::Count) - 1;
-			}
-		}
-		return newValue;
-	};
-}
 
 CheckHandler NetSpeedBoostConv(CheckHandler wrapped = nullptr) {
 	return [=] (QVariant value) -> QVariant {
@@ -350,25 +316,12 @@ const std::map<QString, Definition, std::greater<QString>> DefinitionMap {
 		.type = SettingType::IntSetting,
 		.defaultValue = 0,
 		.limitHandler = NetSpeedBoostConv(IntLimit(0, 3)), }},
-	{ "show_phone_in_drawer", {
-		.type = SettingType::BoolSetting,
-		.defaultValue = true, }},
-	{ "scales", {
-		.type = SettingType::QJsonArraySetting,
-		.limitHandler = ScalesLimit(), }},
-	{ "chat_list_lines", {
-		.type = SettingType::IntSetting,
-		.defaultValue = 2,
-		.limitHandler = IntLimit(1, 2, 2), }},
 	{ "disable_up_edit", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = false, }},
 	{ "replaces", {
 		.type = SettingType::QJsonArraySetting,
 		.limitHandler = ReplacesLimit(), }},
-	{ "confirm_before_calls", {
-		.type = SettingType::BoolSetting,
-		.defaultValue = true, }},
 	{ "ffmpeg_multithread", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = true, }},
@@ -380,23 +333,20 @@ const std::map<QString, Definition, std::greater<QString>> DefinitionMap {
 		.type = SettingType::IntSetting,
 		.defaultValue = 20,
 		.limitHandler = IntLimit(0, 200, 20), }},
-	{ "userpic_corner_type", {
+	{ "userpic_corner_radius", {
 		.type = SettingType::IntSetting,
-		.defaultValue = 3,
-		.limitHandler = IntLimit(0, 3, 3), }},
+		.defaultValue = 50,
+		.limitHandler = IntLimit(0, 50), }},
+	{ "userpic_corner_radius_forum", {
+		.type = SettingType::IntSetting,
+		.defaultValue = 30,
+		.limitHandler = IntLimit(0, 50), }},
+	{ "userpic_corner_radius_forum_use_default", {
+		.type = SettingType::BoolSetting,
+		.defaultValue = false, }},
 	{ "always_show_top_userpic", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = false, }},
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	{ "qt_scale", {
-		.storage = SettingStorage::None,
-		.type = SettingType::BoolSetting,
-		.defaultValue = false, }},
-#endif
-	{ "file_dialog_type", {
-		.type = SettingType::IntSetting,
-		.defaultValue = int(Platform::FileDialog::ImplementationType::Default),
-		.limitHandler = FileDialogLimit(), }},
 	{ "disable_tray_counter", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = Platform::IsLinux(), }},
@@ -431,9 +381,6 @@ const std::map<QString, Definition, std::greater<QString>> DefinitionMap {
 		.type = SettingType::BoolSetting,
 		.defaultValue = false, }},
 	{ "forward_on_click", {
-		.type = SettingType::BoolSetting,
-		.defaultValue = false, }},
-	{ "auto_scroll_unfocused", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = false, }},
 	{ "folders/local", {

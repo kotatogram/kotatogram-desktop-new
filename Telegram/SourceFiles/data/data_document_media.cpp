@@ -10,20 +10,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_document_resolver.h"
 #include "data/data_session.h"
-#include "data/data_cloud_themes.h"
 #include "data/data_file_origin.h"
-#include "data/data_auto_download.h"
 #include "media/clip/media_clip_reader.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
 #include "lottie/lottie_animation.h"
+#include "lottie/lottie_frame_generator.h"
+#include "ffmpeg/ffmpeg_frame_generator.h"
 #include "history/history_item.h"
 #include "history/history.h"
 #include "window/themes/window_theme_preview.h"
 #include "core/core_settings.h"
 #include "core/application.h"
 #include "storage/file_download.h"
-#include "ui/image/image.h"
+#include "ui/chat/attach/attach_prepare.h"
 
 #include <QtCore/QBuffer>
 #include <QtGui/QImageReader>
@@ -58,7 +58,8 @@ enum class FileType {
 		QByteArray data,
 		FileType type) {
 	if (type == FileType::Video || type == FileType::VideoSticker) {
-		auto result = ::Media::Clip::PrepareForSending(path, data);
+		auto result = v::get<Ui::PreparedFileInformation::Video>(
+			::Media::Clip::PrepareForSending(path, data).media);
 		if (result.isWebmSticker && type == FileType::Video) {
 			result.thumbnail = Images::Opaque(std::move(result.thumbnail));
 		}
@@ -255,6 +256,7 @@ void DocumentMedia::videoThumbnailWanted(Data::FileOrigin origin) {
 
 void DocumentMedia::setVideoThumbnail(QByteArray content) {
 	_videoThumbnailBytes = std::move(content);
+	_videoThumbnailBytes.detach();
 }
 
 void DocumentMedia::checkStickerLarge() {
@@ -289,7 +291,7 @@ void DocumentMedia::automaticLoad(
 		return;
 	}
 	const auto toCache = _owner->saveToCache();
-	if (!toCache && Core::App().settings().askDownloadPath()) {
+	if (!toCache && !Core::App().canSaveFileWithoutAskingForPath()) {
 		// We need a filename, but we're supposed to ask user for it.
 		// No automatic download in this case.
 		return;
@@ -503,6 +505,49 @@ void DocumentMedia::ReadOrGenerateThumbnail(
 		}
 	};
 	document->owner().cache().get(document->goodThumbnailCacheKey(), got);
+}
+
+auto DocumentIconFrameGenerator(not_null<DocumentMedia*> media)
+-> FnMut<std::unique_ptr<Ui::FrameGenerator>()> {
+	if (!media->loaded()) {
+		return nullptr;
+	}
+	using Type = StickerType;
+	const auto document = media->owner();
+	const auto content = media->bytes();
+	const auto fromFile = content.isEmpty();
+	const auto type = document->sticker()
+		? document->sticker()->type
+		: (document->isVideoFile() || document->isAnimation())
+		? Type::Webm
+		: Type::Webp;
+	const auto &location = media->owner()->location(true);
+	if (fromFile && !location.accessEnable()) {
+		return nullptr;
+	}
+	return [=]() -> std::unique_ptr<Ui::FrameGenerator> {
+		const auto bytes = Lottie::ReadContent(content, location.name());
+		if (fromFile) {
+			location.accessDisable();
+		}
+		if (bytes.isEmpty()) {
+			return nullptr;
+		}
+		switch (type) {
+		case Type::Tgs:
+			return std::make_unique<Lottie::FrameGenerator>(bytes);
+		case Type::Webm:
+			return std::make_unique<FFmpeg::FrameGenerator>(bytes);
+		case Type::Webp:
+			return std::make_unique<Ui::ImageFrameGenerator>(bytes);
+		}
+		Unexpected("Document type in DocumentIconFrameGenerator.");
+	};
+}
+
+auto DocumentIconFrameGenerator(const std::shared_ptr<DocumentMedia> &media)
+-> FnMut<std::unique_ptr<Ui::FrameGenerator>()> {
+	return DocumentIconFrameGenerator(media.get());
 }
 
 } // namespace Data

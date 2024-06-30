@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/timer.h"
+#include "data/data_lastseen_status.h"
 #include "profile/profile_block_peer_list.h"
 
 namespace Ui {
@@ -18,6 +19,10 @@ namespace Data {
 struct PeerUpdate;
 } // namespace Data
 
+namespace Window {
+class SessionController;
+} // namespace Window
+
 namespace Profile {
 
 class GroupMembersWidget : public PeerListWidget {
@@ -25,6 +30,7 @@ class GroupMembersWidget : public PeerListWidget {
 public:
 	GroupMembersWidget(
 		QWidget *parent,
+		not_null<Window::SessionController*> controller,
 		not_null<PeerData*> peer,
 		const style::PeerListItem &st);
 
@@ -56,7 +62,7 @@ private:
 		not_null<UserData*> user() const;
 
 		TimeId onlineTextTill = 0;
-		TimeId onlineTill = 0;
+		Data::LastseenStatus lastseen;
 		TimeId onlineForSort = 0;
 	};
 	Member *getMember(Item *item) {
@@ -72,6 +78,8 @@ private:
 		not_null<Item*> item,
 		not_null<ChannelData*> megagroup);
 	bool addUsersToEnd(not_null<ChannelData*> megagroup);
+
+	const not_null<Window::SessionController*> _controller;
 
 	base::flat_map<UserData*, Member*> _membersByUser;
 	bool _sortByOnline = false;

@@ -23,6 +23,7 @@ struct ChatPaintContext;
 struct BubblePattern;
 
 struct ChatThemeBackground {
+	QString key;
 	QImage prepared;
 	QImage preparedForTiled;
 	QImage gradientForFill;
@@ -42,13 +43,16 @@ bool operator==(const ChatThemeBackground &a, const ChatThemeBackground &b);
 bool operator!=(const ChatThemeBackground &a, const ChatThemeBackground &b);
 
 struct ChatThemeBackgroundData {
+	QString key;
 	QString path;
 	QByteArray bytes;
 	bool gzipSvg = false;
 	std::vector<QColor> colors;
 	bool isPattern = false;
 	float64 patternOpacity = 0.;
+	int darkModeDimming = 0;
 	bool isBlurred = false;
+	bool forDarkMode = false;
 	bool generateGradient = false;
 	int gradientRotation = 0;
 };
@@ -86,6 +90,9 @@ struct CacheBackgroundResult {
 	bool waitingForNegativePattern = false;
 };
 
+[[nodiscard]] CacheBackgroundResult CacheBackground(
+	const CacheBackgroundRequest &request);
+
 struct CachedBackground {
 	CachedBackground() = default;
 	CachedBackground(CacheBackgroundResult &&result);
@@ -110,26 +117,10 @@ struct ChatThemeKey {
 	explicit operator bool() const {
 		return (id != 0);
 	}
-};
 
-inline bool operator<(ChatThemeKey a, ChatThemeKey b) {
-	return (a.id < b.id) || ((a.id == b.id) && (a.dark < b.dark));
-}
-inline bool operator>(ChatThemeKey a, ChatThemeKey b) {
-	return (b < a);
-}
-inline bool operator<=(ChatThemeKey a, ChatThemeKey b) {
-	return !(b < a);
-}
-inline bool operator>=(ChatThemeKey a, ChatThemeKey b) {
-	return !(a < b);
-}
-inline bool operator==(ChatThemeKey a, ChatThemeKey b) {
-	return (a.id == b.id) && (a.dark == b.dark);
-}
-inline bool operator!=(ChatThemeKey a, ChatThemeKey b) {
-	return !(a == b);
-}
+	friend inline auto operator<=>(ChatThemeKey, ChatThemeKey) = default;
+	friend inline bool operator==(ChatThemeKey, ChatThemeKey) = default;
+};
 
 struct ChatThemeDescriptor {
 	ChatThemeKey key;
@@ -168,11 +159,16 @@ public:
 	[[nodiscard]] ChatPaintContext preparePaintContext(
 		not_null<const ChatStyle*> st,
 		QRect viewport,
-		QRect clip);
+		QRect clip,
+		bool paused);
 	[[nodiscard]] const BackgroundState &backgroundState(QSize area);
 	void clearBackgroundState();
 	[[nodiscard]] rpl::producer<> repaintBackgroundRequests() const;
 	void rotateComplexGradientBackground();
+
+	[[nodiscard]] CacheBackgroundRequest cacheBackgroundRequest(
+		QSize area,
+		int addRotation = 0) const;
 
 private:
 	void cacheBackground();
@@ -181,9 +177,6 @@ private:
 		const CacheBackgroundRequest &request,
 		Fn<void(CacheBackgroundResult&&)> done = nullptr);
 	void setCachedBackground(CacheBackgroundResult &&cached);
-	[[nodiscard]] CacheBackgroundRequest cacheBackgroundRequest(
-		QSize area,
-		int addRotation = 0) const;
 	[[nodiscard]] bool readyForBackgroundRotation() const;
 	void generateNextBackgroundRotation();
 

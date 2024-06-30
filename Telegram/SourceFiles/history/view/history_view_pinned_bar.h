@@ -25,7 +25,8 @@ namespace HistoryView {
 
 [[nodiscard]] rpl::producer<Ui::MessageBarContent> MessageBarContentByItemId(
 	not_null<Main::Session*> session,
-	FullMsgId id);
+	FullMsgId id,
+	Fn<void()> repaint);
 
 enum class PinnedIdType;
 struct PinnedId {
@@ -46,6 +47,11 @@ struct PinnedId {
 	}
 };
 [[nodiscard]] rpl::producer<Ui::MessageBarContent> PinnedBarContent(
+	not_null<Main::Session*> session,
+	rpl::producer<PinnedId> id,
+	Fn<void()> repaint);
+
+[[nodiscard]] rpl::producer<HistoryItem*> PinnedBarItemWithReplyMarkup(
 	not_null<Main::Session*> session,
 	rpl::producer<PinnedId> id);
 

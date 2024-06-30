@@ -9,31 +9,39 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "kotato/kotato_lang.h"
 #include "kotato/kotato_settings.h"
+#include "apiwrap.h"
+#include "api/api_chat_filters.h" // ProcessFilterRemove.
+#include "boxes/premium_limits_box.h"
 #include "boxes/filters/edit_filter_box.h"
-#include "data/data_session.h"
+#include "core/application.h"
+#include "data/data_chat_filters.h"
 #include "data/data_folder.h"
 #include "data/data_peer.h"
-#include "data/data_chat_filters.h"
+#include "data/data_peer_values.h" // Data::AmPremiumValue.
+#include "data/data_session.h"
+#include "data/data_premium_limits.h"
 #include "history/history.h"
+#include "lang/lang_keys.h"
+#include "lottie/lottie_icon.h"
 #include "main/main_session.h"
+#include "ui/boxes/confirm_box.h"
+#include "ui/filter_icons.h"
 #include "main/main_account.h"
-#include "window/window_session_controller.h"
-#include "window/window_controller.h"
 #include "ui/toast/toast.h"
 #include "ui/layers/generic_box.h"
-#include "ui/widgets/labels.h"
-#include "ui/widgets/buttons.h"
-#include "ui/widgets/input_fields.h"
-#include "ui/text/text_utilities.h"
-#include "ui/wrap/slide_wrap.h"
 #include "ui/painter.h"
-#include "ui/filter_icons.h"
-#include "settings/settings_common.h"
-#include "core/application.h"
-#include "lang/lang_keys.h"
-#include "apiwrap.h"
+#include "ui/vertical_list.h"
+#include "ui/text/text_utilities.h"
+#include "ui/widgets/box_content_divider.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/labels.h"
+#include "ui/wrap/slide_wrap.h"
+#include "window/window_controller.h"
+#include "window/window_session_controller.h"
 #include "styles/style_settings.h"
 #include "styles/style_layers.h"
+#include "styles/style_menu_icons.h"
 #include "styles/style_boxes.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_window.h"
@@ -41,9 +49,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Settings {
 namespace {
 
-constexpr auto kFiltersLimit = 10;
 auto currentDefaultRemoved = false;
-auto localNewFilterId = kFiltersLimit;
 
 using Flag = Data::ChatFilter::Flag;
 using Flags = Data::ChatFilter::Flags;
@@ -105,6 +111,9 @@ struct FilterRow {
 	not_null<FilterRowButton*> button;
 	Data::ChatFilter filter;
 	bool removed = false;
+	mtpRequestId removePeersRequestId = 0;
+	std::vector<not_null<PeerData*>> suggestRemovePeers;
+	std::vector<not_null<PeerData*>> removePeers;
 	bool added = false;
 	bool postponedCountUpdate = false;
 };
@@ -137,7 +146,7 @@ struct FilterRow {
 	const auto &list = session->data().chatsFilters().list();
 	const auto id = filter.id();
 	const auto i = ranges::find(list, id, &Data::ChatFilter::id);
-	if (i != end(list)
+	if ((id && i != end(list))
 		&& (!check
 			|| (i->flags() == filter.flags()
 				&& i->always() == filter.always()
@@ -153,13 +162,18 @@ struct FilterRow {
 		const Data::ChatFilter &filter,
 		bool check = false) {
 	const auto count = ComputeCount(session, filter, check);
-	return (count
-			? tr::lng_filters_chats_count(tr::now, lt_count_short, count)
-			: tr::lng_filters_no_chats(tr::now))
-		+ ", "
-		+ (filter.isLocal()
-			? ktr("ktg_filters_local")
-			: ktr("ktg_filters_cloud"));
+	const auto result = count
+		? tr::lng_filters_chats_count(tr::now, lt_count_short, count)
+		: tr::lng_filters_no_chats(tr::now);
+	return filter.chatlist()
+		? (result
+			+ QString::fromUtf8(" \xE2\x80\xA2 ")
+			+ tr::lng_filters_shareable_status(tr::now))
+		: (result
+			+ QString::fromUtf8(" \xE2\x80\xA2 ")
+			+ (filter.isLocal()
+				? ktr("ktg_filters_local")
+				: ktr("ktg_filters_cloud")));
 }
 
 FilterRowButton::FilterRowButton(
@@ -193,6 +207,8 @@ FilterRowButton::FilterRowButton(
 , _restore(this, tr::lng_filters_restore(), st::stickersUndoRemove)
 , _add(this, tr::lng_filters_recommended_add(), st::stickersTrendingAdd)
 , _state(state) {
+	_restore.setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	_add.setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	setup(filter, status);
 }
 
@@ -280,8 +296,8 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 	}
 
 	const auto left = (_state == State::Suggested)
-		? st::settingsSubsectionTitlePadding.left()
-		: st::settingsFilterIconSkip;
+		? st::defaultSubsectionTitlePadding.left()
+		: st::settingsButtonActive.padding.left();
 	const auto buttonsLeft = std::min(
 		_add.x(),
 		std::min(_remove.x(), _restore.x()));
@@ -305,12 +321,25 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 
 	if (_state != State::Suggested) {
 		const auto icon = Ui::LookupFilterIcon(_icon).normal;
+
+		// For now.
+		auto hq = PainterHighQualityEnabler(p);
+		const auto iconWidth = icon->width() - style::ConvertScale(9);
+		const auto scale = st::settingsIconAdd.width() / float64(iconWidth);
+		p.translate(
+			st::settingsButtonActive.iconLeft,
+			(height() - icon->height() * scale) / 2);
+		p.translate(-iconWidth / 2, -iconWidth / 2);
+		p.scale(scale, scale);
+		p.translate(iconWidth / 2, iconWidth / 2);
 		icon->paint(
 			p,
-			st::settingsFilterIconLeft,
-			(height() - icon->height()) / 2,
+			0,
+			0,
 			width(),
-			(over ? st::menuIconFgOver : st::menuIconFg)->c);
+			(over
+				? st::activeButtonBgOver
+				: st::activeButtonBg)->c);
 	}
 }
 
@@ -319,11 +348,15 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 		not_null<Ui::VerticalLayout*> container) {
 	auto &lifetime = container->lifetime();
 
+	const auto weak = Ui::MakeWeak(container);
 	const auto session = &controller->session();
+	const auto limit = [=] {
+		return Data::PremiumLimits(session).dialogFiltersCurrent();
+	};
 	const auto account = &session->account();
 	const auto currentDefaultId = account->defaultFilterId();
-	localNewFilterId = kFiltersLimit;
-	const auto generateNewId = [=] {
+	auto localNewFilterId = limit();
+	const auto generateNewId = [=, &localNewFilterId] {
 		const auto filters = &controller->session().data().chatsFilters();
 
 		do {
@@ -335,14 +368,20 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 
 	currentDefaultRemoved = false;
 
-	AddSkip(container, st::settingsSectionSkip);
-	AddSubsectionTitle(container, tr::lng_filters_subtitle());
+	Ui::AddSkip(container, st::defaultVerticalListSkip);
+	Ui::AddSubsectionTitle(container, tr::lng_filters_subtitle());
 
-	const auto rows = lifetime.make_state<std::vector<FilterRow>>();
-	const auto rowsCount = lifetime.make_state<rpl::variable<int>>();
+	struct State {
+		std::vector<FilterRow> rows;
+		rpl::variable<int> count;
+		rpl::variable<int> suggested;
+		Fn<void(const FilterRowButton*, Fn<void(Data::ChatFilter)>)> save;
+	};
+
+	const auto state = lifetime.make_state<State>();
 	const auto find = [=](not_null<FilterRowButton*> button) {
-		const auto i = ranges::find(*rows, button, &FilterRow::button);
-		Assert(i != end(*rows));
+		const auto i = ranges::find(state->rows, button, &FilterRow::button);
+		Assert(i != end(state->rows));
 		return &*i;
 	};
 	const auto toast = Ui::Toast::Config{
@@ -351,33 +390,103 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 		.multiline = true,
 	};
 	const auto showLimitReached = [=] {
-		const auto removed = ranges::count_if(*rows, [](FilterRow row) {
+		const auto removed = ranges::count_if(state->rows, [](FilterRow row) {
 			return row.removed || row.filter.isLocal();
 		});
-		if (rows->size() < kFiltersLimit + removed) {
+		const auto count = int(state->rows.size() - removed);
+		if (count < limit()) {
 			return false;
 		}
-		Ui::Toast::Show(toast);
+		controller->show(Box(FiltersLimitBox, session, count));
 		return true;
 	};
-	const auto newCloudButton = AddButton(
+	const auto newCloudButton = AddButtonWithIcon(
 		container,
 		rktr("ktg_filters_create_cloud"),
-		st::settingsChatButton,
-		&st::settingsIconCloud,
-		st::settingsChatIconLeft
+		st::settingsButton,
+		{ &st::settingsIconCloud }
 	);
-	const auto newLocalButton = AddButton(
+	const auto newLocalButton = AddButtonWithIcon(
 		container,
 		rktr("ktg_filters_create_local"),
-		st::settingsChatButton,
-		&st::settingsIconFolders,
-		st::settingsChatIconLeft
+		st::settingsButton,
+		{ &st::menuIconShowInFolder }
 	);
+	const auto markForRemovalSure = [=](not_null<FilterRowButton*> button) {
+		const auto row = find(button);
+		auto suggestRemoving = Api::ExtractSuggestRemoving(row->filter);
+		if (row->removed || row->removePeersRequestId > 0) {
+			return;
+		} else if (!suggestRemoving.empty()) {
+			const auto chosen = crl::guard(button, [=](
+					std::vector<not_null<PeerData*>> peers) {
+				const auto row = find(button);
+				row->removePeers = std::move(peers);
+				row->removed = true;
+				button->setRemoved(true);
+			});
+			Api::ProcessFilterRemove(
+				controller,
+				row->filter.title(),
+				row->filter.iconEmoji(),
+				std::move(suggestRemoving),
+				row->suggestRemovePeers,
+				chosen);
+		} else {
+			row->removePeers = {};
+			row->removed = true;
+			button->setRemoved(true);
+		}
+	};
+	const auto markForRemoval = [=](not_null<FilterRowButton*> button) {
+		const auto row = find(button);
+		if (row->removed || row->removePeersRequestId > 0) {
+			return;
+		} else if (row->filter.hasMyLinks()) {
+			controller->show(Ui::MakeConfirmBox({
+				.text = { tr::lng_filters_delete_sure(tr::now) },
+				.confirmed = crl::guard(button, [=](Fn<void()> close) {
+					markForRemovalSure(button);
+					close();
+				}),
+				.confirmText = tr::lng_box_delete(),
+				.confirmStyle = &st::attentionBoxButton,
+			}));
+		} else {
+			markForRemovalSure(button);
+		}
+	};
+	const auto remove = [=](not_null<FilterRowButton*> button) {
+		const auto row = find(button);
+		if (row->removed || row->removePeersRequestId > 0) {
+			return;
+		} else if (row->filter.chatlist() && !row->removePeersRequestId) {
+			row->removePeersRequestId = session->api().request(
+				MTPchatlists_GetLeaveChatlistSuggestions(
+					MTP_inputChatlistDialogFilter(
+						MTP_int(row->filter.id())))
+			).done(crl::guard(button, [=](const MTPVector<MTPPeer> &result) {
+				const auto row = find(button);
+				row->removePeersRequestId = -1;
+				row->suggestRemovePeers = ranges::views::all(
+					result.v
+				) | ranges::views::transform([=](const MTPPeer &peer) {
+					return session->data().peer(peerFromMTP(peer));
+				}) | ranges::to_vector;
+				markForRemoval(button);
+			})).fail(crl::guard(button, [=] {
+				const auto row = find(button);
+				row->removePeersRequestId = -1;
+				markForRemoval(button);
+			})).send();
+		} else {
+			markForRemoval(button);
+		}
+	};
 	const auto wrap = container->add(object_ptr<Ui::VerticalLayout>(
 		container));
 	const auto addFilter = [=](const Data::ChatFilter &filter) {
-		if (rows->size() == 0) {
+		if (state->rows.size() == 0) {
 			AddSkip(wrap);
 			AddDivider(wrap);
 			AddSkip(wrap);
@@ -386,11 +495,10 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 			object_ptr<FilterRowButton>(wrap, session, filter));
 		button->removeRequests(
 		) | rpl::start_with_next([=] {
-			button->setRemoved(true);
+			remove(button);
 			if (find(button)->filter.id() == account->defaultFilterId()) {
 				currentDefaultRemoved = true;
 			}
-			find(button)->removed = true;
 		}, button->lifetime());
 		button->restoreRequests(
 		) | rpl::start_with_next([=] {
@@ -417,14 +525,21 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 				}
 				button->updateData(result);
 			};
+			const auto saveAnd = [=](
+					const Data::ChatFilter &data,
+					Fn<void(Data::ChatFilter)> next) {
+				doneCallback(data);
+				state->save(button, next);
+			};
 			controller->window().show(Box(
 				EditFilterBox,
 				controller,
 				found->filter,
-				crl::guard(button, doneCallback)));
+				crl::guard(button, doneCallback),
+				crl::guard(button, saveAnd)));
 		});
-		rows->push_back({ button, filter });
-		*rowsCount = rows->size();
+		state->rows.push_back({ button, filter });
+		state->count = state->rows.size();
 
 		const auto filters = &controller->session().data().chatsFilters();
 		const auto id = filter.id();
@@ -459,65 +574,98 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 		}
 
 		wrap->resizeToWidth(container->width());
+
+		return button;
 	};
 	const auto &list = session->data().chatsFilters().list();
 	for (const auto &filter : list) {
-		addFilter(filter);
+		if (filter.id()) {
+			addFilter(filter);
+		}
 	}
+
+	session->data().chatsFilters().isChatlistChanged(
+	) | rpl::start_with_next([=](FilterId id) {
+		const auto filters = &session->data().chatsFilters();
+		const auto &list = filters->list();
+		const auto i = ranges::find(list, id, &Data::ChatFilter::id);
+		const auto j = ranges::find(state->rows, id, [](const auto &row) {
+			return row.filter.id();
+		});
+		if (i == end(list) || j == end(state->rows)) {
+			return;
+		}
+		j->filter = j->filter.withChatlist(i->chatlist(), i->hasMyLinks());
+		j->button->updateCount(j->filter);
+	}, container->lifetime());
 
 	newCloudButton->setClickedCallback([=] {
 		if (showLimitReached()) {
 			return;
 		}
+		const auto created = std::make_shared<FilterRowButton*>(nullptr);
 		const auto doneCallback = [=](const Data::ChatFilter &result) {
 			if (result.isDefault()) {
 				account->setDefaultFilterId(result.id());
 			}
-			addFilter(result);
+			if (const auto button = *created) {
+				find(button)->filter = result;
+				button->updateData(result);
+			} else {
+				*created = addFilter(result);
+			}
+		};
+		const auto saveAnd = [=](
+				const Data::ChatFilter &data,
+				Fn<void(Data::ChatFilter)> next) {
+			doneCallback(data);
+			state->save(*created, next);
 		};
 		controller->window().show(Box(
 			EditFilterBox,
 			controller,
 			Data::ChatFilter(generateNewId()),
-			crl::guard(container, doneCallback)));
+			crl::guard(container, doneCallback),
+			crl::guard(container, saveAnd)));
 	});
 	newLocalButton->setClickedCallback([=] {
+		const auto created = std::make_shared<FilterRowButton*>(nullptr);
 		const auto doneCallback = [=](const Data::ChatFilter &result) {
 			if (result.isDefault()) {
 				account->setDefaultFilterId(result.id());
 			}
-			addFilter(result);
+			if (const auto button = *created) {
+				find(button)->filter = result;
+				button->updateData(result);
+			} else {
+				*created = addFilter(result);
+			}
+		};
+		const auto saveAnd = [=](
+				const Data::ChatFilter &data,
+				Fn<void(Data::ChatFilter)> next) {
+			doneCallback(data);
+			state->save(*created, next);
 		};
 		controller->window().show(Box(
 			EditFilterBox,
 			controller,
 			Data::ChatFilter(generateNewId(), true),
-			crl::guard(container, doneCallback)));
+			crl::guard(container, doneCallback),
+			crl::guard(container, saveAnd)));
 	});
-	AddSkip(container);
-	const auto emptyAbout = container->add(
-		object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
-			container,
-			object_ptr<Ui::FlatLabel>(
-				container,
-				rktr("ktg_filters_description"),
-				st::boxDividerLabel),
-			st::settingsDividerLabelPadding)
-	)->setDuration(0);
+	Ui::AddSkip(container);
 	const auto nonEmptyAbout = container->add(
 		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
 			container,
 			object_ptr<Ui::VerticalLayout>(container))
 	)->setDuration(0);
 	const auto aboutRows = nonEmptyAbout->entity();
-	AddDividerText(aboutRows, rktr("ktg_filters_description"));
-	AddSkip(aboutRows);
-	AddSubsectionTitle(aboutRows, tr::lng_filters_recommended());
+	Ui::AddDividerText(aboutRows, rktr("ktg_filters_description"));
+	Ui::AddSkip(aboutRows);
+	Ui::AddSubsectionTitle(aboutRows, tr::lng_filters_recommended());
 
-	const auto suggested = lifetime.make_state<rpl::variable<int>>();
-	rpl::single(
-		rpl::empty_value()
-	) | rpl::then(
+	rpl::single(rpl::empty) | rpl::then(
 		session->data().chatsFilters().suggestedUpdated()
 	) | rpl::map([=] {
 		return session->data().chatsFilters().suggestedFilters();
@@ -529,10 +677,10 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 			const std::vector<Data::SuggestedFilter> &suggestions) {
 		for (const auto &suggestion : suggestions) {
 			const auto &filter = suggestion.filter;
-			if (ranges::contains(*rows, filter, &FilterRow::filter)) {
+			if (ranges::contains(state->rows, filter, &FilterRow::filter)) {
 				continue;
 			}
-			*suggested = suggested->current() + 1;
+			state->suggested = state->suggested.current() + 1;
 			const auto button = aboutRows->add(object_ptr<FilterRowButton>(
 				aboutRows,
 				filter,
@@ -543,22 +691,21 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 					return;
 				}
 				addFilter(filter);
-				*suggested = suggested->current() - 1;
+				state->suggested = state->suggested.current() - 1;
 				delete button;
 			}, button->lifetime());
 		}
 		aboutRows->resizeToWidth(container->width());
-		AddSkip(aboutRows, st::settingsSectionSkip);
+		Ui::AddSkip(aboutRows, st::defaultVerticalListSkip);
 	}, aboutRows->lifetime());
 
-	using namespace rpl::mappers;
 	auto showSuggestions = rpl::combine(
-		suggested->value(),
-		rowsCount->value()
-	) | rpl::map(_1 > 0 && _2 < kFiltersLimit);
-	emptyAbout->toggleOn(rpl::duplicate(
-		showSuggestions
-	) | rpl::map(!_1));
+		state->suggested.value(),
+		state->count.value(),
+		Data::AmPremiumValue(session)
+	) | rpl::map([limit](int suggested, int count, bool) {
+		return suggested > 0 && count < limit();
+	});
 	nonEmptyAbout->toggleOn(std::move(showSuggestions));
 
 	const auto prepareGoodIdsForNewFilters = [=] {
@@ -573,11 +720,12 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 			return localId;
 		};
 		auto result = base::flat_map<not_null<FilterRowButton*>, FilterId>();
-		for (auto &row : *rows) {
+		for (auto &row : state->rows) {
 			const auto id = row.filter.id();
 			if (row.removed || row.filter.isLocal()) {
 				continue;
-			} else if (!ranges::contains(list, id, &Data::ChatFilter::id)) {
+			} else if (!id
+				|| !ranges::contains(list, id, &Data::ChatFilter::id)) {
 				result.emplace(row.button, chooseNextId());
 				if (account->defaultFilterId() == id) {
 					account->setDefaultFilterId(localId);
@@ -586,8 +734,8 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 		}
 
 		// We're prioritizing cloud IDs before local.
-		localId = kFiltersLimit;
-		for (auto &row : *rows) {
+		localId = limit();
+		for (auto &row : state->rows) {
 			const auto id = row.filter.id();
 			if (row.removed || !row.filter.isLocal()) {
 				continue;
@@ -601,27 +749,51 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 		return result;
 	};
 
-	return [=] {
+	state->save = [=](
+			const FilterRowButton *single,
+			Fn<void(Data::ChatFilter)> next) {
 		auto ids = prepareGoodIdsForNewFilters();
 		bool needSave = false;
 
-		using Requests = std::vector<MTPmessages_UpdateDialogFilter>;
-		auto addRequests = Requests(), removeRequests = Requests();
+		auto updated = Data::ChatFilter();
+
+		auto order = std::vector<FilterId>();
+		auto updates = std::vector<MTPUpdate>();
+		auto addRequests = std::vector<MTPmessages_UpdateDialogFilter>();
+		auto removeRequests = std::vector<MTPmessages_UpdateDialogFilter>();
+		auto removeChatlistRequests = std::vector<MTPchatlists_LeaveChatlist>();
+
 		auto &realFilters = session->data().chatsFilters();
 		const auto &list = realFilters.list();
-		auto order = std::vector<FilterId>();
-		order.reserve(rows->size());
+		order.reserve(state->rows.size());
 		auto localFoldersChanged = false;
-		for (const auto &row : *rows) {
+		for (auto &row : state->rows) {
+			if (row.button.get() == single) {
+				updated = row.filter;
+			}
 			const auto id = row.filter.id();
 			const auto removed = row.removed;
 			const auto i = ranges::find(list, id, &Data::ChatFilter::id);
-			if (removed && i == end(list)) {
+			if (removed && (i == end(list) || id == FilterId(0))) {
 				continue;
 			} else if (!removed && i != end(list) && *i == row.filter) {
 				order.push_back(id);
 				continue;
 			}
+			const auto newId = ids.take(row.button).value_or(id);
+			if (newId != id) {
+				row.filter = row.filter.withId(newId);
+				row.button->updateData(row.filter);
+				if (row.button.get() == single) {
+					updated = row.filter;
+				}
+			}
+			const auto tl = removed
+				? MTPDialogFilter()
+				: row.filter.tl(newId);
+			const auto removeChatlistWithChats = removed
+				&& row.filter.chatlist()
+				&& !row.removePeers.empty();
 			if (row.filter.isLocal()) {
 				if (removed) {
 					realFilters.remove(id);
@@ -631,11 +803,17 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 				}
 				localFoldersChanged = true;
 				needSave = true;
+			} else if (removeChatlistWithChats) {
+				auto inputs = ranges::views::all(
+					row.removePeers
+				) | ranges::views::transform([](not_null<PeerData*> peer) {
+					return MTPInputPeer(peer->input);
+				}) | ranges::to<QVector<MTPInputPeer>>();
+				removeChatlistRequests.push_back(
+					MTPchatlists_LeaveChatlist(
+						MTP_inputChatlistDialogFilter(MTP_int(newId)),
+						MTP_vector<MTPInputPeer>(std::move(inputs))));
 			} else {
-				const auto newId = ids.take(row.button).value_or(id);
-				const auto tl = removed
-					? MTPDialogFilter()
-					: row.filter.tl(newId);
 				const auto request = MTPmessages_UpdateDialogFilter(
 					MTP_flags(removed
 						? MTPmessages_UpdateDialogFilter::Flag(0)
@@ -655,31 +833,149 @@ void FilterRowButton::paintEvent(QPaintEvent *e) {
 					MTP_int(newId),
 					tl));
 			}
+			updates.push_back(MTP_updateDialogFilter(
+				MTP_flags(removed
+					? MTPDupdateDialogFilter::Flag(0)
+					: MTPDupdateDialogFilter::Flag::f_filter),
+				MTP_int(newId),
+				tl));
 		}
-		auto previousId = mtpRequestId(0);
-		auto &&requests = ranges::views::concat(removeRequests, addRequests);
-		for (auto &request : requests) {
-			previousId = session->api().request(
-				std::move(request)
-			).afterRequest(previousId).send();
+		if (!ranges::contains(order, FilterId(0))) {
+			auto position = 0;
+			for (const auto &filter : list) {
+				const auto id = filter.id();
+				if (!id) {
+					break;
+				} else if (const auto i = ranges::find(order, id)
+					; i != order.end()) {
+					position = int(i - order.begin()) + 1;
+				}
+			}
+			order.insert(order.begin() + position, FilterId(0));
 		}
-		if (!order.empty() && (!addRequests.empty() || localFoldersChanged)) {
-			realFilters.saveOrder(order, previousId);
+		if (next) {
+			// We're not closing the layer yet, so delete removed rows.
+			for (auto i = state->rows.begin(); i != state->rows.end();) {
+				if (i->removed) {
+					const auto button = i->button;
+					i = state->rows.erase(i);
+					delete button;
+				} else {
+					++i;
+				}
+			}
 		}
-		if (currentDefaultRemoved) {
-			account->setDefaultFilterId(0);
-			controller->setActiveChatsFilter(0);
-		}
-		if (localFoldersChanged) {
-			realFilters.saveLocal();
-		}
-		if (currentDefaultId != account->defaultFilterId()) {
-			needSave = true;
-		}
-		if (needSave) {
-			Kotato::JsonSettings::Write();
-		}
+		crl::on_main(session, [
+			session,
+			next,
+			updated,
+			account,
+			controller,
+			localFoldersChanged,
+			currentDefaultId,
+			&needSave,
+			order = std::move(order),
+			updates = std::move(updates),
+			addRequests = std::move(addRequests),
+			removeRequests = std::move(removeRequests),
+			removeChatlistRequests = std::move(removeChatlistRequests)
+		] {
+			const auto api = &session->api();
+			auto &filters = session->data().chatsFilters();
+			const auto ids = std::make_shared<
+				base::flat_set<mtpRequestId>
+			>();
+			const auto checkFinished = [=] {
+				if (ids->empty() && next) {
+					Assert(updated.id() != 0);
+					next(updated);
+				}
+			};
+			for (const auto &update : updates) {
+				filters.apply(update);
+			}
+			auto previousId = mtpRequestId(0);
+			const auto sendRequests = [&](const auto &requests) {
+				for (auto &request : requests) {
+					previousId = api->request(
+						std::move(request)
+					).done([=](const auto &result, mtpRequestId id) {
+						if constexpr (std::is_same_v<
+								std::decay_t<decltype(result)>,
+								MTPUpdates>) {
+							session->api().applyUpdates(result);
+						}
+						ids->remove(id);
+						checkFinished();
+					}).afterRequest(previousId).send();
+					ids->emplace(previousId);
+				}
+			};
+			sendRequests(removeRequests);
+			sendRequests(removeChatlistRequests);
+			sendRequests(addRequests);
+			if (!order.empty() && !addRequests.empty()) {
+				filters.saveOrder(order, previousId);
+			}
+			checkFinished();
+			if (currentDefaultRemoved) {
+				account->setDefaultFilterId(0);
+				controller->setActiveChatsFilter(0);
+			}
+			if (localFoldersChanged) {
+				filters.saveLocal();
+			}
+			if (currentDefaultId != account->defaultFilterId()) {
+				needSave = true;
+			}
+			if (needSave) {
+				Kotato::JsonSettings::Write();
+			}
+		});
 	};
+	return [copy = state->save] {
+		copy(nullptr, nullptr);
+	};
+}
+
+void SetupTopContent(
+		not_null<Ui::VerticalLayout*> parent,
+		rpl::producer<> showFinished) {
+	const auto divider = Ui::CreateChild<Ui::BoxContentDivider>(parent.get());
+	const auto verticalLayout = parent->add(
+		object_ptr<Ui::VerticalLayout>(parent.get()));
+
+	auto icon = CreateLottieIcon(
+		verticalLayout,
+		{
+			.name = u"filters"_q,
+			.sizeOverride = {
+				st::settingsFilterIconSize,
+				st::settingsFilterIconSize,
+			},
+		},
+		st::settingsFilterIconPadding);
+	std::move(
+		showFinished
+	) | rpl::start_with_next([animate = std::move(icon.animate)] {
+		animate(anim::repeat::once);
+	}, verticalLayout->lifetime());
+	verticalLayout->add(std::move(icon.widget));
+
+	verticalLayout->add(
+		object_ptr<Ui::CenterWrap<>>(
+			verticalLayout,
+			object_ptr<Ui::FlatLabel>(
+				verticalLayout,
+				tr::lng_filters_about(),
+				st::settingsFilterDividerLabel)),
+		st::settingsFilterDividerLabelPadding);
+
+	verticalLayout->geometryValue(
+	) | rpl::start_with_next([=](const QRect &r) {
+		divider->setGeometry(r);
+	}, divider->lifetime());
+
 }
 
 } // namespace
@@ -697,14 +993,24 @@ Folders::~Folders() {
 	}
 }
 
+rpl::producer<QString> Folders::title() {
+	return tr::lng_filters_title();
+}
+
 void Folders::setupContent(not_null<Window::SessionController*> controller) {
 	controller->session().data().chatsFilters().requestSuggested();
 
 	const auto content = Ui::CreateChild<Ui::VerticalLayout>(this);
 
+	SetupTopContent(content, _showFinished.events());
+
 	_save = SetupFoldersContent(controller, content);
 
 	Ui::ResizeFitChild(this, content);
+}
+
+void Folders::showFinished() {
+	_showFinished.fire({});
 }
 
 } // namespace Settings

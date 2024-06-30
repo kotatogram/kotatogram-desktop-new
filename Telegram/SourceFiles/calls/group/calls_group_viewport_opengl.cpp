@@ -10,9 +10,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "calls/group/calls_group_viewport_tile.h"
 #include "webrtc/webrtc_video_track.h"
 #include "media/view/media_view_pip.h"
+#include "media/streaming/media_streaming_utility.h"
 #include "calls/group/calls_group_members_row.h"
 #include "lang/lang_keys.h"
 #include "ui/gl/gl_shader.h"
+#include "ui/painter.h"
 #include "data/data_peer.h"
 #include "styles/style_calls.h"
 
@@ -31,7 +33,6 @@ constexpr auto kNoiseTextureSize = 256;
 constexpr auto kBlurTextureSizeFactor = 4.;
 constexpr auto kBlurOpacity = 0.65;
 constexpr auto kDitherNoiseAmount = 0.002;
-constexpr auto kMinCameraVisiblePart = 0.75;
 
 constexpr auto kQuads = 9;
 constexpr auto kQuadVertices = kQuads * 4;
@@ -185,12 +186,11 @@ uniform sampler2D n_texture;
 	return {
 		.header = R"(
 uniform vec4 frameBg;
-uniform vec3 shadow; // fullHeight, shown, maxOpacity
+uniform vec4 shadow; // fullHeight, shown, maxOpacity, blur opacity
 uniform float paused; // 0. <-> 1.
 
 )" + blur.header + round.header + noise.header + R"(
 
-const float backgroundOpacity = )" + QString::number(kBlurOpacity) + R"(;
 const float noiseGrain = )" + QString::number(kDitherNoiseAmount) + R"(;
 
 float insideTexture() {
@@ -211,6 +211,7 @@ vec4 background() {
 )",
 		.body = R"(
 	float inside = insideTexture() * (1. - paused);
+	float backgroundOpacity = shadow.w;
 	result = result * inside
 		+ (1. - inside) * (backgroundOpacity * background()
 			+ (1. - backgroundOpacity) * frameBg);
@@ -224,13 +225,8 @@ vec4 background() {
 }
 
 [[nodiscard]] bool UseExpandForCamera(QSize original, QSize viewport) {
-	const auto big = original.scaled(
-		viewport,
-		Qt::KeepAspectRatioByExpanding);
-
-	// If we cut out no more than 0.25 of the original, let's use expanding.
-	return (big.width() * kMinCameraVisiblePart <= viewport.width())
-		&& (big.height() * kMinCameraVisiblePart <= viewport.height());
+	using namespace ::Media::Streaming;
+	return DecideFrameResize(viewport, original).expanding;
 }
 
 [[nodiscard]] QSize NonEmpty(QSize size) {
@@ -325,9 +321,6 @@ void Viewport::RendererGL::init(
 	_frameBuffer->bind();
 	_frameBuffer->allocate(kValues * sizeof(GLfloat));
 	_downscaleProgram.yuv420.emplace();
-	const auto downscaleVertexSource = VertexShader({
-		VertexPassTextureCoord(),
-	});
 	_downscaleVertexShader = LinkProgram(
 		&*_downscaleProgram.yuv420,
 		VertexShader({
@@ -418,16 +411,20 @@ void Viewport::RendererGL::deinit(
 }
 
 void Viewport::RendererGL::setDefaultViewport(QOpenGLFunctions &f) {
-	const auto size = _viewport * _factor;
-	f.glViewport(0, 0, size.width(), size.height());
+	f.glViewport(
+		0,
+		0,
+		_viewport.width() * _factor,
+		_viewport.height() * _factor);
 }
 
 void Viewport::RendererGL::paint(
 		not_null<QOpenGLWidget*> widget,
 		QOpenGLFunctions &f) {
-	const auto factor = widget->devicePixelRatio();
+	const auto factor = widget->devicePixelRatioF();
 	if (_factor != factor) {
 		_factor = factor;
+		_ifactor = int(std::ceil(_factor));
 		_buttons.invalidate();
 	}
 	_viewport = widget->size();
@@ -466,7 +463,7 @@ void Viewport::RendererGL::validateUserpicFrame(
 	tileData.userpicFrame = tile->row()->peer()->generateUserpicImage(
 		tile->row()->ensureUserpicView(),
 		size.width(),
-		ImageRoundRadius::None);
+		0);
 }
 
 void Viewport::RendererGL::paintTile(
@@ -498,6 +495,7 @@ void Viewport::RendererGL::paintTile(
 	const auto height = geometry.height();
 	const auto &st = st::groupCallVideoTile;
 	const auto shown = _owner->_controlsShownRatio;
+	const auto fullscreen = _owner->_fullscreen;
 	const auto fullNameShift = st.namePosition.y() + st::normalFont->height;
 	const auto nameShift = anim::interpolate(fullNameShift, 0, shown);
 	const auto row = tile->row();
@@ -533,6 +531,12 @@ void Viewport::RendererGL::paintTile(
 		{ { 1.f, 0.f } },
 		{ { 0.f, 0.f } },
 	} };
+	if (tile->mirror()) {
+		std::swap(toBlurTexCoords[0], toBlurTexCoords[1]);
+		std::swap(toBlurTexCoords[2], toBlurTexCoords[3]);
+		std::swap(texCoords[0], texCoords[1]);
+		std::swap(texCoords[2], texCoords[3]);
+	}
 	if (const auto shift = (frameRotation / 90); shift > 0) {
 		std::rotate(
 			toBlurTexCoords.begin(),
@@ -776,12 +780,14 @@ void Viewport::RendererGL::paintTile(
 	const auto program = _rgbaFrame
 		? &*_frameProgram.argb32
 		: &*_frameProgram.yuv420;
-	const auto uniformViewport = QSizeF(_viewport * _factor);
+	const auto uniformViewport = QSizeF(_viewport) * _factor;
 
 	program->setUniformValue("viewport", uniformViewport);
-	program->setUniformValue("frameBg", st::groupCallBg->c);
+	program->setUniformValue(
+		"frameBg",
+		fullscreen ? QColor(0, 0, 0) : st::groupCallBg->c);
 	program->setUniformValue("radiusOutline", QVector2D(
-		GLfloat(st::roundRadiusLarge * _factor),
+		GLfloat(st::roundRadiusLarge * _factor * (fullscreen ? 0. : 1.)),
 		(outline > 0) ? (st::groupCallOutline * _factor) : 0.f));
 	program->setUniformValue("roundRect", Uniform(rect));
 	program->setUniformValue("roundBg", st::groupCallBg->c);
@@ -793,9 +799,11 @@ void Viewport::RendererGL::paintTile(
 
 	const auto shadowHeight = st.shadowHeight * _factor;
 	const auto shadowAlpha = kShadowMaxAlpha / 255.f;
-	program->setUniformValue(
-		"shadow",
-		QVector3D(shadowHeight, shown, shadowAlpha));
+	program->setUniformValue("shadow", QVector4D(
+		shadowHeight,
+		shown,
+		shadowAlpha,
+		fullscreen ? 0. : kBlurOpacity));
 	program->setUniformValue("paused", GLfloat(paused));
 
 	f.glActiveTexture(_rgbaFrame ? GL_TEXTURE1 : GL_TEXTURE3);
@@ -1121,18 +1129,18 @@ void Viewport::RendererGL::ensureButtonsImage() {
 			+ backSize.height()
 			+ muteSize.height()
 			+ pausedSize.height()));
-	const auto imageSize = fullSize * _factor;
+	const auto imageSize = fullSize * _ifactor;
 	auto image = _buttons.takeImage();
 	if (image.size() != imageSize) {
 		image = QImage(imageSize, QImage::Format_ARGB32_Premultiplied);
 	}
 	image.fill(Qt::transparent);
-	image.setDevicePixelRatio(_factor);
+	image.setDevicePixelRatio(_ifactor);
 	{
 		auto p = Painter(&image);
 		auto hq = PainterHighQualityEnabler(p);
 
-		_pinOn = QRect(QPoint(), pinOnSize * _factor);
+		_pinOn = QRect(QPoint(), pinOnSize * _ifactor);
 		VideoTile::PaintPinButton(
 			p,
 			true,
@@ -1144,8 +1152,8 @@ void Viewport::RendererGL::ensureButtonsImage() {
 
 		const auto pinOffTop = pinOnSize.height();
 		_pinOff = QRect(
-			QPoint(0, pinOffTop) * _factor,
-			pinOffSize * _factor);
+			QPoint(0, pinOffTop) * _ifactor,
+			pinOffSize * _ifactor);
 		VideoTile::PaintPinButton(
 			p,
 			false,
@@ -1156,7 +1164,7 @@ void Viewport::RendererGL::ensureButtonsImage() {
 			&_pinIcon);
 
 		const auto backTop = pinOffTop + pinOffSize.height();
-		_back = QRect(QPoint(0, backTop) * _factor, backSize * _factor);
+		_back = QRect(QPoint(0, backTop) * _ifactor, backSize * _ifactor);
 		VideoTile::PaintBackButton(
 			p,
 			0,
@@ -1165,18 +1173,18 @@ void Viewport::RendererGL::ensureButtonsImage() {
 			&_pinBackground);
 
 		const auto muteTop = backTop + backSize.height();
-		_muteOn = QRect(QPoint(0, muteTop) * _factor, muteSize * _factor);
+		_muteOn = QRect(QPoint(0, muteTop) * _ifactor, muteSize * _ifactor);
 		_muteIcon.paint(p, { 0, muteTop }, 1.);
 
 		_muteOff = QRect(
-			QPoint(muteSize.width(), muteTop) * _factor,
-			muteSize * _factor);
+			QPoint(muteSize.width(), muteTop) * _ifactor,
+			muteSize * _ifactor);
 		_muteIcon.paint(p, { muteSize.width(), muteTop }, 0.);
 
 		const auto pausedTop = muteTop + muteSize.height();
 		_paused = QRect(
-			QPoint(0, pausedTop) * _factor,
-			pausedSize * _factor);
+			QPoint(0, pausedTop) * _ifactor,
+			pausedSize * _ifactor);
 		st::groupCallPaused.paint(p, 0, pausedTop, fullSize.width());
 	}
 	_buttons.setImage(std::move(image));
@@ -1225,9 +1233,9 @@ void Viewport::RendererGL::validateDatas() {
 			const auto index = (j - begin(_tileData));
 			_tileDataIndices[i] = index;
 			const auto peer = tiles[i]->row()->peer();
-			if (peer != j->peer
-				|| peer->nameVersion != j->nameVersion
-				|| width != j->nameRect.width()) {
+			if ((j->peer != peer)
+				|| (j->nameVersion != peer->nameVersion())
+				|| (j->nameRect.width() != width)) {
 				const auto nameTop = pausedBottom + index * nameHeight;
 				j->nameRect = QRect(0, nameTop, width, nameHeight);
 				requests.push_back({ .index = i, .updating = true });
@@ -1274,7 +1282,7 @@ void Viewport::RendererGL::validateDatas() {
 			});
 		}
 		const auto nameTop = pausedBottom + index * nameHeight;
-		_tileData[index].nameVersion = peer->nameVersion;
+		_tileData[index].nameVersion = peer->nameVersion();
 		_tileData[index].nameRect = QRect(
 			0,
 			nameTop,

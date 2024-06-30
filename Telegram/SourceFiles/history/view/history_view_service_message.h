@@ -9,20 +9,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "history/view/history_view_element.h"
 
-class HistoryService;
+class HistoryItem;
 
 namespace Ui {
 class ChatStyle;
 struct CornersPixmaps;
 } // namespace Ui
 
+namespace Data {
+class ForumTopic;
+} // namespace Data
+
+namespace Info::Profile {
+class TopicIconView;
+} // namespace Info::Profile
+
 namespace HistoryView {
 
-class Service : public Element {
+class Service final : public Element {
 public:
 	Service(
 		not_null<ElementDelegate*> delegate,
-		not_null<HistoryService*> data,
+		not_null<HistoryItem*> data,
 		Element *replacing);
 
 	int marginTop() const override;
@@ -35,14 +43,19 @@ public:
 		StateRequest request) const override;
 	void updatePressed(QPoint point) override;
 	TextForMimeData selectedText(TextSelection selection) const override;
+	SelectedQuote selectedQuote(TextSelection selection) const override;
+	TextSelection selectionFromQuote(
+		const SelectedQuote &quote) const override;
 	TextSelection adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const override;
 
-private:
-	not_null<HistoryService*> message() const;
+	QRect innerGeometry() const override;
 
-	QRect countGeometry() const;
+	bool consumeHorizontalScroll(QPoint position, int delta) override;
+
+private:
+	[[nodiscard]] QRect countGeometry() const;
 
 	QSize performCountOptimalSize() override;
 	QSize performCountCurrentSize(int newWidth) override;
@@ -105,7 +118,7 @@ public:
 		const QRect &textRect);
 
 private:
-	static QVector<int> CountLineWidths(
+	static std::vector<int> CountLineWidths(
 		const Ui::Text::String &text,
 		const QRect &textRect);
 
@@ -114,6 +127,11 @@ private:
 class EmptyPainter {
 public:
 	explicit EmptyPainter(not_null<History*> history);
+	EmptyPainter(
+		not_null<Data::ForumTopic*> topic,
+		Fn<bool()> paused,
+		Fn<void()> update);
+	~EmptyPainter();
 
 	void paint(
 		Painter &p,
@@ -123,11 +141,16 @@ public:
 
 private:
 	void fillAboutGroup();
+	void fillAboutTopic();
 
 	not_null<History*> _history;
-	Ui::Text::String _header = { st::msgMinWidth };
-	Ui::Text::String _text = { st::msgMinWidth };
+	Data::ForumTopic *_topic = nullptr;
+	std::unique_ptr<Info::Profile::TopicIconView> _icon;
+	Ui::Text::String _header;
+	Ui::Text::String _text;
 	std::vector<Ui::Text::String> _phrases;
+
+	rpl::lifetime _lifetime;
 
 };
 

@@ -11,16 +11,20 @@ enum lngtag_count : int;
 
 namespace Lang {
 
+inline constexpr auto kTextCommand = 0x10;
 inline constexpr auto kTextCommandLangTag = 0x20;
 constexpr auto kTagReplacementSize = 4;
 
-int FindTagReplacementPosition(const QString &original, ushort tag);
+[[nodiscard]] int FindTagReplacementPosition(
+	const QString &original,
+	ushort tag);
 
 struct ShortenedCount {
 	int64 number = 0;
 	QString string;
 };
-ShortenedCount FormatCountToShort(int64 number);
+[[nodiscard]] ShortenedCount FormatCountToShort(int64 number);
+[[nodiscard]] QString FormatCountDecimal(int64 number);
 
 struct PluralResult {
 	int keyShift = 0;

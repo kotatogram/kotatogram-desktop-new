@@ -16,16 +16,19 @@ namespace Ui {
 
 SingleMediaPreview *SingleMediaPreview::Create(
 		QWidget *parent,
+		const style::ComposeControls &st,
 		Fn<bool()> gifPaused,
 		const PreparedFile &file,
 		AttachControls::Type type) {
 	auto preview = QImage();
-	bool animated = false;
-	bool animationPreview = false;
+	auto animated = false;
+	auto animationPreview = false;
+	auto hasModifications = false;
 	if (const auto image = std::get_if<PreparedFileInformation::Image>(
 			&file.information->media)) {
 		preview = Editor::ImageModified(image->data, image->modifications);
 		animated = animationPreview = image->animated;
+		hasModifications = !image->modifications.empty();
 	} else if (const auto video = std::get_if<PreparedFileInformation::Video>(
 			&file.information->media)) {
 		preview = video->thumbnail;
@@ -34,30 +37,34 @@ SingleMediaPreview *SingleMediaPreview::Create(
 	}
 	if (preview.isNull()) {
 		return nullptr;
-	} else if (!animated && !ValidateThumbDimensions(
-			preview.width(),
-			preview.height())) {
+	} else if (!animated
+		&& !ValidateThumbDimensions(preview.width(), preview.height())
+		&& !hasModifications) {
 		return nullptr;
 	}
 	return CreateChild<SingleMediaPreview>(
 		parent,
+		st,
 		std::move(gifPaused),
 		preview,
 		animated,
 		Core::IsMimeSticker(file.information->filemime),
+		file.spoiler,
 		animationPreview ? file.path : QString(),
 		type);
 }
 
 SingleMediaPreview::SingleMediaPreview(
 	QWidget *parent,
+	const style::ComposeControls &st,
 	Fn<bool()> gifPaused,
 	QImage preview,
 	bool animated,
 	bool sticker,
+	bool spoiler,
 	const QString &animatedPreviewPath,
 	AttachControls::Type type)
-: AbstractSingleMediaPreview(parent, type)
+: AbstractSingleMediaPreview(parent, st, type)
 , _gifPaused(std::move(gifPaused))
 , _sticker(sticker) {
 	Expects(!preview.isNull());
@@ -65,20 +72,24 @@ SingleMediaPreview::SingleMediaPreview(
 
 	preparePreview(preview);
 	prepareAnimatedPreview(animatedPreviewPath, animated);
-	updatePhotoEditorButton();
+	setSpoiler(spoiler);
+}
+
+bool SingleMediaPreview::supportsSpoilers() const {
+	return !_sticker || sendWay().sendImagesAsPhotos();
 }
 
 bool SingleMediaPreview::drawBackground() const {
 	return !_sticker;
 }
 
-bool SingleMediaPreview::tryPaintAnimation(Painter &p) {
+bool SingleMediaPreview::tryPaintAnimation(QPainter &p) {
 	if (_gifPreview && _gifPreview->started()) {
 		const auto paused = _gifPaused();
 		const auto frame = _gifPreview->current({
 			.frame = QSize(previewWidth(), previewHeight()),
 		}, paused ? 0 : crl::now());
-		p.drawPixmap(previewLeft(), previewTop(), frame);
+		p.drawImage(previewLeft(), previewTop(), frame);
 		return true;
 	} else if (_lottiePreview && _lottiePreview->ready()) {
 		const auto frame = _lottiePreview->frame();

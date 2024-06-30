@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/flags.h"
 #include "data/data_photo.h"
 #include "data/data_document.h"
 
@@ -16,23 +17,35 @@ namespace Data {
 class Session;
 } // namespace Data
 
-enum class WebPageType {
+namespace Iv {
+class Data;
+} // namespace Iv
+
+enum class WebPageType : uint8 {
+	None,
+
 	Message,
+	Album,
 
 	Group,
 	GroupWithRequest,
 	Channel,
 	ChannelWithRequest,
+	ChannelBoost,
+	Giftcode,
 
 	Photo,
 	Video,
+	Document,
 
 	User,
 	Bot,
 	Profile,
+	BotApp,
 
 	WallPaper,
 	Theme,
+	Story,
 
 	Article,
 	ArticleWithIV,
@@ -40,8 +53,8 @@ enum class WebPageType {
 	VoiceChat,
 	Livestream,
 };
-
-WebPageType ParseWebPageType(const MTPDwebPage &type);
+[[nodiscard]] WebPageType ParseWebPageType(const MTPDwebPage &type);
+[[nodiscard]] bool IgnoreIv(WebPageType type);
 
 struct WebPageCollage {
 	using Item = std::variant<PhotoData*, DocumentData*>;
@@ -57,6 +70,7 @@ struct WebPageCollage {
 
 struct WebPageData {
 	WebPageData(not_null<Data::Session*> owner, const WebPageId &id);
+	~WebPageData();
 
 	[[nodiscard]] Data::Session &owner() const;
 	[[nodiscard]] Main::Session &session() const;
@@ -68,11 +82,14 @@ struct WebPageData {
 		const QString &newSiteName,
 		const QString &newTitle,
 		const TextWithEntities &newDescription,
+		FullStoryId newStoryId,
 		PhotoData *newPhoto,
 		DocumentData *newDocument,
 		WebPageCollage &&newCollage,
+		std::unique_ptr<Iv::Data> newIv,
 		int newDuration,
 		const QString &newAuthor,
+		bool newHasLargeMedia,
 		int newPendingTill);
 
 	static void ApplyChanges(
@@ -80,20 +97,28 @@ struct WebPageData {
 		ChannelData *channel,
 		const MTPmessages_Messages &result);
 
-	WebPageId id = 0;
-	WebPageType type = WebPageType::Article;
+	[[nodiscard]] QString displayedSiteName() const;
+	[[nodiscard]] bool computeDefaultSmallMedia() const;
+	[[nodiscard]] bool suggestEnlargePhoto() const;
+
+	const WebPageId id = 0;
+	WebPageType type = WebPageType::None;
 	QString url;
 	QString displayUrl;
 	QString siteName;
 	QString title;
 	TextWithEntities description;
-	int duration = 0;
+	FullStoryId storyId;
 	QString author;
 	PhotoData *photo = nullptr;
 	DocumentData *document = nullptr;
 	WebPageCollage collage;
-	int pendingTill = 0;
-	int version = 0;
+	std::unique_ptr<Iv::Data> iv;
+	int duration = 0;
+	TimeId pendingTill = 0;
+	uint32 version : 30 = 0;
+	uint32 hasLargeMedia : 1 = 0;
+	uint32 failed : 1 = 0;
 
 private:
 	void replaceDocumentGoodThumbnail();

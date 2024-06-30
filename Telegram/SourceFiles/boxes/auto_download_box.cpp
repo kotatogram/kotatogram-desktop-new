@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session_settings.h"
 #include "data/data_session.h"
 #include "data/data_auto_download.h"
+#include "ui/vertical_list.h"
 #include "ui/widgets/continuous_sliders.h"
 #include "ui/widgets/buttons.h"
 #include "ui/wrap/vertical_layout.h"
@@ -31,27 +32,26 @@ constexpr auto kDefaultAutoPlayLimit = 50 * kMegabyte;
 
 using Type = Data::AutoDownload::Type;
 
-not_null<int*> AddSizeLimitSlider(
+not_null<int64*> AddSizeLimitSlider(
 		not_null<Ui::VerticalLayout*> container,
-		const base::flat_map<Type, int> &values,
-		int defaultValue) {
-	using namespace Settings;
-	using Pair = base::flat_map<Type, int>::value_type;
+		const base::flat_map<Type, int64> &values,
+		int64 defaultValue) {
+	using Pair = base::flat_map<Type, int64>::value_type;
 
-	const auto limits = Ui::CreateChild<rpl::event_stream<int>>(
+	const auto limits = Ui::CreateChild<rpl::event_stream<int64>>(
 		container.get());
 	const auto currentLimit = ranges::max_element(
 		values,
 		std::less<>(),
 		[](Pair pair) { return pair.second; })->second;
-	const auto initialLimit = currentLimit ? currentLimit : defaultValue;
-	const auto result = Ui::CreateChild<int>(container.get(), initialLimit);
-	AddButtonWithLabel(
+	const auto startLimit = currentLimit ? currentLimit : defaultValue;
+	const auto result = Ui::CreateChild<int64>(container.get(), startLimit);
+	Settings::AddButtonWithLabel(
 		container,
 		tr::lng_media_size_limit(),
 		limits->events_starting_with_copy(
-			initialLimit
-		) | rpl::map([](int value) {
+			startLimit
+		) | rpl::map([](int64 value) {
 			return tr::lng_media_size_up_to(
 				tr::now,
 				lt_size,
@@ -67,7 +67,7 @@ not_null<int*> AddSizeLimitSlider(
 		Export::View::kSizeValueCount,
 		Export::View::SizeLimitByIndex,
 		*result,
-		[=](int value) {
+		[=](int64 value) {
 			*result = value;
 			limits->fire_copy(value);
 		});
@@ -92,7 +92,7 @@ void AutoDownloadBox::setupContent() {
 	using namespace Settings;
 	using namespace Data::AutoDownload;
 	using Type = Data::AutoDownload::Type;
-	using Pair = base::flat_map<Type, int>::value_type;
+	using Pair = base::flat_map<Type, int64>::value_type;
 
 	setTitle(tr::lng_profile_settings_section());
 
@@ -105,15 +105,15 @@ void AutoDownloadBox::setupContent() {
 		std::move(wrap)));
 
 	const auto add = [&](
-			not_null<base::flat_map<Type, int>*> values,
+			not_null<base::flat_map<Type, int64>*> values,
 			Type type,
 			rpl::producer<QString> label) {
 		const auto value = settings->bytesLimit(_source, type);
-		AddButton(
+		content->add(object_ptr<Ui::SettingsButton>(
 			content,
 			std::move(label),
-			st::settingsButton
-		)->toggleOn(
+			st::settingsButtonNoIcon
+		))->toggleOn(
 			rpl::single(value > 0)
 		)->toggledChanges(
 		) | rpl::start_with_next([=](bool enabled) {
@@ -124,7 +124,7 @@ void AutoDownloadBox::setupContent() {
 
 	AddSubsectionTitle(content, tr::lng_media_auto_title());
 
-	const auto downloadValues = Ui::CreateChild<base::flat_map<Type, int>>(
+	const auto downloadValues = Ui::CreateChild<base::flat_map<Type, int64>>(
 		content);
 	add(downloadValues, Type::Photo, tr::lng_media_photo_title());
 	add(downloadValues, Type::File, tr::lng_media_file_title());
@@ -137,7 +137,7 @@ void AutoDownloadBox::setupContent() {
 	AddSkip(content);
 	AddSubsectionTitle(content, tr::lng_media_auto_play());
 
-	const auto autoPlayValues = Ui::CreateChild<base::flat_map<Type, int>>(
+	const auto autoPlayValues = Ui::CreateChild<base::flat_map<Type, int64>>(
 		content);
 	add(
 		autoPlayValues,
@@ -162,7 +162,7 @@ void AutoDownloadBox::setupContent() {
 			*downloadValues,
 			*autoPlayValues);
 		auto allowMore = values | ranges::views::filter([&](Pair pair) {
-			const auto [type, enabled] = pair;
+			const auto &[type, enabled] = pair;
 			const auto value = enabled ? limitByType(type) : 0;
 			const auto old = settings->bytesLimit(_source, type);
 			return (old < value);
@@ -170,7 +170,7 @@ void AutoDownloadBox::setupContent() {
 			return pair.first;
 		});
 		const auto less = ranges::any_of(*autoPlayValues, [&](Pair pair) {
-			const auto [type, enabled] = pair;
+			const auto &[type, enabled] = pair;
 			const auto value = enabled ? limitByType(type) : 0;
 			return value < settings->bytesLimit(_source, type);
 		});
@@ -179,7 +179,7 @@ void AutoDownloadBox::setupContent() {
 			allowMore.end());
 
 		const auto changed = ranges::any_of(values, [&](Pair pair) {
-			const auto [type, enabled] = pair;
+			const auto &[type, enabled] = pair;
 			const auto value = enabled ? limitByType(type) : 0;
 			return value != settings->bytesLimit(_source, type);
 		});

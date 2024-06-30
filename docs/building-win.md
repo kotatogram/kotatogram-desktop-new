@@ -20,16 +20,9 @@ You will require **api_id** and **api_hash** to access the Telegram API servers.
 
 ## Install third party software
 
-* Download **Strawberry Perl** installer from [http://strawberryperl.com/](http://strawberryperl.com/) and install to ***BuildPath*\\ThirdParty\\Strawberry**
-* Download **NASM** installer from [http://www.nasm.us](http://www.nasm.us) and install to ***BuildPath*\\ThirdParty\\NASM**
-* Download **Yasm** executable from [http://yasm.tortall.net/Download.html](http://yasm.tortall.net/Download.html), rename to *yasm.exe* and put to ***BuildPath*\\ThirdParty\\yasm**
-* Download **MSYS2** installer from [http://www.msys2.org/](http://www.msys2.org/) and install to ***BuildPath*\\ThirdParty\\msys64**
-* Download **jom** archive from [http://download.qt.io/official_releases/jom/jom.zip](http://download.qt.io/official_releases/jom/jom.zip) and unpack to ***BuildPath*\\ThirdParty\\jom**
-* Download **Python 3.9** installer from [https://www.python.org/downloads/](https://www.python.org/downloads/) and install to ***BuildPath*\\ThirdParty\\Python39**
-* Download **CMake 3.21 or later** installer from [https://cmake.org/download/](https://cmake.org/download/) and install to ***BuildPath*\\ThirdParty\\cmake**
-* Download **Ninja** executable from [https://github.com/ninja-build/ninja/releases/download/v1.7.2/ninja-win.zip](https://github.com/ninja-build/ninja/releases/download/v1.7.2/ninja-win.zip) and unpack to ***BuildPath*\\ThirdParty\\Ninja**
+* Download **Python 3.10** installer from [https://www.python.org/downloads/](https://www.python.org/downloads/) and install it with adding to PATH.
+* Download **CMake 3.21 or later** installer from [https://cmake.org/download/](https://cmake.org/download/) and install it.
 * Download **Git** installer from [https://git-scm.com/download/win](https://git-scm.com/download/win) and install it.
-* Download **NuGet** executable from [https://dist.nuget.org/win-x86-commandline/latest/nuget.exe](https://dist.nuget.org/win-x86-commandline/latest/nuget.exe) and put to ***BuildPath*\\ThirdParty\\NuGet**
 
 Open **x86 Native Tools Command Prompt for VS 2022.bat**, go to ***BuildPath*** and run
 
@@ -48,7 +41,7 @@ Open **x86 Native Tools Command Prompt for VS 2022.bat**, go to ***BuildPath*** 
 
 Go to ***BuildPath*\\kotatogram-desktop\\Telegram** and run (using [your **api_id** and **api_hash**](#obtain-your-api-credentials))
 
-    configure.bat -D TDESKTOP_API_ID=YOUR_API_ID -D TDESKTOP_API_HASH=YOUR_API_HASH -D DESKTOP_APP_USE_PACKAGED=OFF -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+    configure.bat -D TDESKTOP_API_ID=YOUR_API_ID -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
 
 If you want to build with crash reporter, use `-D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF` instead of `-D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON`.
 

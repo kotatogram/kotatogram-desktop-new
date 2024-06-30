@@ -8,14 +8,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_key.h"
 
 #include "data/data_folder.h"
+#include "data/data_forum_topic.h"
+#include "data/data_saved_sublist.h"
 #include "history/history.h"
 
 namespace Dialogs {
-namespace {
-
-using Folder = Data::Folder;
-
-} // namespace
 
 Key::Key(History *history) : _value(history) {
 }
@@ -23,10 +20,28 @@ Key::Key(History *history) : _value(history) {
 Key::Key(Data::Folder *folder) : _value(folder) {
 }
 
+Key::Key(Data::Thread *thread) : _value(thread) {
+}
+
+Key::Key(Data::ForumTopic *topic) : _value(topic) {
+}
+
+Key::Key(Data::SavedSublist *sublist) : _value(sublist) {
+}
+
 Key::Key(not_null<History*> history) : _value(history) {
 }
 
+Key::Key(not_null<Data::Thread*> thread) : _value(thread) {
+}
+
 Key::Key(not_null<Data::Folder*> folder) : _value(folder) {
+}
+
+Key::Key(not_null<Data::ForumTopic*> topic) : _value(topic) {
+}
+
+Key::Key(not_null<Data::SavedSublist*> sublist) : _value(sublist) {
 }
 
 not_null<Entry*> Key::entry() const {
@@ -39,12 +54,31 @@ History *Key::history() const {
 	return _value ? _value->asHistory() : nullptr;
 }
 
-Folder *Key::folder() const {
+Data::Folder *Key::folder() const {
 	return _value ? _value->asFolder() : nullptr;
 }
 
+Data::ForumTopic *Key::topic() const {
+	return _value ? _value->asTopic() : nullptr;
+}
+
+Data::Thread *Key::thread() const {
+	return _value ? _value->asThread() : nullptr;
+}
+
+Data::SavedSublist *Key::sublist() const {
+	return _value ? _value->asSublist() : nullptr;
+}
+
+History *Key::owningHistory() const {
+	if (const auto thread = this->thread()) {
+		return thread->owningHistory();
+	}
+	return nullptr;
+}
+
 PeerData *Key::peer() const {
-	if (const auto history = this->history()) {
+	if (const auto history = owningHistory()) {
 		return history->peer;
 	}
 	return nullptr;

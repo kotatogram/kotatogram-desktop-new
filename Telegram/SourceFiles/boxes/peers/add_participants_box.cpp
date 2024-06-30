@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/add_participants_box.h"
 
 #include "api/api_chat_participants.h"
+#include "api/api_invite_links.h"
 #include "boxes/peers/edit_participant_box.h"
 #include "boxes/peers/edit_peer_type_box.h"
 #include "ui/boxes/confirm_box.h"
@@ -21,23 +22,59 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "history/history.h"
 #include "dialogs/dialogs_indexed_list.h"
+#include "ui/text/text_utilities.h" // Ui::Text::RichLangValue
+#include "ui/toast/toast.h"
 #include "ui/widgets/buttons.h"
+#include "ui/widgets/checkbox.h"
 #include "ui/wrap/padding_wrap.h"
 #include "base/unixtime.h"
 #include "main/main_session.h"
 #include "mtproto/mtproto_config.h"
-#include "mainwidget.h"
-#include "mainwindow.h"
 #include "window/window_session_controller.h"
 #include "info/profile/info_profile_icon.h"
 #include "apiwrap.h"
-#include "facades.h" // Ui::showPeerHistory
 #include "styles/style_boxes.h"
+#include "styles/style_layers.h"
 
 namespace {
 
 constexpr auto kParticipantsFirstPageCount = 16;
 constexpr auto kParticipantsPerPage = 200;
+
+class InviteForbiddenController final : public PeerListController {
+public:
+	InviteForbiddenController(
+		not_null<PeerData*> peer,
+		std::vector<not_null<UserData*>> users);
+
+	Main::Session &session() const override;
+	void prepare() override;
+	void rowClicked(not_null<PeerListRow*> row) override;
+
+	[[nodiscard]] bool canInvite() const {
+		return _can;
+	}
+	[[nodiscard]] rpl::producer<int> selectedValue() const {
+		return _selected.value();
+	}
+
+	void send(
+		std::vector<not_null<PeerData*>> list,
+		Ui::ShowPtr show,
+		Fn<void()> close);
+
+private:
+	void appendRow(not_null<UserData*> user);
+	[[nodiscard]] std::unique_ptr<PeerListRow> createRow(
+		not_null<UserData*> user) const;
+
+	const not_null<PeerData*> _peer;
+	const std::vector<not_null<UserData*>> _users;
+	const bool _can = false;
+	rpl::variable<int> _selected;
+	bool _sending = false;
+
+};
 
 base::flat_set<not_null<UserData*>> GetAlreadyInFromPeer(PeerData *peer) {
 	if (!peer) {
@@ -46,12 +83,152 @@ base::flat_set<not_null<UserData*>> GetAlreadyInFromPeer(PeerData *peer) {
 	if (const auto chat = peer->asChat()) {
 		return chat->participants;
 	} else if (const auto channel = peer->asChannel()) {
-		if (channel->isMegagroup()) {
+		if (channel->isMegagroup() && channel->canViewMembers()) {
 			const auto &participants = channel->mgInfo->lastParticipants;
 			return { participants.cbegin(), participants.cend() };
 		}
 	}
 	return {};
+}
+
+InviteForbiddenController::InviteForbiddenController(
+	not_null<PeerData*> peer,
+	std::vector<not_null<UserData*>> users)
+: _peer(peer)
+, _users(std::move(users))
+, _can(peer->isChat()
+	? peer->asChat()->canHaveInviteLink()
+	: peer->asChannel()->canHaveInviteLink())
+, _selected(_can ? int(_users.size()) : 0) {
+}
+
+Main::Session &InviteForbiddenController::session() const {
+	return _peer->session();
+}
+
+void InviteForbiddenController::prepare() {
+	const auto broadcast = _peer->isBroadcast();
+	const auto count = int(_users.size());
+	const auto phraseCounted = !_can
+		? tr::lng_via_link_cant_many
+		: broadcast
+		? tr::lng_via_link_channel_many
+		: tr::lng_via_link_group_many;
+	const auto phraseNamed = !_can
+		? tr::lng_via_link_cant_one
+		: broadcast
+		? tr::lng_via_link_channel_one
+		: tr::lng_via_link_group_one;
+	auto text = (count != 1)
+		? phraseCounted(
+			lt_count,
+			rpl::single<float64>(count),
+			Ui::Text::RichLangValue)
+		: phraseNamed(
+			lt_user,
+			rpl::single(TextWithEntities{ _users.front()->name() }),
+			Ui::Text::RichLangValue);
+	delegate()->peerListSetAboveWidget(object_ptr<Ui::PaddingWrap<>>(
+		(QWidget*)nullptr,
+		object_ptr<Ui::FlatLabel>(
+			(QWidget*)nullptr,
+			std::move(text),
+			st::requestPeerRestriction),
+		st::boxRowPadding));
+	delegate()->peerListSetTitle(
+		_can ? tr::lng_profile_add_via_link() : tr::lng_via_link_cant());
+
+	for (const auto &user : _users) {
+		appendRow(user);
+	}
+	delegate()->peerListRefreshRows();
+}
+
+void InviteForbiddenController::rowClicked(not_null<PeerListRow*> row) {
+	if (!_can) {
+		return;
+	}
+	const auto checked = row->checked();
+	delegate()->peerListSetRowChecked(row, !checked);
+	_selected = _selected.current() + (checked ? -1 : 1);
+}
+
+void InviteForbiddenController::appendRow(not_null<UserData*> user) {
+	if (!delegate()->peerListFindRow(user->id.value)) {
+		auto row = createRow(user);
+		const auto raw = row.get();
+		delegate()->peerListAppendRow(std::move(row));
+		if (_can) {
+			delegate()->peerListSetRowChecked(raw, true);
+		}
+	}
+}
+
+void InviteForbiddenController::send(
+		std::vector<not_null<PeerData*>> list,
+		Ui::ShowPtr show,
+		Fn<void()> close) {
+	if (_sending || list.empty()) {
+		return;
+	}
+	_sending = true;
+	const auto chat = _peer->asChat();
+	const auto channel = _peer->asChannel();
+	const auto sendLink = [=] {
+		const auto link = chat ? chat->inviteLink() : channel->inviteLink();
+		if (link.isEmpty()) {
+			return false;
+		}
+		auto &api = _peer->session().api();
+		auto options = Api::SendOptions();
+		for (const auto &to : list) {
+			const auto history = to->owner().history(to);
+			auto message = Api::MessageToSend(
+				Api::SendAction(history, options));
+			message.textWithTags = { link };
+			message.action.clearDraft = false;
+			api.sendMessage(std::move(message));
+		}
+		auto text = (list.size() == 1)
+			? tr::lng_via_link_shared_one(
+				tr::now,
+				lt_user,
+				TextWithEntities{ list.front()->name() },
+				Ui::Text::RichLangValue)
+			: tr::lng_via_link_shared_many(
+				tr::now,
+				lt_count,
+				int(list.size()),
+				Ui::Text::RichLangValue);
+		close();
+		show->showToast(std::move(text));
+		return true;
+	};
+	const auto sendForFull = [=] {
+		if (!sendLink()) {
+			_peer->session().api().inviteLinks().create(_peer, [=](auto) {
+				if (!sendLink()) {
+					close();
+				}
+			});
+		}
+	};
+	if (_peer->isFullLoaded()) {
+		sendForFull();
+	} else if (!sendLink()) {
+		_peer->session().api().requestFullPeer(_peer);
+		_peer->session().changes().peerUpdates(
+			_peer,
+			Data::PeerUpdate::Flag::FullInfo
+		) | rpl::start_with_next([=] {
+			sendForFull();
+		}, lifetime());
+	}
+}
+
+std::unique_ptr<PeerListRow> InviteForbiddenController::createRow(
+		not_null<UserData*> user) const {
+	return std::make_unique<PeerListRow>(user);
 }
 
 } // namespace
@@ -90,6 +267,10 @@ void AddParticipantsBoxController::subscribeToMigration() {
 }
 
 void AddParticipantsBoxController::rowClicked(not_null<PeerListRow*> row) {
+	const auto premiumRequiredError = WritePremiumRequiredError;
+	if (RecipientRow::ShowLockedError(this, row, premiumRequiredError)) {
+		return;
+	}
 	const auto &serverConfig = session().serverConfig();
 	auto count = fullCount();
 	auto limit = _peer && (_peer->isChat() || _peer->isMegagroup())
@@ -100,16 +281,11 @@ void AddParticipantsBoxController::rowClicked(not_null<PeerListRow*> row) {
 		updateTitle();
 	} else if (const auto channel = _peer ? _peer->asChannel() : nullptr) {
 		if (!_peer->isMegagroup()) {
-			Ui::show(
-				Box<MaxInviteBox>(_peer->asChannel()),
-				Ui::LayerOption::KeepOther);
+			showBox(Box<MaxInviteBox>(_peer->asChannel()));
 		}
 	} else if (count >= serverConfig.chatSizeMax
 		&& count < serverConfig.megagroupSizeMax) {
-		Ui::show(
-			Box<Ui::InformBox>(
-				tr::lng_profile_add_more_after_create(tr::now)),
-			Ui::LayerOption::KeepOther);
+		showBox(Ui::MakeInformBox(tr::lng_profile_add_more_after_create()));
 	}
 }
 
@@ -120,6 +296,8 @@ void AddParticipantsBoxController::itemDeselectedHook(
 
 void AddParticipantsBoxController::prepareViewHook() {
 	updateTitle();
+
+	TrackPremiumRequiredChanges(this, lifetime());
 }
 
 int AddParticipantsBoxController::alreadyInCount() const {
@@ -145,6 +323,7 @@ bool AddParticipantsBoxController::isAlreadyIn(
 	} else if (const auto channel = _peer->asChannel()) {
 		return _alreadyIn.contains(user)
 			|| (channel->isMegagroup()
+				&& channel->canViewMembers()
 				&& base::contains(channel->mgInfo->lastParticipants, user));
 	}
 	Unexpected("User in AddParticipantsBoxController::isAlreadyIn");
@@ -159,8 +338,10 @@ std::unique_ptr<PeerListRow> AddParticipantsBoxController::createRow(
 	if (user->isSelf()) {
 		return nullptr;
 	}
-	auto result = std::make_unique<PeerListRow>(user);
-	if (isAlreadyIn(user)) {
+	const auto already = isAlreadyIn(user);
+	const auto maybeLockedSt = already ? nullptr : &computeListSt().item;
+	auto result = std::make_unique<RecipientRow>(user, maybeLockedSt);
+	if (already) {
 		result->setDisabledState(PeerListRow::State::DisabledChecked);
 	}
 	return result;
@@ -171,7 +352,7 @@ void AddParticipantsBoxController::updateTitle() {
 		&& _peer->isChannel()
 		&& !_peer->isMegagroup())
 		? QString()
-		: qsl("%1 / %2"
+		: (u"%1 / %2"_q
 		).arg(fullCount()
 		).arg(session().serverConfig().megagroupSizeMax);
 	delegate()->peerListSetTitle(tr::lng_profile_add_participant());
@@ -189,6 +370,13 @@ bool AddParticipantsBoxController::needsInviteLinkButton() {
 	return _peer->asChat()->canHaveInviteLink();
 }
 
+QPointer<Ui::BoxContent> AddParticipantsBoxController::showBox(
+		object_ptr<Ui::BoxContent> box) const {
+	const auto weak = Ui::MakeWeak(box.data());
+	delegate()->peerListUiShow()->showBox(std::move(box));
+	return weak;
+}
+
 void AddParticipantsBoxController::addInviteLinkButton() {
 	if (!needsInviteLinkButton()) {
 		return;
@@ -200,12 +388,20 @@ void AddParticipantsBoxController::addInviteLinkButton() {
 			tr::lng_profile_add_via_link(),
 			st::inviteViaLinkButton),
 		style::margins(0, st::membersMarginTop, 0, 0));
-	object_ptr<Info::Profile::FloatingIcon>(
+
+	const auto icon = Ui::CreateChild<Info::Profile::FloatingIcon>(
 		button->entity(),
 		st::inviteViaLinkIcon,
-		st::inviteViaLinkIconPosition);
+		QPoint());
+	button->entity()->heightValue(
+	) | rpl::start_with_next([=](int height) {
+		icon->moveToLeft(
+			st::inviteViaLinkIconPosition.x(),
+			(height - st::inviteViaLinkIcon.height()) / 2);
+	}, icon->lifetime());
+
 	button->entity()->setClickedCallback([=] {
-		Ui::show(Box<EditPeerTypeBox>(_peer), Ui::LayerOption::KeepOther);
+		showBox(Box<EditPeerTypeBox>(_peer));
 	});
 	button->entity()->events(
 	) | rpl::filter([=](not_null<QEvent*> e) {
@@ -214,10 +410,12 @@ void AddParticipantsBoxController::addInviteLinkButton() {
 		delegate()->peerListMouseLeftGeometry();
 	}, button->lifetime());
 	delegate()->peerListSetAboveWidget(std::move(button));
+	delegate()->peerListRefreshRows();
 }
 
-bool AddParticipantsBoxController::inviteSelectedUsers(
-		not_null<PeerListBox*> box) const {
+void AddParticipantsBoxController::inviteSelectedUsers(
+		not_null<PeerListBox*> box,
+		Fn<void()> done) const {
 	Expects(_peer != nullptr);
 
 	const auto rows = box->collectSelectedRows();
@@ -230,10 +428,57 @@ bool AddParticipantsBoxController::inviteSelectedUsers(
 		return not_null<UserData*>(peer->asUser());
 	}) | ranges::to_vector;
 	if (users.empty()) {
-		return false;
+		return;
 	}
-	_peer->session().api().chatParticipants().add(_peer, users);
-	return true;
+	const auto show = box->uiShow();
+	const auto request = [=](bool checked) {
+		_peer->session().api().chatParticipants().add(
+			_peer,
+			users,
+			show,
+			checked);
+	};
+	if (_peer->isChannel()) {
+		request(false);
+		return done();
+	}
+	show->showBox(Box([=](not_null<Ui::GenericBox*> box) {
+		auto checkbox = object_ptr<Ui::Checkbox>(
+			box.get(),
+			tr::lng_participant_invite_history(),
+			true,
+			st::defaultBoxCheckbox);
+		const auto weak = Ui::MakeWeak(checkbox.data());
+
+		auto text = (users.size() == 1)
+			? tr::lng_participant_invite_sure(
+				tr::now,
+				lt_user,
+				{ users.front()->name()},
+				lt_group,
+				{ _peer->name()},
+				Ui::Text::RichLangValue)
+			: tr::lng_participant_invite_sure_many(
+				tr::now,
+				lt_count,
+				int(users.size()),
+				lt_group,
+				{ _peer->name() },
+				Ui::Text::RichLangValue);
+		Ui::ConfirmBox(box, {
+			.text = std::move(text),
+			.confirmed = crl::guard(weak, [=](Fn<void()> &&close) {
+				request(weak->checked());
+				done();
+				close();
+			}),
+			.confirmText = tr::lng_participant_invite(),
+		});
+
+		auto padding = st::boxPadding;
+		padding.setTop(padding.bottom());
+		box->addRow(std::move(checkbox), std::move(padding));
+	}));
 }
 
 void AddParticipantsBoxController::Start(
@@ -241,19 +486,20 @@ void AddParticipantsBoxController::Start(
 		not_null<ChatData*> chat) {
 	auto controller = std::make_unique<AddParticipantsBoxController>(chat);
 	const auto weak = controller.get();
+	const auto parent = navigation->parentController();
 	auto initBox = [=](not_null<PeerListBox*> box) {
 		box->addButton(tr::lng_participant_invite(), [=] {
-			if (weak->inviteSelectedUsers(box)) {
-				Ui::showPeerHistory(chat, ShowAtTheEndMsgId);
-			}
+			weak->inviteSelectedUsers(box, [=] {
+				parent->showPeerHistory(
+					chat,
+					Window::SectionShow::Way::ClearStack,
+					ShowAtTheEndMsgId);
+			});
 		});
 		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 	};
-	Ui::show(
-		Box<PeerListBox>(
-			std::move(controller),
-			std::move(initBox)),
-		Ui::LayerOption::KeepOther);
+	parent->show(
+		Box<PeerListBox>(std::move(controller), std::move(initBox)));
 }
 
 void AddParticipantsBoxController::Start(
@@ -265,35 +511,39 @@ void AddParticipantsBoxController::Start(
 		channel,
 		std::move(alreadyIn));
 	const auto weak = controller.get();
+	const auto parent = navigation->parentController();
 	auto initBox = [=](not_null<PeerListBox*> box) {
 		box->addButton(tr::lng_participant_invite(), [=] {
-			if (weak->inviteSelectedUsers(box)) {
+			weak->inviteSelectedUsers(box, [=] {
 				if (channel->isMegagroup()) {
-					Ui::showPeerHistory(channel, ShowAtTheEndMsgId);
+					parent->showPeerHistory(
+						channel,
+						Window::SectionShow::Way::ClearStack,
+						ShowAtTheEndMsgId);
 				} else {
 					box->closeBox();
 				}
-			}
+			});
 		});
 		box->addButton(
 			justCreated ? tr::lng_create_group_skip() : tr::lng_cancel(),
 			[=] { box->closeBox(); });
 		if (justCreated) {
+			const auto weak = base::make_weak(parent);
 			box->boxClosing() | rpl::start_with_next([=] {
 				auto params = Window::SectionShow();
 				params.activation = anim::activation::background;
-				navigation->parentController()->showPeerHistory(
-					channel,
-					params,
-					ShowAtTheEndMsgId);
+				if (const auto strong = weak.get()) {
+					strong->showPeerHistory(
+						channel,
+						params,
+						ShowAtTheEndMsgId);
+				}
 			}, box->lifetime());
 		}
 	};
-	Ui::show(
-		Box<PeerListBox>(
-			std::move(controller),
-			std::move(initBox)),
-		Ui::LayerOption::KeepOther);
+	parent->show(
+		Box<PeerListBox>(std::move(controller), std::move(initBox)));
 }
 
 void AddParticipantsBoxController::Start(
@@ -307,6 +557,80 @@ void AddParticipantsBoxController::Start(
 		not_null<Window::SessionNavigation*> navigation,
 		not_null<ChannelData*> channel) {
 	Start(navigation, channel, {}, true);
+}
+
+std::vector<not_null<UserData*>> CollectForbiddenUsers(
+		not_null<Main::Session*> session,
+		const MTPUpdates &updates) {
+	const auto owner = &session->data();
+	auto result = std::vector<not_null<UserData*>>();
+	const auto add = [&](const MTPUpdate &update) {
+		if (update.type() == mtpc_updateGroupInvitePrivacyForbidden) {
+			const auto user = owner->userLoaded(UserId(
+				update.c_updateGroupInvitePrivacyForbidden().vuser_id()));
+			if (user) {
+				result.push_back(user);
+			}
+		}
+	};
+	const auto collect = [&](const MTPVector<MTPUpdate> &updates) {
+		for (const auto &update : updates.v) {
+			add(update);
+		}
+	};
+	updates.match([&](const MTPDupdates &data) {
+		collect(data.vupdates());
+	}, [&](const MTPDupdatesCombined &data) {
+		collect(data.vupdates());
+	}, [&](const MTPDupdateShort &data) {
+		add(data.vupdate());
+	}, [](const auto &other) {
+		LOG(("Api Error: CollectForbiddenUsers for wrong updates type."));
+	});
+	return result;
+}
+
+bool ChatInviteForbidden(
+		std::shared_ptr<Ui::Show> show,
+		not_null<PeerData*> peer,
+		std::vector<not_null<UserData*>> forbidden) {
+	if (forbidden.empty() || !show || !show->valid()) {
+		return false;
+	}
+	auto controller = std::make_unique<InviteForbiddenController>(
+		peer,
+		std::move(forbidden));
+	const auto weak = controller.get();
+	auto initBox = [=](not_null<PeerListBox*> box) {
+		const auto can = weak->canInvite();
+		if (!can) {
+			box->addButton(tr::lng_close(), [=] {
+				box->closeBox();
+			});
+			return;
+		}
+		weak->selectedValue(
+		) | rpl::map(
+			rpl::mappers::_1 > 0
+		) | rpl::distinct_until_changed(
+		) | rpl::start_with_next([=](bool has) {
+			box->clearButtons();
+			if (has) {
+				box->addButton(tr::lng_via_link_send(), [=] {
+					weak->send(
+						box->collectSelectedRows(),
+						box->uiShow(),
+						crl::guard(box, [=] { box->closeBox(); }));
+				});
+			}
+			box->addButton(tr::lng_create_group_skip(), [=] {
+				box->closeBox();
+			});
+		}, box->lifetime());
+	};
+	show->showBox(
+		Box<PeerListBox>(std::move(controller), std::move(initBox)));
+	return true;
 }
 
 AddSpecialBoxController::AddSpecialBoxController(
@@ -346,6 +670,13 @@ void AddSpecialBoxController::migrate(
 		not_null<ChannelData*> channel) {
 	_peer = channel;
 	_additional.migrate(chat, channel);
+}
+
+QPointer<Ui::BoxContent> AddSpecialBoxController::showBox(
+		object_ptr<Ui::BoxContent> box) const {
+	const auto weak = Ui::MakeWeak(box.data());
+	delegate()->peerListUiShow()->showBox(std::move(box));
+	return weak;
 }
 
 std::unique_ptr<PeerListRow> AddSpecialBoxController::createSearchRow(
@@ -569,61 +900,53 @@ void AddSpecialBoxController::showAdmin(
 		if (canAddMembers) {
 			if (canBanMembers) {
 				if (!sure) {
-					_editBox = Ui::show(
-						Box<Ui::ConfirmBox>(
-							tr::lng_sure_add_admin_unremove(tr::now),
-							showAdminSure),
-						Ui::LayerOption::KeepOther);
+					_editBox = showBox(
+						Ui::MakeConfirmBox({
+							tr::lng_sure_add_admin_unremove(),
+							showAdminSure
+						}));
 					return;
 				}
 			} else {
-				Ui::show(Box<Ui::InformBox>(
-					tr::lng_error_cant_add_admin_unban(tr::now)),
-					Ui::LayerOption::KeepOther);
+				showBox(
+					Ui::MakeInformBox(tr::lng_error_cant_add_admin_unban()));
 				return;
 			}
 		} else {
-			Ui::show(Box<Ui::InformBox>(
-				tr::lng_error_cant_add_admin_invite(tr::now)),
-				Ui::LayerOption::KeepOther);
+			showBox(Ui::MakeInformBox(tr::lng_error_cant_add_admin_invite()));
 			return;
 		}
 	} else if (_additional.restrictedRights(user).has_value()) {
 		// The user is restricted.
 		if (canBanMembers) {
 			if (!sure) {
-				_editBox = Ui::show(
-					Box<Ui::ConfirmBox>(
-						tr::lng_sure_add_admin_unremove(tr::now),
-						showAdminSure),
-					Ui::LayerOption::KeepOther);
+				_editBox = showBox(
+					Ui::MakeConfirmBox({
+						tr::lng_sure_add_admin_unremove(),
+						showAdminSure
+					}));
 				return;
 			}
 		} else {
-			Ui::show(Box<Ui::InformBox>(
-				tr::lng_error_cant_add_admin_unban(tr::now)),
-				Ui::LayerOption::KeepOther);
+			showBox(Ui::MakeInformBox(tr::lng_error_cant_add_admin_unban()));
 			return;
 		}
 	} else if (_additional.isExternal(user)) {
 		// The user is not in the group yet.
 		if (canAddMembers) {
 			if (!sure) {
-				const auto text = ((_peer->isChat() || _peer->isMegagroup())
+				auto text = ((_peer->isChat() || _peer->isMegagroup())
 					? tr::lng_sure_add_admin_invite
-					: tr::lng_sure_add_admin_invite_channel)(tr::now);
-				_editBox = Ui::show(
-					Box<Ui::ConfirmBox>(
-						text,
-						showAdminSure),
-					Ui::LayerOption::KeepOther);
+					: tr::lng_sure_add_admin_invite_channel)();
+				_editBox = showBox(
+					Ui::MakeConfirmBox({
+						std::move(text),
+						showAdminSure
+					}));
 				return;
 			}
 		} else {
-			Ui::show(
-				Box<Ui::InformBox>(
-					tr::lng_error_cant_add_admin_invite(tr::now)),
-				Ui::LayerOption::KeepOther);
+			showBox(Ui::MakeInformBox(tr::lng_error_cant_add_admin_invite()));
 			return;
 		}
 	}
@@ -650,7 +973,7 @@ void AddSpecialBoxController::showAdmin(
 		});
 		box->setSaveCallback(SaveAdminCallback(_peer, user, done, fail));
 	}
-	_editParticipantBox = Ui::show(std::move(box), Ui::LayerOption::KeepOther);
+	_editParticipantBox = showBox(std::move(box));
 }
 
 void AddSpecialBoxController::editAdminDone(
@@ -691,17 +1014,15 @@ void AddSpecialBoxController::showRestricted(
 		// The user is an admin or creator.
 		if (!_additional.isCreator(user) && _additional.canEditAdmin(user)) {
 			if (!sure) {
-				_editBox = Ui::show(
-					Box<Ui::ConfirmBox>(
-						tr::lng_sure_ban_admin(tr::now),
-						showRestrictedSure),
-					Ui::LayerOption::KeepOther);
+				_editBox = showBox(
+					Ui::MakeConfirmBox({
+						tr::lng_sure_ban_admin(),
+						showRestrictedSure
+					}));
 				return;
 			}
 		} else {
-			Ui::show(
-				Box<Ui::InformBox>(tr::lng_error_cant_ban_admin(tr::now)),
-				Ui::LayerOption::KeepOther);
+			showBox(Ui::MakeInformBox(tr::lng_error_cant_ban_admin()));
 			return;
 		}
 	}
@@ -728,7 +1049,7 @@ void AddSpecialBoxController::showRestricted(
 		box->setSaveCallback(
 			SaveRestrictedCallback(_peer, user, done, fail));
 	}
-	_editParticipantBox = Ui::show(std::move(box), Ui::LayerOption::KeepOther);
+	_editParticipantBox = showBox(std::move(box));
 }
 
 void AddSpecialBoxController::editRestrictedDone(
@@ -762,17 +1083,15 @@ void AddSpecialBoxController::kickUser(
 		// The user is an admin or creator.
 		if (!_additional.isCreator(user) && _additional.canEditAdmin(user)) {
 			if (!sure) {
-				_editBox = Ui::show(
-					Box<Ui::ConfirmBox>(
-						tr::lng_sure_ban_admin(tr::now),
-						kickUserSure),
-					Ui::LayerOption::KeepOther);
+				_editBox = showBox(
+					Ui::MakeConfirmBox({
+						tr::lng_sure_ban_admin(),
+						kickUserSure
+					}));
 				return;
 			}
 		} else {
-			Ui::show(
-				Box<Ui::InformBox>(tr::lng_error_cant_ban_admin(tr::now)),
-				Ui::LayerOption::KeepOther);
+			showBox(Ui::MakeInformBox(tr::lng_error_cant_ban_admin()));
 			return;
 		}
 	}
@@ -784,10 +1103,8 @@ void AddSpecialBoxController::kickUser(
 			: tr::lng_profile_sure_kick_channel)(
 				tr::now,
 				lt_user,
-				participant->name);
-		_editBox = Ui::show(
-			Box<Ui::ConfirmBox>(text, kickUserSure),
-			Ui::LayerOption::KeepOther);
+				participant->name());
+		_editBox = showBox(Ui::MakeConfirmBox({ text, kickUserSure }));
 		return;
 	}
 

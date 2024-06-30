@@ -7,9 +7,7 @@ https://github.com/kotatogram/kotatogram-desktop/blob/dev/LEGAL
 */
 #pragma once
 
-#include "settings/settings_common.h"
-
-class BoxContent;
+#include "settings/settings_common_session.h"
 
 namespace Settings {
 
@@ -25,14 +23,23 @@ void SetupKotatoSystem(
 	not_null<Ui::VerticalLayout*> container);
 void SetupKotatoOther(not_null<Ui::VerticalLayout*> container);
 
-class Kotato : public Section {
+void KotatoTopBarOptions(const Ui::Menu::MenuCallback &addAction);
+
+class Kotato : public Section<Kotato> {
 public:
 	Kotato(
 		QWidget *parent,
 		not_null<Window::SessionController*> controller);
 
+	[[nodiscard]] rpl::producer<QString> title() override;
+
+	void fillTopBarMenu(
+		const Ui::Menu::MenuCallback &addAction) override;
+
 private:
 	void setupContent(not_null<Window::SessionController*> controller);
+
+	const not_null<Window::SessionController*> _controller;
 
 };
 

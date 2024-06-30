@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_window_title.h"
 
 #include "ui/image/image_prepare.h"
+#include "ui/painter.h"
 #include "core/application.h"
 #include "styles/style_window.h"
 #include "styles/style_media_view.h"
@@ -21,8 +22,8 @@ namespace Platform {
 // account, with 100% scale and without "px" dimensions, because thats
 // how it will look in real launched macOS app.
 int PreviewTitleHeight() {
-	if (auto window = Core::App().primaryWindow()) {
-		if (auto height = window->widget()->getCustomTitleHeight()) {
+	if (const auto window = Core::App().activePrimaryWindow()) {
+		if (const auto height = window->widget()->getCustomTitleHeight()) {
 			return height;
 		}
 	}
@@ -78,7 +79,7 @@ void PreviewWindowTitle(Painter &p, const style::palette &palette, QRect body, i
 	p.setPen(st::titleFgActive[palette]);
 	p.setFont(style::font(font.pixelSize(), 0, font.family()));
 
-	p.drawText(titleRect, qsl("Kotatogram"), style::al_center);
+	p.drawText(titleRect, u"Kotatogram"_q, style::al_center);
 
 	auto isGraphite = ([NSColor currentControlTint] == NSGraphiteControlTint);
 	auto buttonSkip = 8;

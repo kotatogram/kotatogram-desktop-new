@@ -20,12 +20,14 @@ namespace Api {
 namespace {
 
 constexpr auto kSharedMediaLimit = 100;
+constexpr auto kFirstSharedMediaLimit = 0;
 constexpr auto kDefaultSearchTimeoutMs = crl::time(200);
 
 } // namespace
 
-std::optional<MTPmessages_Search> PrepareSearchRequest(
+std::optional<SearchRequest> PrepareSearchRequest(
 		not_null<PeerData*> peer,
+		MsgId topicRootId,
 		Storage::SharedMediaType type,
 		const QString &query,
 		MsgId messageId,
@@ -66,7 +68,7 @@ std::optional<MTPmessages_Search> PrepareSearchRequest(
 
 	const auto minId = 0;
 	const auto maxId = 0;
-	const auto limit = messageId ? kSharedMediaLimit : 0;
+	const auto limit = messageId ? kSharedMediaLimit : kFirstSharedMediaLimit;
 	const auto offsetId = [&] {
 		switch (direction) {
 		case Data::LoadDirection::Before:
@@ -89,12 +91,15 @@ std::optional<MTPmessages_Search> PrepareSearchRequest(
 		offsetId.bare,
 		int64(0),
 		int64(0x3FFFFFFF)));
+	using Flag = MTPmessages_Search::Flag;
 	return MTPmessages_Search(
-		MTP_flags(0),
+		MTP_flags(topicRootId ? Flag::f_top_msg_id : Flag(0)),
 		peer->input,
 		MTP_string(query),
 		MTP_inputPeerEmpty(),
-		MTPint(), // top_msg_id
+		MTPInputPeer(), // saved_peer_id
+		MTPVector<MTPReaction>(), // saved_reaction
+		MTP_int(topicRootId),
 		filter,
 		MTP_int(0), // min_date
 		MTP_int(0), // max_date
@@ -111,7 +116,7 @@ SearchResult ParseSearchResult(
 		Storage::SharedMediaType type,
 		MsgId messageId,
 		Data::LoadDirection direction,
-		const MTPmessages_Messages &data) {
+		const SearchRequestResult &data) {
 	auto result = SearchResult();
 	result.noSkipRange = MsgRange{ messageId, messageId };
 
@@ -134,9 +139,10 @@ SearchResult ParseSearchResult(
 		} break;
 
 		case mtpc_messages_channelMessages: {
-			auto &d = data.c_messages_channelMessages();
-			if (auto channel = peer->asChannel()) {
+			const auto &d = data.c_messages_channelMessages();
+			if (const auto channel = peer->asChannel()) {
 				channel->ptsReceived(d.vpts().v);
+				channel->processTopics(d.vtopics());
 			} else {
 				LOG(("API Error: received messages.channelMessages when "
 					"no channel was passed! (ParseSearchResult)"));
@@ -233,11 +239,13 @@ rpl::producer<SparseIdsMergedSlice> SearchController::idsSlice(
 	auto query = (const Query&)_current->first;
 	auto createSimpleViewer = [=](
 			PeerId peerId,
+			MsgId topicRootId,
 			SparseIdsSlice::Key simpleKey,
 			int limitBefore,
 			int limitAfter) {
 		return simpleIdsSlice(
 			peerId,
+			topicRootId,
 			simpleKey,
 			query,
 			limitBefore,
@@ -246,6 +254,7 @@ rpl::producer<SparseIdsMergedSlice> SearchController::idsSlice(
 	return SparseIdsMergedSlice::CreateViewer(
 		SparseIdsMergedSlice::Key(
 			query.peerId,
+			query.topicRootId,
 			query.migratedPeerId,
 			aroundId),
 		limitBefore,
@@ -255,6 +264,7 @@ rpl::producer<SparseIdsMergedSlice> SearchController::idsSlice(
 
 rpl::producer<SparseIdsSlice> SearchController::simpleIdsSlice(
 		PeerId peerId,
+		MsgId topicRootId,
 		MsgId aroundId,
 		const Query &query,
 		int limitBefore,
@@ -263,8 +273,8 @@ rpl::producer<SparseIdsSlice> SearchController::simpleIdsSlice(
 	Expects(IsServerMsgId(aroundId) || (aroundId == 0));
 	Expects((aroundId != 0)
 		|| (limitBefore == 0 && limitAfter == 0));
-	Expects((query.peerId == peerId)
-		|| (query.migratedPeerId == peerId));
+	Expects((query.peerId == peerId && query.topicRootId == topicRootId)
+		|| (query.migratedPeerId == peerId && MsgId(0) == topicRootId));
 
 	auto it = _cache.find(query);
 	if (it == _cache.end()) {
@@ -297,7 +307,8 @@ rpl::producer<SparseIdsSlice> SearchController::simpleIdsSlice(
 
 		_session->data().itemRemoved(
 		) | rpl::filter([=](not_null<const HistoryItem*> item) {
-			return (item->history()->peer->id == peerId);
+			return (item->history()->peer->id == peerId)
+				&& (!topicRootId || item->topicRootId() == topicRootId);
 		}) | rpl::filter([=](not_null<const HistoryItem*> item) {
 			return builder->removeOne(item->id);
 		}) | rpl::start_with_next(pushNextSnapshot, lifetime);
@@ -369,6 +380,7 @@ void SearchController::requestMore(
 	}
 	auto prepared = PrepareSearchRequest(
 		listData->peer,
+		query.topicRootId,
 		query.type,
 		query.query,
 		key.aroundId,
@@ -382,7 +394,7 @@ void SearchController::requestMore(
 	auto requestId = histories.sendRequest(history, type, [=](Fn<void()> finish) {
 		return _session->api().request(
 			std::move(*prepared)
-		).done([=](const MTPmessages_Messages &result) {
+		).done([=](const SearchRequestResult &result) {
 			listData->requests.remove(key);
 			auto parsed = ParseSearchResult(
 				listData->peer,

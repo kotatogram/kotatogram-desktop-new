@@ -17,15 +17,18 @@ namespace Window {
 class SessionNavigation;
 } // namespace Window
 
-object_ptr<Ui::BoxContent> EditLinkedChatBox(
+[[nodiscard]] object_ptr<Ui::BoxContent> EditLinkedChatBox(
 	not_null<Window::SessionNavigation*> navigation,
 	not_null<ChannelData*> channel,
 	not_null<ChannelData*> chat,
 	bool canEdit,
 	Fn<void(ChannelData*)> callback);
 
-object_ptr<Ui::BoxContent> EditLinkedChatBox(
+[[nodiscard]] object_ptr<Ui::BoxContent> EditLinkedChatBox(
 	not_null<Window::SessionNavigation*> navigation,
 	not_null<ChannelData*> channel,
 	std::vector<not_null<PeerData*>> &&chats,
 	Fn<void(ChannelData*)> callback);
+
+void ShowForumForDiscussionError(
+	not_null<Window::SessionNavigation*> navigation);

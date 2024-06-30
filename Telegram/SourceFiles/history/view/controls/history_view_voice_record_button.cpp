@@ -8,9 +8,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/controls/history_view_voice_record_button.h"
 
 #include "ui/paint/blobs.h"
-
+#include "ui/painter.h"
 #include "styles/style_chat.h"
+#include "styles/style_chat_helpers.h"
 #include "styles/style_layers.h"
+
+#include <QtMath>
 
 namespace HistoryView::Controls {
 
@@ -49,7 +52,7 @@ auto Blobs() {
 
 VoiceRecordButton::VoiceRecordButton(
 	not_null<Ui::RpWidget*> parent,
-	rpl::producer<> leaveWindowEventProducer)
+	const style::RecordBar &st)
 : AbstractButton(parent)
 , _blobs(std::make_unique<Ui::Paint::Blobs>(
 	Blobs(),
@@ -57,11 +60,6 @@ VoiceRecordButton::VoiceRecordButton(
 	kMaxLevel))
 , _center(_blobs->maxRadius()) {
 	resize(_center * 2, _center * 2);
-	std::move(
-		leaveWindowEventProducer
-	) | rpl::start_with_next([=] {
-		_inCircle = false;
-	}, lifetime());
 	init();
 }
 
@@ -97,7 +95,7 @@ void VoiceRecordButton::init() {
 		- mainRadiusMin;
 	paintRequest(
 	) | rpl::start_with_next([=](const QRect &clip) {
-		Painter p(this);
+		auto p = QPainter(this);
 
 		const auto hideProgress = _blobsHideLastTime
 			? 1. - std::clamp(

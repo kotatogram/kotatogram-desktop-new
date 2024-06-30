@@ -8,25 +8,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
-#include "styles/style_widgets.h"
 
-namespace Data {
-struct Info;
-} // namespace Data
+namespace style {
+struct InputField;
+} // namespace style
 
 namespace Countries {
 struct Info;
 } // namespace Countries
 
 namespace Ui {
-class MultiSelect;
-class RippleAnimation;
+class Show;
 } // namespace Ui
 
 class CountryInput : public Ui::RpWidget {
-
 public:
-	CountryInput(QWidget *parent, const style::InputField &st);
+	CountryInput(
+		QWidget *parent,
+		std::shared_ptr<Ui::Show> show,
+		const style::InputField &st);
 
 	[[nodiscard]] QString iso() const {
 		return _chosenIso;
@@ -48,6 +48,7 @@ private:
 	void chooseCountry(not_null<const Countries::Info*> info, int codeIndex);
 	void setText(const QString &newText);
 
+	const std::shared_ptr<Ui::Show> _show;
 	const style::InputField &_st;
 	bool _active = false;
 	QString _text;

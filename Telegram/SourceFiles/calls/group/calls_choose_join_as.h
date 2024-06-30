@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class PeerData;
 
 namespace Ui {
+class Show;
 class BoxContent;
 } // namespace Ui
 
@@ -27,6 +28,7 @@ public:
 
 	enum class Context {
 		Create,
+		CreateScheduled,
 		Join,
 		JoinWithConfirm,
 		Switch,
@@ -35,22 +37,25 @@ public:
 	void start(
 		not_null<PeerData*> peer,
 		Context context,
-		Fn<void(object_ptr<Ui::BoxContent>)> showBox,
-		Fn<void(QString)> showToast,
+		std::shared_ptr<Ui::Show> show,
 		Fn<void(JoinInfo)> done,
 		PeerData *changingJoinAsFrom = nullptr);
 
 private:
+	void requestList();
+	void processList(std::vector<not_null<PeerData*>> &&list);
+	void finish(JoinInfo info);
+
 	struct ChannelsListRequest {
 		not_null<PeerData*> peer;
-		Fn<void(object_ptr<Ui::BoxContent>)> showBox;
-		Fn<void(QString)> showToast;
+		std::shared_ptr<Ui::Show> show;
 		Fn<void(JoinInfo)> done;
 		base::has_weak_ptr guard;
 		QPointer<Ui::BoxContent> box;
 		rpl::lifetime lifetime;
 		Context context = Context();
 		mtpRequestId id = 0;
+		PeerData *changingJoinAsFrom = nullptr;
 	};
 	std::unique_ptr<ChannelsListRequest> _request;
 

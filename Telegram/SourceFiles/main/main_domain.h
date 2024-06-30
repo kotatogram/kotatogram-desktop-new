@@ -32,6 +32,7 @@ public:
 	};
 
 	static constexpr auto kMaxAccountsWarn = 3;
+	static constexpr auto kPremiumMaxAccounts = 6;
 #ifdef ARCH_CPU_64_BITS
 	static constexpr auto kMaxAccounts = 100;
 #else
@@ -46,15 +47,20 @@ public:
 	void resetWithForgottenPasscode();
 	void finish();
 
+	[[nodiscard]] int maxAccounts() const;
+	[[nodiscard]] rpl::producer<int> maxAccountsChanges() const;
+
 	[[nodiscard]] Storage::Domain &local() const {
 		return *_local;
 	}
 
 	[[nodiscard]] auto accounts() const
 		-> const std::vector<AccountWithIndex> &;
+	[[nodiscard]] std::vector<not_null<Account*>> orderedAccounts() const;
 	[[nodiscard]] rpl::producer<Account*> activeValue() const;
 	[[nodiscard]] rpl::producer<> accountsChanges() const;
 	[[nodiscard]] Account *maybeLastOrSomeAuthedAccount();
+	[[nodiscard]] int accountsAuthedCount() const;
 
 	// Expects(started());
 	[[nodiscard]] Account &active() const;
@@ -71,7 +77,7 @@ public:
 	[[nodiscard]] not_null<Main::Account*> add(MTP::Environment environment);
 	void maybeActivate(not_null<Main::Account*> account);
 	void activate(not_null<Main::Account*> account);
-	void addActivated(MTP::Environment environment);
+	void addActivated(MTP::Environment environment, bool newWindow = false);
 
 	// Interface for Storage::Domain.
 	void accountAddedInStorage(AccountWithIndex accountWithIndex);
@@ -80,7 +86,7 @@ public:
 
 private:
 	void activateAfterStarting();
-	void activateAuthedAccount();
+	void closeAccountWindows(not_null<Main::Account*> account);
 	bool removePasscodeIfEmpty();
 	void removeRedundantAccounts();
 	void watchSession(not_null<Account*> account);
@@ -106,6 +112,8 @@ private:
 	int _unreadBadge = 0;
 	bool _unreadBadgeMuted = true;
 	bool _unreadBadgeUpdateScheduled = false;
+
+	rpl::variable<int> _lastMaxAccounts;
 
 	rpl::lifetime _activeLifetime;
 	rpl::lifetime _lifetime;

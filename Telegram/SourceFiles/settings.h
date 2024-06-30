@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/integration.h"
 #include "ui/style/style_core.h"
 
 #define DeclareReadSetting(Type, Name) extern Type g##Name; \
@@ -38,8 +39,6 @@ DeclareSetting(bool, AutoStart);
 DeclareSetting(bool, StartMinimized);
 DeclareSetting(bool, StartInTray);
 DeclareSetting(bool, SendToMenu);
-DeclareSetting(bool, UseExternalVideoPlayer);
-DeclareSetting(bool, UseFreeType);
 enum LaunchMode {
 	LaunchModeNormal = 0,
 	LaunchModeAutoStart,
@@ -51,17 +50,22 @@ DeclareSetting(QString, WorkingDir);
 inline void cForceWorkingDir(const QString &newDir) {
 	cSetWorkingDir(newDir);
 	if (!gWorkingDir.isEmpty()) {
+		cSetWorkingDir(QDir(gWorkingDir).absolutePath() + '/');
 		QDir().mkpath(gWorkingDir);
 		QFile::setPermissions(gWorkingDir,
 			QFileDevice::ReadUser | QFileDevice::WriteUser | QFileDevice::ExeUser);
 	}
 
 }
-DeclareReadSetting(QString, ExeName);
-DeclareReadSetting(QString, ExeDir);
+inline QString cExeName() {
+	return base::Integration::Instance().executableName();
+}
+inline QString cExeDir() {
+	return base::Integration::Instance().executableDir();
+}
 DeclareSetting(QString, DialogLastPath);
 DeclareSetting(QString, DialogHelperPath);
-inline const QString &cDialogHelperPathFinal() {
+inline QString cDialogHelperPathFinal() {
 	return cDialogHelperPath().isEmpty() ? cExeDir() : cDialogHelperPath();
 }
 
@@ -82,8 +86,6 @@ DeclareSetting(bool, Quit);
 DeclareSetting(QByteArray, LocalSalt);
 DeclareSetting(int, ScreenScale);
 DeclareSetting(int, ConfigScale);
-DeclareSetting(QString, DateFormat);
-DeclareSetting(QString, TimeFormat);
 
 class DocumentData;
 
@@ -110,14 +112,6 @@ DeclareSetting(QStringList, SendPaths);
 DeclareSetting(QString, StartUrl);
 
 DeclareSetting(int, OtherOnline);
-
-inline void cChangeDateFormat(const QString &newFormat) {
-	if (!newFormat.isEmpty()) cSetDateFormat(newFormat);
-}
-
-inline void cChangeTimeFormat(const QString &newFormat) {
-	if (!newFormat.isEmpty()) cSetTimeFormat(newFormat);
-}
 
 inline bool passcodeCanTry() {
 	if (cPasscodeBadTries() < 3) return true;

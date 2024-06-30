@@ -10,11 +10,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "passport/passport_panel_controller.h"
 #include "passport/passport_panel_edit_scans.h"
 #include "passport/ui/passport_details_row.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/effects/scroll_content_shadow.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
-#include "ui/widgets/shadow.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/fade_wrap.h"
@@ -140,7 +140,7 @@ void RequestTypeBox::setupControls(
 	_height = y;
 
 	_submit = [=] {
-		const auto value = group->hasValue() ? group->value() : -1;
+		const auto value = group->hasValue() ? group->current() : -1;
 		if (value >= 0) {
 			submit(value);
 		}
@@ -219,8 +219,6 @@ PanelEditDocument::PanelEditDocument(
 : _controller(controller)
 , _scheme(std::move(scheme))
 , _scroll(this, st::passportPanelScroll)
-, _topShadow(this)
-, _bottomShadow(this)
 , _done(
 		this,
 		tr::lng_passport_save_value(),
@@ -247,8 +245,6 @@ PanelEditDocument::PanelEditDocument(
 : _controller(controller)
 , _scheme(std::move(scheme))
 , _scroll(this, st::passportPanelScroll)
-, _topShadow(this)
-, _bottomShadow(this)
 , _done(
 		this,
 		tr::lng_passport_save_value(),
@@ -272,8 +268,6 @@ PanelEditDocument::PanelEditDocument(
 : _controller(controller)
 , _scheme(std::move(scheme))
 , _scroll(this, st::passportPanelScroll)
-, _topShadow(this)
-, _bottomShadow(this)
 , _done(
 		this,
 		tr::lng_passport_save_value(),
@@ -289,7 +283,7 @@ void PanelEditDocument::setupControls(
 		ScanListData &&scans,
 		std::optional<ScanListData> &&translations,
 		std::map<FileType, ScanInfo> &&specialFiles) {
-	setupContent(
+	const auto inner = setupContent(
 		error,
 		data,
 		scansError,
@@ -298,10 +292,8 @@ void PanelEditDocument::setupControls(
 		std::move(translations),
 		std::move(specialFiles));
 
-	using namespace rpl::mappers;
+	Ui::SetupShadowsToScrollContent(this, _scroll, inner->heightValue());
 
-	_topShadow->toggleOn(
-		_scroll->scrollTopValue() | rpl::map(_1 > 0));
 	_done->addClickHandler([=] {
 		crl::on_main(this, [=] {
 			save();
@@ -538,7 +530,7 @@ void PanelEditDocument::createDetailsRow(
 	const auto isoByPhone = Countries::Instance().countryISO2ByPhone(
 		_controller->bot()->session().user()->phone());
 
-	const auto [it, ok] = _details.emplace(
+	const auto &[it, ok] = _details.emplace(
 		i,
 		container->add(Ui::PanelDetailsRow::Create(
 			container,
@@ -604,10 +596,6 @@ bool PanelEditDocument::hasUnsavedChanges() const {
 void PanelEditDocument::updateControlsGeometry() {
 	const auto submitTop = height() - _done->height();
 	_scroll->setGeometry(0, 0, width(), submitTop);
-	_topShadow->resizeToWidth(width());
-	_topShadow->moveToLeft(0, 0);
-	_bottomShadow->resizeToWidth(width());
-	_bottomShadow->moveToLeft(0, submitTop - st::lineWidth);
 	_done->resizeToWidth(width());
 	_done->moveToLeft(0, submitTop);
 

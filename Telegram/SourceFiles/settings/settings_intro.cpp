@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/settings_intro.h"
 
-#include "settings/settings_common.h"
 #include "settings/settings_advanced.h"
 #include "settings/settings_main.h"
 #include "settings/settings_chat.h"
@@ -19,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/cached_round_corners.h"
+#include "ui/vertical_list.h"
 #include "lang/lang_keys.h"
 #include "boxes/abstract_box.h"
 #include "window/window_controller.h"
@@ -61,48 +61,50 @@ object_ptr<Ui::RpWidget> CreateIntroSettings(
 		not_null<Window::Controller*> window) {
 	auto result = object_ptr<Ui::VerticalLayout>(parent);
 
-	AddDivider(result);
-	AddSkip(result);
-	SetupLanguageButton(result, false);
+	Ui::AddDivider(result);
+	Ui::AddSkip(result);
+	SetupLanguageButton(window, result);
 	SetupConnectionType(window, &window->account(), result);
-	AddSkip(result);
+	Ui::AddSkip(result);
 	if (HasUpdate()) {
-		AddDivider(result);
-		AddSkip(result);
-		SetupUpdate(window, result, nullptr);
-		AddSkip(result);
+		Ui::AddDivider(result);
+		Ui::AddSkip(result);
+		SetupUpdate(window, result);
+		Ui::AddSkip(result);
 	}
 	{
 		auto wrap = object_ptr<Ui::VerticalLayout>(result);
 		SetupSystemIntegrationContent(
 			window->sessionController(),
 			wrap.data());
+		SetupWindowTitleContent(
+			window->sessionController(),
+			wrap.data());
 		if (wrap->count() > 0) {
-			AddDivider(result);
-			AddSkip(result);
+			Ui::AddDivider(result);
+			Ui::AddSkip(result);
 			result->add(object_ptr<Ui::OverrideMargins>(
 				result,
 				std::move(wrap)));
-			AddSkip(result);
+			Ui::AddSkip(result);
 		}
 	}
-	AddDivider(result);
-	AddSkip(result);
+	Ui::AddDivider(result);
+	Ui::AddSkip(result);
 	SetupInterfaceScale(window, result, false);
 	SetupDefaultThemes(window, result);
-	AddSkip(result);
+	Ui::AddSkip(result);
 
 	if (anim::Disabled()) {
-		AddDivider(result);
-		AddSkip(result);
-		SetupAnimations(result);
-		AddSkip(result);
+		Ui::AddDivider(result);
+		Ui::AddSkip(result);
+		SetupAnimations(window, result);
+		Ui::AddSkip(result);
 	}
 
-	AddDivider(result);
-	AddSkip(result);
+	Ui::AddDivider(result);
+	Ui::AddSkip(result);
 	SetupFaq(result, false);
-	AddSkip(result);
 
 	return result;
 }
@@ -110,7 +112,6 @@ object_ptr<Ui::RpWidget> CreateIntroSettings(
 TopBar::TopBar(QWidget *parent, const style::InfoTopBar &st)
 : RpWidget(parent)
 , _st(st) {
-	setAttribute(Qt::WA_OpaquePaintEvent);
 }
 
 void TopBar::setTitle(rpl::producer<QString> &&title) {
@@ -156,8 +157,10 @@ void TopBar::updateControlsGeometry(int newWidth) {
 }
 
 void TopBar::paintEvent(QPaintEvent *e) {
-	Painter p(this);
-	p.fillRect(e->rect(), _st.bg);
+	const auto radius = st::boxRadius;
+	QPainter(this).fillRect(
+		e->rect().intersected({ 0, radius, width(), height() - radius }),
+		_st.bg);
 }
 
 } // namespace
@@ -174,7 +177,7 @@ public:
 
 	void updateGeometry(QRect newGeometry, int additionalScroll);
 	int scrollTillBottom(int forHeight) const;
-	rpl::producer<int>  scrollTillBottomChanges() const;
+	rpl::producer<int> scrollTillBottomChanges() const;
 
 	void setInnerFocus();
 
@@ -190,7 +193,7 @@ private:
 	void setInnerWidget(object_ptr<Ui::RpWidget> content);
 	void showContent(not_null<Window::Controller*> window);
 	rpl::producer<bool> topShadowToggledValue() const;
-	void createTopBar();
+	void createTopBar(not_null<Window::Controller*> window);
 	void applyAdditionalScroll(int additionalScroll);
 
 	rpl::variable<int> _scrollTopSkip = -1;
@@ -217,7 +220,7 @@ IntroWidget::IntroWidget(
 	_wrap->setAttribute(Qt::WA_OpaquePaintEvent);
 	_wrap->paintRequest(
 	) | rpl::start_with_next([=](QRect clip) {
-		Painter p(_wrap.data());
+		auto p = QPainter(_wrap.data());
 		p.fillRect(clip, st::boxBg);
 	}, _wrap->lifetime());
 
@@ -226,7 +229,7 @@ IntroWidget::IntroWidget(
 		updateControlsGeometry();
 	}, lifetime());
 
-	createTopBar();
+	createTopBar(window);
 	showContent(window);
 	_topShadow->toggleOn(
 		topShadowToggledValue(
@@ -273,15 +276,15 @@ void IntroWidget::forceContentRepaint() {
 	}
 }
 
-void IntroWidget::createTopBar() {
+void IntroWidget::createTopBar(not_null<Window::Controller*> window) {
 	_topBar.create(this, st::infoLayerTopBar);
 	_topBar->setTitle(tr::lng_menu_settings());
 	auto close = _topBar->addButton(
 		base::make_unique_q<Ui::IconButton>(
 			_topBar,
 			st::infoLayerTopBarClose));
-	close->addClickHandler([] {
-		Ui::hideSettingsAndLayer();
+	close->addClickHandler([=] {
+		window->hideSettingsAndLayer();
 	});
 
 	_topBar->lower();
@@ -452,11 +455,7 @@ int LayerWidget::resizeGetHeight(int newWidth) {
 	auto windowHeight = parentSize.height();
 	auto newLeft = (windowWidth - newWidth) / 2;
 	if (!newLeft) {
-		_content->updateGeometry({
-			0,
-			st::boxRadius,
-			windowWidth,
-			windowHeight - st::boxRadius }, 0);
+		_content->updateGeometry({ 0, 0, windowWidth, windowHeight }, 0);
 		auto newGeometry = QRect(0, 0, windowWidth, windowHeight);
 		if (newGeometry != geometry()) {
 			_content->forceContentRepaint();
@@ -472,12 +471,12 @@ int LayerWidget::resizeGetHeight(int newWidth) {
 		st::infoLayerTopMinimal,
 		st::infoLayerTopMaximal);
 	auto newBottom = newTop;
-	auto desiredHeight = st::boxRadius + _desiredHeight + st::boxRadius;
+	auto desiredHeight = _desiredHeight + st::boxRadius;
 	accumulate_min(desiredHeight, windowHeight - newTop - newBottom);
 
 	// First resize content to new width and get the new desired height.
 	auto contentLeft = 0;
-	auto contentTop = st::boxRadius;
+	auto contentTop = 0;
 	auto contentBottom = st::boxRadius;
 	auto contentWidth = newWidth;
 	auto contentHeight = desiredHeight - contentTop - contentBottom;
@@ -514,25 +513,20 @@ void LayerWidget::doSetInnerFocus() {
 }
 
 void LayerWidget::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 
 	auto clip = e->rect();
 	auto r = st::boxRadius;
-	auto parts = RectPart::None | 0;
+	const auto &pixmaps = Ui::CachedCornerPixmaps(Ui::BoxCorners);
 	if (!_tillTop && clip.intersects({ 0, 0, width(), r })) {
-		parts |= RectPart::FullTop;
+		Ui::FillRoundRect(p, 0, 0, width(), r, st::boxBg, {
+			.p = { pixmaps.p[0], pixmaps.p[1], QPixmap(), QPixmap() },
+		});
 	}
 	if (!_tillBottom && clip.intersects({ 0, height() - r, width(), r })) {
-		parts |= RectPart::FullBottom;
-	}
-	if (parts) {
-		Ui::FillRoundRect(
-			p,
-			rect(),
-			st::boxBg,
-			Ui::BoxCorners,
-			nullptr,
-			parts);
+		Ui::FillRoundRect(p, 0, height() - r, width(), r, st::boxBg, {
+			.p = { QPixmap(), QPixmap(), pixmaps.p[2], pixmaps.p[3] },
+		});
 	}
 	if (_tillTop) {
 		p.fillRect(0, 0, width(), r, st::boxBg);

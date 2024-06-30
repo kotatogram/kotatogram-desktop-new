@@ -14,6 +14,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class ApiWrap;
 class ChannelData;
 
+namespace Ui {
+class Show;
+} // namespace Ui
+
 namespace Api {
 
 class ChatParticipant final {
@@ -95,6 +99,8 @@ public:
 	void add(
 		not_null<PeerData*> peer,
 		const std::vector<not_null<UserData*>> &users,
+		std::shared_ptr<Ui::Show> show = nullptr,
+		bool passGroupHistory = true,
 		Fn<void(bool)> done = nullptr);
 
 	void requestSelf(not_null<ChannelData*> channel);
@@ -114,7 +120,26 @@ public:
 		not_null<ChannelData*> channel,
 		not_null<PeerData*> participant);
 
+	void loadSimilarChannels(not_null<ChannelData*> channel);
+
+	struct Channels {
+		std::vector<not_null<ChannelData*>> list;
+		int more = 0;
+
+		friend inline bool operator==(
+			const Channels &,
+			const Channels &) = default;
+	};
+	[[nodiscard]] const Channels &similar(not_null<ChannelData*> channel);
+	[[nodiscard]] auto similarLoaded() const
+		-> rpl::producer<not_null<ChannelData*>>;
+
 private:
+	struct SimilarChannels {
+		Channels channels;
+		mtpRequestId requestId = 0;
+	};
+
 	MTP::Sender _api;
 
 	using PeerRequests = base::flat_map<PeerData*, mtpRequestId>;
@@ -136,6 +161,9 @@ private:
 		not_null<ChannelData*>,
 		not_null<PeerData*>>;
 	base::flat_map<KickRequest, mtpRequestId> _kickRequests;
+
+	base::flat_map<not_null<ChannelData*>, SimilarChannels> _similar;
+	rpl::event_stream<not_null<ChannelData*>> _similarLoaded;
 
 };
 

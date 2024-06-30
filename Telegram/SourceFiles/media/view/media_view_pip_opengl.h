@@ -65,7 +65,7 @@ private:
 	void paintUsingRaster(
 		Ui::GL::Image &image,
 		QRect rect,
-		Fn<void(Painter&&)> method,
+		Fn<void(QPainter&&)> method,
 		int bufferOffset,
 		bool transparent = false);
 
@@ -93,6 +93,7 @@ private:
 	QOpenGLFunctions *_f = nullptr;
 	QSize _viewport;
 	float _factor = 1.;
+	int _ifactor = 1;
 	QVector2D _uniformViewport;
 
 	std::optional<QOpenGLBuffer> _contentBuffer;
@@ -101,12 +102,14 @@ private:
 	QOpenGLShader *_texturedVertexShader = nullptr;
 	std::optional<QOpenGLShaderProgram> _argb32Program;
 	std::optional<QOpenGLShaderProgram> _yuv420Program;
+	std::optional<QOpenGLShaderProgram> _nv12Program;
 	Ui::GL::Textures<4> _textures;
 	QSize _rgbaSize;
 	QSize _lumaSize;
 	QSize _chromaSize;
 	quint64 _cacheKey = 0;
 	int _trackFrameIndex = 0;
+	bool _chromaNV12 = false;
 
 	Ui::GL::Image _radialImage;
 	Ui::GL::Image _controlsImage;

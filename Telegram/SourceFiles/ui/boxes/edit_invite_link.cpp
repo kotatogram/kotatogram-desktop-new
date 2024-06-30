@@ -10,7 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "ui/boxes/choose_date_time.h"
 #include "ui/widgets/labels.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/fields/number_input.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/wrap/slide_wrap.h"
 #include "base/unixtime.h"
@@ -30,20 +31,11 @@ constexpr auto kMaxLabelLength = 32;
 	if (date > 0) {
 		return langDateTime(base::unixtime::parse(date));
 	} else if (-date < kDay) {
-		return tr::lng_group_call_duration_hours(
-			tr::now,
-			lt_count,
-			(-date / kHour));
+		return tr::lng_hours(tr::now, lt_count, (-date / kHour));
 	} else if (-date < 7 * kDay) {
-		return tr::lng_group_call_duration_days(
-			tr::now,
-			lt_count,
-			(-date / kDay));
+		return tr::lng_days(tr::now, lt_count, (-date / kDay));
 	} else {
-		return tr::lng_local_storage_limit_weeks(
-			tr::now,
-			lt_count,
-			(-date / (7 * kDay)));
+		return tr::lng_weeks(tr::now, lt_count, (-date / (7 * kDay)));
 	}
 }
 
@@ -70,9 +62,9 @@ void EditInviteLinkBox(
 			object_ptr<FlatLabel>(
 				container,
 				std::move(text),
-				st::settingsSubsectionTitle),
-			(st::settingsSubsectionTitlePadding
-				+ style::margins(0, st::settingsSectionSkip, 0, 0)));
+				st::defaultSubsectionTitle),
+			(st::defaultSubsectionTitlePadding
+				+ style::margins(0, st::defaultVerticalListSkip, 0, 0)));
 	};
 	const auto addDivider = [&](
 			not_null<VerticalLayout*> container,
@@ -85,7 +77,7 @@ void EditInviteLinkBox(
 					container,
 					std::move(text),
 					st::boxDividerLabel),
-				st::settingsDividerLabelPadding),
+				st::defaultBoxDividerLabelPadding),
 			margins);
 	};
 
@@ -115,8 +107,8 @@ void EditInviteLinkBox(
 			object_ptr<SettingsButton>(
 				container,
 				tr::lng_group_invite_request_approve(),
-				st::settingsButton),
-			style::margins{ 0, 0, 0, st::settingsSectionSkip });
+				st::settingsButtonNoIcon),
+			style::margins{ 0, 0, 0, st::defaultVerticalListSkip });
 	if (requestApproval) {
 		requestApproval->toggleOn(state->requestApproval.value());
 		state->requestApproval = requestApproval->toggledValue();
@@ -137,17 +129,17 @@ void EditInviteLinkBox(
 			tr::lng_group_invite_label_header(),
 			data.label),
 		style::margins(
-			st::settingsSubsectionTitlePadding.left(),
-			st::settingsSectionSkip,
-			st::settingsSubsectionTitlePadding.right(),
-			st::settingsSectionSkip * 2));
+			st::defaultSubsectionTitlePadding.left(),
+			st::defaultVerticalListSkip,
+			st::defaultSubsectionTitlePadding.right(),
+			st::defaultVerticalListSkip * 2));
 	labelField->setMaxLength(kMaxLabelLength);
 	addDivider(container, tr::lng_group_invite_label_about());
 
 	addTitle(container, tr::lng_group_invite_expire_title());
 	const auto expiresWrap = container->add(
 		object_ptr<VerticalLayout>(container),
-		style::margins(0, 0, 0, st::settingsSectionSkip));
+		style::margins(0, 0, 0, st::defaultVerticalListSkip));
 	addDivider(
 		container,
 		tr::lng_group_invite_expire_about());
@@ -160,7 +152,7 @@ void EditInviteLinkBox(
 	addTitle(usagesInner, tr::lng_group_invite_usage_title());
 	const auto usagesWrap = usagesInner->add(
 		object_ptr<VerticalLayout>(usagesInner),
-		style::margins(0, 0, 0, st::settingsSectionSkip));
+		style::margins(0, 0, 0, st::defaultVerticalListSkip));
 	addDivider(usagesInner, tr::lng_group_invite_usage_about());
 
 	static const auto addButton = [](
@@ -221,7 +213,7 @@ void EditInviteLinkBox(
 				? tr::lng_group_invite_usage_any(tr::now)
 				: !limit
 				? tr::lng_group_invite_usage_custom(tr::now)
-				: QString("%L1").arg(limit);
+				: Lang::FormatCountDecimal(limit);
 			state->usageButtons.emplace(
 				limit,
 				addButton(usagesWrap, usageGroup, limit, text));

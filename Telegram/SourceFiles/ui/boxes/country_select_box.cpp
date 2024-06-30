@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/multi_select.h"
 #include "ui/effects/ripple_animation.h"
+#include "ui/painter.h"
 #include "countries/countries_instance.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
@@ -135,7 +136,7 @@ void CountrySelectBox::prepare() {
 
 	_inner->mustScrollTo(
 	) | rpl::start_with_next([=](ScrollToRequest request) {
-		onScrollToY(request.ymin, request.ymax);
+		scrollToY(request.ymin, request.ymax);
 	}, lifetime());
 }
 
@@ -167,7 +168,7 @@ void CountrySelectBox::resizeEvent(QResizeEvent *e) {
 }
 
 void CountrySelectBox::applyFilterUpdate(const QString &query) {
-	onScrollToY(0);
+	scrollToY(0);
 	_inner->updateFilter(query);
 }
 
@@ -233,13 +234,14 @@ void CountrySelectBox::Inner::init() {
 	}
 	auto index = 0;
 	for (const auto &info : _list) {
+		static const auto RegExp = QRegularExpression("[\\s\\-]");
 		auto full = info.country
 			+ ' '
 			+ (!info.alternativeName.isEmpty()
 				? info.alternativeName
 				: QString());
 		const auto namesList = std::move(full).toLower().split(
-			QRegularExpression("[\\s\\-]"),
+			RegExp,
 			Qt::SkipEmptyParts);
 		auto &names = _namesList.emplace_back();
 		names.reserve(namesList.size());
@@ -346,7 +348,7 @@ void CountrySelectBox::Inner::mousePressEvent(QMouseEvent *e) {
 			}
 		}
 		if (!_ripples[_pressed]) {
-			auto mask = RippleAnimation::rectMask(QSize(width(), _rowHeight));
+			auto mask = RippleAnimation::RectMask(QSize(width(), _rowHeight));
 			_ripples[_pressed] = std::make_unique<RippleAnimation>(st::countryRipple, std::move(mask), [this, index = _pressed] {
 				updateRow(index);
 			});

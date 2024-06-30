@@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "history/history.h"
 #include "history/history_item.h"
-#include "history/view/history_view_element.h"
+#include "history/view/history_view_message.h"
 #include "history/view/history_view_cursor_state.h"
 #include "calls/calls_instance.h"
 #include "ui/chat/message_bubble.h"
@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/fireworks_animation.h"
 #include "ui/toast/toast.h"
 #include "kotato/boxes/kotato_confirm_box.h"
+#include "ui/painter.h"
 #include "data/data_media_types.h"
 #include "data/data_poll.h"
 #include "data/data_user.h"
@@ -179,6 +180,11 @@ struct Poll::CloseInformation {
 	crl::time duration = 0;
 	base::Timer timer;
 	Ui::Animations::Basic radial;
+};
+
+struct Poll::RecentVoter {
+	not_null<PeerData*> peer;
+	mutable Ui::PeerUserpicView userpic;
 };
 
 template <typename Callback>
@@ -486,20 +492,20 @@ void Poll::updateRecentVoters() {
 		_recentVoters,
 		sliced,
 		ranges::equal_to(),
-		&RecentVoter::user);
+		&RecentVoter::peer);
 	if (changed) {
 		auto updated = ranges::views::all(
 			sliced
-		) | ranges::views::transform([](not_null<UserData*> user) {
-			return RecentVoter{ user };
+		) | ranges::views::transform([](not_null<PeerData*> peer) {
+			return RecentVoter{ peer };
 		}) | ranges::to_vector;
 		const auto has = hasHeavyPart();
 		if (has) {
 			for (auto &voter : updated) {
 				const auto i = ranges::find(
 					_recentVoters,
-					voter.user,
-					&RecentVoter::user);
+					voter.peer,
+					&RecentVoter::peer);
 				if (i != end(_recentVoters)) {
 					voter.userpic = std::move(i->userpic);
 				}
@@ -760,7 +766,7 @@ void Poll::draw(Painter &p, const PaintContext &context) const {
 	auto &&answers = ranges::views::zip(
 		_answers,
 		ranges::views::ints(0, int(_answers.size())));
-	for (const auto [answer, index] : answers) {
+	for (const auto &[answer, index] : answers) {
 		const auto animation = _answersAnimation
 			? &_answersAnimation->data[index]
 			: nullptr;
@@ -802,9 +808,11 @@ void Poll::paintInlineFooter(
 		p,
 		left,
 		top,
-		std::min(
-			_totalVotesLabel.maxWidth(),
-			paintw - _parent->bottomInfoFirstLineWidth()),
+		_parent->data()->reactions().empty()
+			? std::min(
+				_totalVotesLabel.maxWidth(),
+				paintw - _parent->bottomInfoFirstLineWidth())
+			: _totalVotesLabel.maxWidth(),
 		width());
 }
 
@@ -890,33 +898,16 @@ void Poll::paintRecentVoters(
 
 	auto created = false;
 	for (auto &recent : _recentVoters) {
-		const auto was = (recent.userpic != nullptr);
-		recent.user->paintUserpic(p, recent.userpic, x, y, size);
-		if (!was && recent.userpic) {
+		const auto was = !recent.userpic.null();
+		recent.peer->paintUserpic(p, recent.userpic, x, y, size);
+		if (!was && !recent.userpic.null()) {
 			created = true;
 		}
-		const auto paintContent = [&](Painter &p) {
+		const auto paintContent = [&](QPainter &p) {
 			p.setPen(pen);
 			p.setBrush(Qt::NoBrush);
 			PainterHighQualityEnabler hq(p);
-			switch (KotatoImageRoundRadius()) {
-				case ImageRoundRadius::None:
-					p.drawRoundedRect(QRect{ x, y, size, size }, 0, 0);
-					break;
-
-				case ImageRoundRadius::Small:
-					p.drawRoundedRect(QRect{ x, y, size, size },
-						st::buttonRadius, st::buttonRadius);
-					break;
-
-				case ImageRoundRadius::Large:
-					p.drawRoundedRect(QRect{ x, y, size, size },
-						st::dateRadius, st::dateRadius);
-					break;
-
-				default:
-					p.drawEllipse(x, y, size, size);
-			}
+			p.drawEllipse(x, y, size, size);
 		};
 		if (usesBubblePattern(context)) {
 			const auto add = st::lineWidth * 2;
@@ -987,8 +978,8 @@ void Poll::paintCloseByTimer(
 		auto hq = PainterHighQualityEnabler(p);
 		const auto part = std::max(
 			left / float64(radial),
-			1. / FullArcLength);
-		const auto length = int(base::SafeRound(FullArcLength * part));
+			1. / arc::kFullLength);
+		const auto length = int(base::SafeRound(arc::kFullLength * part));
 		auto pen = regular->p;
 		pen.setWidth(st::historyPollRadio.thickness);
 		pen.setCapStyle(Qt::RoundCap);
@@ -996,7 +987,7 @@ void Poll::paintCloseByTimer(
 		const auto size = icon.width() / 2;
 		const auto left = (x + (icon.width() - size) / 2);
 		const auto top = (y + (icon.height() - size) / 2) + st::lineWidth;
-		p.drawArc(left, top, size, size, (FullArcLength / 4), length);
+		p.drawArc(left, top, size, size, (arc::kFullLength / 4), length);
 	} else {
 		icon.paint(p, x, y, width());
 	}
@@ -1287,7 +1278,7 @@ void Poll::paintFilling(
 		} else {
 			p.drawEllipse(cleft, ctop, icon.width(), icon.height());
 		}
-		const auto paintContent = [&](Painter &p) {
+		const auto paintContent = [&](QPainter &p) {
 			icon.paint(p, cleft, ctop, width);
 		};
 		if (style == Style::Default && usesBubblePattern(context)) {
@@ -1535,13 +1526,13 @@ void Poll::clickHandlerPressedChanged(
 
 void Poll::unloadHeavyPart() {
 	for (auto &recent : _recentVoters) {
-		recent.userpic = nullptr;
+		recent.userpic = {};
 	}
 }
 
 bool Poll::hasHeavyPart() const {
 	for (auto &recent : _recentVoters) {
-		if (recent.userpic) {
+		if (!recent.userpic.null()) {
 			return true;
 		}
 	}
@@ -1555,7 +1546,7 @@ void Poll::toggleRipple(Answer &answer, bool pressed) {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		if (!answer.ripple) {
-			auto mask = Ui::RippleAnimation::rectMask(QSize(
+			auto mask = Ui::RippleAnimation::RectMask(QSize(
 				outerWidth,
 				countAnswerHeight(answer, innerWidth)));
 			answer.ripple = std::make_unique<Ui::RippleAnimation>(
@@ -1604,29 +1595,20 @@ void Poll::toggleLinkRipple(bool pressed) {
 		const auto linkWidth = width();
 		const auto linkHeight = bottomButtonHeight();
 		if (!_linkRipple) {
-			const auto drawMask = [&](QPainter &p) {
-				const auto radius = st::historyMessageRadius;
-				p.drawRoundedRect(
-					0,
-					0,
-					linkWidth,
-					linkHeight,
-					radius,
-					radius);
-				p.fillRect(0, 0, linkWidth, radius * 2, Qt::white);
-			};
 			auto mask = isRoundedInBubbleBottom()
-				? Ui::RippleAnimation::maskByDrawer(
-					QSize(linkWidth, linkHeight),
-					false,
-					drawMask)
-				: Ui::RippleAnimation::rectMask({ linkWidth, linkHeight });
+				? static_cast<Message*>(_parent.get())->bottomRippleMask(
+					bottomButtonHeight())
+				: BottomRippleMask{
+					Ui::RippleAnimation::RectMask({ linkWidth, linkHeight }),
+				};
 			_linkRipple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
-				std::move(mask),
+				std::move(mask.image),
 				[=] { repaint(); });
+			_linkRippleShift = mask.shift;
 		}
-		_linkRipple->add(_lastLinkPoint - QPoint(0, height() - linkHeight));
+		_linkRipple->add(_lastLinkPoint
+			+ QPoint(_linkRippleShift, linkHeight - height()));
 	} else if (_linkRipple) {
 		_linkRipple->lastStop();
 	}

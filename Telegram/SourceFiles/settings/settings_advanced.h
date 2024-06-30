@@ -7,44 +7,57 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "settings/settings_common.h"
+#include "settings/settings_common_session.h"
 
 namespace Main {
 class Account;
+class Session;
 } // namespace Main
+
+namespace Ui {
+class GenericBox;
+} // namespace Ui
 
 namespace Window {
 class Controller;
+class SessionController;
 } // namespace Window
 
 namespace Settings {
 
 void SetupConnectionType(
 	not_null<Window::Controller*> controller,
-	not_null<Main::Account*> account,
+	not_null<::Main::Account*> account,
 	not_null<Ui::VerticalLayout*> container);
 bool HasUpdate();
 void SetupUpdate(
 	not_null<Window::Controller*> controller,
-	not_null<Ui::VerticalLayout*> container,
-	Fn<void(Type)> showOther);
+	not_null<Ui::VerticalLayout*> container);
+void SetupWindowTitleContent(
+	Window::SessionController *controller,
+	not_null<Ui::VerticalLayout*> container);
 void SetupSystemIntegrationContent(
 	Window::SessionController *controller,
 	not_null<Ui::VerticalLayout*> container);
-void SetupAnimations(not_null<Ui::VerticalLayout*> container);
+void SetupAnimations(
+	not_null<Window::Controller*> window,
+	not_null<Ui::VerticalLayout*> container);
 
-class Advanced : public Section {
+void ArchiveSettingsBox(
+	not_null<Ui::GenericBox*> box,
+	not_null<Window::SessionController*> controller);
+void PreloadArchiveSettings(not_null<::Main::Session*> session);
+
+class Advanced : public Section<Advanced> {
 public:
 	Advanced(
 		QWidget *parent,
 		not_null<Window::SessionController*> controller);
 
-	rpl::producer<Type> sectionShowOther() override;
+	[[nodiscard]] rpl::producer<QString> title() override;
 
 private:
 	void setupContent(not_null<Window::SessionController*> controller);
-
-	rpl::event_stream<Type> _showOther;
 
 };
 

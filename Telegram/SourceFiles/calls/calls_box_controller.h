@@ -9,12 +9,34 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "boxes/peer_list_box.h"
 #include "ui/layers/generic_box.h"
+#include "mtproto/sender.h"
 
 namespace Window {
 class SessionController;
 } // namespace Window
 
 namespace Calls {
+namespace GroupCalls {
+
+class ListController : public PeerListController {
+public:
+	explicit ListController(not_null<Window::SessionController*> window);
+
+	[[nodiscard]] rpl::producer<bool> shownValue() const;
+
+	Main::Session &session() const override;
+	void prepare() override;
+	void rowClicked(not_null<PeerListRow*> row) override;
+	void rowRightActionClicked(not_null<PeerListRow*> row) override;
+
+private:
+	const not_null<Window::SessionController*> _window;
+	base::flat_map<PeerId, not_null<PeerListRow*>> _groupCalls;
+	rpl::variable<int> _fullCount;
+
+};
+
+} // namespace GroupCalls
 
 class BoxController : public PeerListController {
 public:
@@ -34,6 +56,7 @@ private:
 	void receivedCalls(const QVector<MTPMessage> &result);
 	void refreshAbout();
 
+	class GroupCallRow;
 	class Row;
 	Row *rowForItem(not_null<const HistoryItem*> item);
 

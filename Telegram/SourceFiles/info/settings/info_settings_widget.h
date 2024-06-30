@@ -11,7 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_controller.h"
 
 namespace Settings {
-class Section;
+class AbstractSection;
 } // namespace Settings
 
 namespace Info {
@@ -20,6 +20,11 @@ namespace Settings {
 using Type = Section::SettingsType;
 
 struct Tag;
+
+struct SectionCustomTopBarData {
+	rpl::producer<> backButtonEnables;
+	rpl::producer<Info::Wrap> wrapValue;
+};
 
 class Memento final : public ContentMemento {
 public:
@@ -63,21 +68,45 @@ public:
 		const QRect &geometry,
 		not_null<Memento*> memento);
 
-	rpl::producer<bool> canSaveChanges() const override;
 	void saveChanges(FnMut<void()> done) override;
 
+	void showFinished() override;
+	void setInnerFocus() override;
+	const Ui::RoundRect *bottomSkipRounding() const override;
+
 	rpl::producer<bool> desiredShadowVisibility() const override;
+
+	bool closeByOutsideClick() const override;
+	void checkBeforeClose(Fn<void()> close) override;
+	rpl::producer<QString> title() override;
+
+	void enableBackButton() override;
+
+	rpl::producer<SelectedItems> selectedListValue() const override;
+	void selectionAction(SelectionAction action) override;
+	void fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) override;
 
 private:
 	void saveState(not_null<Memento*> memento);
 	void restoreState(not_null<Memento*> memento);
+
+	void paintEvent(QPaintEvent *e) override;
 
 	std::shared_ptr<ContentMemento> doCreateMemento() override;
 
 	not_null<UserData*> _self;
 	Type _type = Type();
 
-	not_null<::Settings::Section*> _inner;
+	struct {
+		rpl::event_stream<int> contentHeightValue;
+		rpl::event_stream<int> fillerWidthValue;
+		rpl::event_stream<> backButtonEnables;
+	} _flexibleScroll;
+	not_null<::Settings::AbstractSection*> _inner;
+	QPointer<Ui::RpWidget> _pinnedToTop;
+	QPointer<Ui::RpWidget> _pinnedToBottom;
+
+	rpl::event_stream<std::vector<Type>> _removesFromStack;
 
 };
 

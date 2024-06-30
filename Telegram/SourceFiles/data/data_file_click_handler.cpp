@@ -9,8 +9,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "core/click_handler_types.h"
 #include "core/file_utilities.h"
+#include "core/application.h"
 #include "data/data_document.h"
+#include "data/data_session.h"
+#include "data/data_download_manager.h"
 #include "data/data_photo.h"
+#include "main/main_session.h"
 
 FileClickHandler::FileClickHandler(FullMsgId context)
 : _context(context) {
@@ -50,6 +54,10 @@ DocumentClickHandler::DocumentClickHandler(
 		reinterpret_cast<qulonglong>(_document.get()));
 }
 
+QString DocumentClickHandler::tooltip() const {
+	return property(kDocumentFilenameTooltipProperty).value<QString>();
+}
+
 DocumentOpenClickHandler::DocumentOpenClickHandler(
 	not_null<DocumentData*> document,
 	Fn<void(FullMsgId)> &&callback,
@@ -66,14 +74,25 @@ void DocumentOpenClickHandler::onClickImpl() const {
 void DocumentSaveClickHandler::Save(
 		Data::FileOrigin origin,
 		not_null<DocumentData*> data,
-		Mode mode) {
+		Mode mode,
+		Fn<void()> started) {
 	if (data->isNull()) {
 		return;
 	}
 
 	auto savename = QString();
-	if (mode != Mode::ToCacheOrFile || !data->saveToCache()) {
+	if (mode == Mode::ToCacheOrFile && data->saveToCache()) {
+		data->save(origin, savename);
+		return;
+	}
+	InvokeQueued(qApp, crl::guard(&data->session(), [=] {
+		// If we call file dialog synchronously, it will stop
+		// background thread timers from working which would
+		// stop audio playback in voice chats / live streams.
 		if (mode != Mode::ToNewFile && data->saveFromData()) {
+			if (started) {
+				started();
+			}
 			return;
 		}
 		const auto filepath = data->filepath(true);
@@ -85,20 +104,42 @@ void DocumentSaveClickHandler::Save(
 		const auto filename = filepath.isEmpty()
 			? QString()
 			: fileinfo.fileName();
-		savename = DocumentFileNameForSave(
+		const auto savename = DocumentFileNameForSave(
 			data,
 			(mode == Mode::ToNewFile),
 			filename,
 			filedir);
-		if (savename.isEmpty()) {
-			return;
+		if (!savename.isEmpty()) {
+			data->save(origin, savename);
+			if (started) {
+				started();
+			}
 		}
-	}
-	data->save(origin, savename);
+	}));
+}
+
+void DocumentSaveClickHandler::SaveAndTrack(
+		FullMsgId itemId,
+		not_null<DocumentData*> document,
+		Mode mode,
+		Fn<void()> started) {
+	Save(itemId ? itemId : Data::FileOrigin(), document, mode, [=] {
+		if (document->loading() && !document->loadingFilePath().isEmpty()) {
+			if (const auto item = document->owner().message(itemId)) {
+				Core::App().downloadManager().addLoading({
+					.item = item,
+					.document = document,
+				});
+			}
+		}
+		if (started) {
+			started();
+		}
+	});
 }
 
 void DocumentSaveClickHandler::onClickImpl() const {
-	Save(context(), document());
+	SaveAndTrack(context(), document());
 }
 
 DocumentCancelClickHandler::DocumentCancelClickHandler(
@@ -130,7 +171,7 @@ void DocumentOpenWithClickHandler::Open(
 	data->saveFromDataSilent();
 	const auto path = data->filepath(true);
 	if (!path.isEmpty()) {
-		File::OpenWith(path, QCursor::pos());
+		File::OpenWith(path);
 	} else {
 		DocumentSaveClickHandler::Save(
 			origin,

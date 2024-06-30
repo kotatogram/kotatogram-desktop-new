@@ -61,13 +61,13 @@ if [ "$BuildTarget" == "linux" ]; then
   BinaryName="Telegram"
 elif [ "$BuildTarget" == "mac" ] ; then
   if [ "$arg1" == "x86_64" ] || [ "$arg1" == "arm64" ]; then
-    echo "Building version $AppVersionStrFull for macOS 10.12+ ($arg1).."
+    echo "Building version $AppVersionStrFull for macOS 10.13+ ($arg1).."
     MacArch="$arg1"
     if [ "$arg2" == "request_uuid" ] && [ "$arg3" != "" ]; then
       NotarizeRequestId="$arg3"
     fi
   else
-    echo "Building version $AppVersionStrFull for macOS 10.12+.."
+    echo "Building version $AppVersionStrFull for macOS 10.13+.."
     if [ "$arg2" != "" ]; then
       if [ "$arg1" == "request_uuid_x86_64" ]; then
         NotarizeRequestIdAMD64="$arg2"
@@ -141,12 +141,18 @@ if [ "$BuildTarget" == "linux" ]; then
 
   DropboxSymbolsPath="/media/psf/Dropbox/Telegram/symbols"
   if [ ! -d "$DropboxSymbolsPath" ]; then
-    Error "Dropbox path not found!"
+    DropboxSymbolsPath="/mnt/c/Telegram/Dropbox/Telegram/symbols"
+    if [ ! -d "$DropboxSymbolsPath" ]; then
+      Error "Dropbox path not found!"
+    fi
   fi
 
   BackupPath="/media/psf/backup/tdesktop/$AppVersionStrMajor/$AppVersionStrFull/t$BuildTarget"
   if [ ! -d "/media/psf/backup/tdesktop" ]; then
-    Error "Backup folder not found!"
+    BackupPath="/mnt/c/Telegram/Projects/backup/tdesktop/$AppVersionStrMajor/$AppVersionStrFull/t$BuildTarget"
+    if [ ! -d "/mnt/c/Telegram/Projects/backup/tdesktop" ]; then
+      Error "Backup folder not found!"
+    fi
   fi
 
   ./build/docker/centos_env/run.sh /usr/src/tdesktop/Telegram/build/docker/build.sh
@@ -323,8 +329,8 @@ if [ "$BuildTarget" == "mac" ] || [ "$BuildTarget" == "macstore" ]; then
     if [ "$BuildTarget" == "mac" ]; then
       codesign --force --deep --timestamp --options runtime --sign "Developer ID Application: John Preston" "$ReleasePath/$BundleName" --entitlements "$HomePath/Telegram/Telegram.entitlements"
     elif [ "$BuildTarget" == "macstore" ]; then
-      codesign --force --sign "3rd Party Mac Developer Application: Telegram FZ-LLC (C67CF9S4VU)" "$ReleasePath/$BundleName/Contents/Frameworks/Breakpad.framework/Versions/A/Resources/breakpadUtilities.dylib" --entitlements "$HomePath/Telegram/Breakpad.entitlements"
-      codesign --force --deep --sign "3rd Party Mac Developer Application: Telegram FZ-LLC (C67CF9S4VU)" "$ReleasePath/$BundleName" --entitlements "$HomePath/Telegram/Telegram Lite.entitlements"
+      codesign --force --timestamp --options runtime --sign "3rd Party Mac Developer Application: Telegram FZ-LLC (C67CF9S4VU)" "$ReleasePath/$BundleName/Contents/Frameworks/Breakpad.framework/Versions/A/Resources/breakpadUtilities.dylib" --entitlements "$HomePath/Telegram/Breakpad.entitlements"
+      codesign --force --deep --timestamp --options runtime --sign "3rd Party Mac Developer Application: Telegram FZ-LLC (C67CF9S4VU)" "$ReleasePath/$BundleName" --entitlements "$HomePath/Telegram/Telegram Lite.entitlements"
       echo "Making an installer.."
       productbuild --sign "3rd Party Mac Developer Installer: Telegram FZ-LLC (C67CF9S4VU)" --component "$ReleasePath/$BundleName" /Applications "$ReleasePath/$BinaryName.pkg"
     fi
@@ -357,7 +363,7 @@ if [ "$BuildTarget" == "mac" ] || [ "$BuildTarget" == "macstore" ]; then
         cp -f tsetup_template.dmg tsetup.temp.dmg
         TempDiskPath=`hdiutil attach -nobrowse -noautoopenrw -readwrite tsetup.temp.dmg | awk -F "\t" 'END {print $3}'`
         cp -R "./$BundleName" "$TempDiskPath/"
-        bless --folder "$TempDiskPath/" --openfolder "$TempDiskPath/"
+        bless --folder "$TempDiskPath/"
         hdiutil detach "$TempDiskPath"
         hdiutil convert tsetup.temp.dmg -format UDBZ -ov -o "$SetupFile"
         rm tsetup.temp.dmg
@@ -396,66 +402,8 @@ if [ "$BuildTarget" == "mac" ] || [ "$BuildTarget" == "macstore" ]; then
         cd "$ReleasePath"
       fi
     fi
-    if [ "$NotarizeRequestId" == "" ]; then
-      echo "Beginning notarization process."
-      set +e
-      xcrun altool --notarize-app --primary-bundle-id "com.tdesktop.Telegram" --username "$AC_USERNAME" --password "@keychain:AC_PASSWORD" --file "$SetupFile" > request_uuid.txt
-      set -e
-      while IFS='' read -r line || [[ -n "$line" ]]; do
-        Prefix=$(echo $line | cut -d' ' -f 1)
-        Value=$(echo $line | cut -d' ' -f 3)
-        if [ "$Prefix" == "RequestUUID" ]; then
-          RequestUUID=$Value
-        fi
-      done < "request_uuid.txt"
-      if [ "$RequestUUID" == "" ]; then
-        cat request_uuid.txt
-        Error "Could not extract Request UUID."
-      fi
-      echo "Request UUID: $RequestUUID"
-      rm request_uuid.txt
-    else
-      RequestUUID=$NotarizeRequestId
-      echo "Continue notarization process with Request UUID: $RequestUUID"
-    fi
-
-    RequestStatus=
-    LogFile=
-    while [[ "$RequestStatus" == "" ]]; do
-      sleep 5
-      xcrun altool --notarization-info "$RequestUUID" --username "$AC_USERNAME" --password "@keychain:AC_PASSWORD" > request_result.txt
-      while IFS='' read -r line || [[ -n "$line" ]]; do
-        Prefix=$(echo $line | cut -d' ' -f 1)
-        Value=$(echo $line | cut -d' ' -f 2)
-        if [ "$Prefix" == "LogFileURL:" ]; then
-          LogFile=$Value
-        fi
-        if [ "$Prefix" == "Status:" ]; then
-          if [ "$Value" == "in" ]; then
-            echo "In progress..."
-          else
-            RequestStatus=$Value
-            echo "Status: $RequestStatus"
-          fi
-        fi
-      done < "request_result.txt"
-    done
-    if [ "$RequestStatus" != "success" ]; then
-      echo "Notarization problems, response:"
-      cat request_result.txt
-      if [ "$LogFile" != "" ]; then
-        echo "Requesting log: $LogFile"
-        curl $LogFile
-      fi
-      Error "Notarization FAILED."
-    fi
-    rm request_result.txt
-
-    if [ "$LogFile" != "" ]; then
-      echo "Requesting log: $LogFile"
-      curl $LogFile > request_log.txt
-    fi
-
+    echo "Beginning notarization process."
+    xcrun notarytool submit "$SetupFile" --keychain-profile "preston" --wait
     xcrun stapler staple "$ReleasePath/$BundleName"
 
     if [ "$MacArch" != "" ]; then
@@ -537,34 +485,3 @@ sleep 1;
 echo -en "\007";
 sleep 1;
 echo -en "\007";
-
-if [ "$BuildTarget" == "mac" ]; then
-  if [ -f "$ReleasePath/request_log.txt" ]; then
-    DisplayingLog=
-    while IFS='' read -r line || [[ -n "$line" ]]; do
-      if [ "$DisplayingLog" == "1" ]; then
-        echo $line
-      else
-        Prefix=$(echo $line | cut -d' ' -f 1)
-        Value=$(echo $line | cut -d' ' -f 2)
-        if [ "$Prefix" == '"issues":' ]; then
-          if [ "$Value" != "null" ]; then
-            echo "NB! Notarization log issues:"
-            echo $line
-            DisplayingLog=1
-          else
-            DisplayingLog=0
-          fi
-        fi
-      fi
-    done < "$ReleasePath/request_log.txt"
-    if [ "$DisplayingLog" != "0" ] && [ "$DisplayingLog" != "1" ]; then
-      echo "NB! Notarization issues not found:"
-      cat "$ReleasePath/request_log.txt"
-    else
-      rm "$ReleasePath/request_log.txt"
-    fi
-  else
-    echo "NB! Notarization log not found :("
-  fi
-fi

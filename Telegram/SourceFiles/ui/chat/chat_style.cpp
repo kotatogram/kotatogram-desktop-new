@@ -9,6 +9,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/chat/chat_theme.h"
 #include "ui/image/image_prepare.h" // ImageRoundRadius
+#include "ui/text/text_custom_emoji.h"
+#include "ui/color_contrast.h"
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "styles/style_chat.h"
 #include "styles/style_dialogs.h"
@@ -23,51 +26,43 @@ void EnsureCorners(
 		const style::color &color,
 		const style::color *shadow = nullptr) {
 	if (corners.p[0].isNull()) {
-		corners = Ui::PrepareCornerPixmaps(radius, color, shadow);
+		corners = PrepareCornerPixmaps(radius, color, shadow);
 	}
 }
 
-void RectWithCorners(
-		Painter &p,
-		QRect rect,
-		const style::color &bg,
-		const CornersPixmaps &corners,
-		RectParts roundCorners) {
-	const auto parts = RectPart::Top
-		| RectPart::NoTopBottom
-		| RectPart::Bottom
-		| roundCorners;
-	FillRoundRect(p, rect, bg, corners, nullptr, parts);
-	if ((roundCorners & RectPart::AllCorners) != RectPart::AllCorners) {
-		const auto size = corners.p[0].width() / style::DevicePixelRatio();
-		if (!(roundCorners & RectPart::TopLeft)) {
-			p.fillRect(rect.x(), rect.y(), size, size, bg);
-		}
-		if (!(roundCorners & RectPart::TopRight)) {
-			p.fillRect(
-				rect.x() + rect.width() - size,
-				rect.y(),
-				size,
-				size,
-				bg);
-		}
-		if (!(roundCorners & RectPart::BottomLeft)) {
-			p.fillRect(
-				rect.x(),
-				rect.y() + rect.height() - size,
-				size,
-				size,
-				bg);
-		}
-		if (!(roundCorners & RectPart::BottomRight)) {
-			p.fillRect(
-				rect.x() + rect.width() - size,
-				rect.y() + rect.height() - size,
-				size,
-				size,
-				bg);
-		}
+void EnsureBlockquoteCache(
+		std::unique_ptr<Text::QuotePaintCache> &cache,
+		Fn<ColorIndexValues()> values) {
+	if (cache) {
+		return;
 	}
+	cache = std::make_unique<Text::QuotePaintCache>();
+	const auto &colors = values();
+	cache->bg = colors.bg;
+	cache->outlines = colors.outlines;
+	cache->icon = colors.name;
+}
+
+void EnsurePreCache(
+		std::unique_ptr<Text::QuotePaintCache> &cache,
+		const style::color &color,
+		Fn<std::optional<QColor>()> bgOverride) {
+	if (cache) {
+		return;
+	}
+	cache = std::make_unique<Text::QuotePaintCache>();
+	const auto bg = bgOverride();
+	cache->bg = bg.value_or(color->c);
+	if (!bg) {
+		cache->bg.setAlpha(kDefaultBgOpacity * 255);
+	}
+	cache->outlines[0] = color->c;
+	cache->outlines[0].setAlpha(kDefaultOutline1Opacity * 255);
+	cache->outlines[1] = cache->outlines[2] = QColor(0, 0, 0, 0);
+	cache->header = color->c;
+	cache->header.setAlpha(kDefaultOutline2Opacity * 255);
+	cache->icon = cache->outlines[0];
+	cache->icon.setAlpha(kDefaultOutline3Opacity * 255);
 }
 
 } // namespace
@@ -78,6 +73,14 @@ not_null<const MessageStyle*> ChatPaintContext::messageStyle() const {
 
 not_null<const MessageImageStyle*> ChatPaintContext::imageStyle() const {
 	return &st->imageStyle(selected());
+}
+
+not_null<Text::QuotePaintCache*> ChatPaintContext::quoteCache(
+		uint8 colorIndex) const {
+	return !outbg
+		? st->coloredQuoteCache(selected(), colorIndex).get()
+		: messageStyle()->quoteCache[
+			st->colorPatternIndex(colorIndex)].get();
 }
 
 int HistoryServiceMsgRadius() {
@@ -105,7 +108,65 @@ int HistoryServiceMsgInvertedShrink() {
 	return result;
 }
 
-ChatStyle::ChatStyle() {
+ColorIndexValues SimpleColorIndexValues(QColor color, int patternIndex) {
+	auto bg = color;
+	bg.setAlpha(kDefaultBgOpacity * 255);
+	auto result = ColorIndexValues{
+		.name = color,
+		.bg = bg,
+	};
+	result.outlines[0] = color;
+	result.outlines[0].setAlpha(kDefaultOutline1Opacity * 255);
+	if (patternIndex > 1) {
+		result.outlines[1] = result.outlines[0];
+		result.outlines[1].setAlpha(kDefaultOutline2Opacity * 255);
+		result.outlines[2] = result.outlines[0];
+		result.outlines[2].setAlpha(kDefaultOutline3Opacity * 255);
+	} else if (patternIndex > 0) {
+		result.outlines[1] = result.outlines[0];
+		result.outlines[1].setAlpha(kDefaultOutlineOpacitySecond * 255);
+		result.outlines[2] = QColor(0, 0, 0, 0);
+	} else {
+		result.outlines[1] = result.outlines[2] = QColor(0, 0, 0, 0);
+	}
+	return result;
+}
+
+int BackgroundEmojiData::CacheIndex(
+		bool selected,
+		bool outbg,
+		bool inbubble,
+		uint8 colorIndexPlusOne) {
+	const auto base = colorIndexPlusOne
+		? (colorIndexPlusOne - 1)
+		: (kColorIndexCount + (!inbubble ? 0 : outbg ? 1 : 2));
+	return (base * 2) + (selected ? 1 : 0);
+};
+
+int ColorPatternIndex(
+		const ColorIndicesCompressed &indices,
+		uint8 colorIndex,
+		bool dark) {
+	Expects(colorIndex >= 0 && colorIndex < kColorIndexCount);
+
+	if (!indices.colors
+		|| colorIndex < kSimpleColorIndexCount) {
+		return 0;
+	}
+	auto &data = (*indices.colors)[colorIndex];
+	auto &colors = dark ? data.dark : data.light;
+	return colors[2] ? 2 : colors[1] ? 1 : 0;
+}
+
+ChatStyle::ChatStyle(rpl::producer<ColorIndicesCompressed> colorIndices) {
+	if (colorIndices) {
+		_colorIndicesLifetime = std::move(
+			colorIndices
+		) | rpl::start_with_next([=](ColorIndicesCompressed &&indices) {
+			_colorIndices = std::move(indices);
+		});
+	}
+
 	finalize();
 	make(_historyPsaForwardPalette, st::historyPsaForwardPalette);
 	make(_imgReplyTextPalette, st::imgReplyTextPalette);
@@ -124,9 +185,13 @@ ChatStyle::ChatStyle() {
 	make(_msgBotKbUrlIcon, st::msgBotKbUrlIcon);
 	make(_msgBotKbPaymentIcon, st::msgBotKbPaymentIcon);
 	make(_msgBotKbSwitchPmIcon, st::msgBotKbSwitchPmIcon);
+	make(_msgBotKbWebviewIcon, st::msgBotKbWebviewIcon);
 	make(_historyFastCommentsIcon, st::historyFastCommentsIcon);
 	make(_historyFastShareIcon, st::historyFastShareIcon);
+	make(_historyFastTranscribeIcon, st::historyFastTranscribeIcon);
+	make(_historyFastTranscribeLock, st::historyFastTranscribeLock);
 	make(_historyGoToOriginalIcon, st::historyGoToOriginalIcon);
+	make(_historyFastCloseIcon, st::historyFastCloseIcon);
 	make(_historyMapPoint, st::historyMapPoint);
 	make(_historyMapPointInner, st::historyMapPointInner);
 	make(_youtubeIcon, st::youtubeIcon);
@@ -464,6 +529,24 @@ ChatStyle::ChatStyle() {
 		st::historyPollOutChoiceRight,
 		st::historyPollOutChoiceRightSelected);
 	make(
+		&MessageStyle::historyTranscribeIcon,
+		st::historyTranscribeInIcon,
+		st::historyTranscribeInIconSelected,
+		st::historyTranscribeOutIcon,
+		st::historyTranscribeOutIconSelected);
+	make(
+		&MessageStyle::historyTranscribeLock,
+		st::historyTranscribeInLock,
+		st::historyTranscribeInLockSelected,
+		st::historyTranscribeOutLock,
+		st::historyTranscribeOutLockSelected);
+	make(
+		&MessageStyle::historyTranscribeHide,
+		st::historyTranscribeInHide,
+		st::historyTranscribeInHideSelected,
+		st::historyTranscribeOutHide,
+		st::historyTranscribeOutHideSelected);
+	make(
 		&MessageImageStyle::msgDateImgBg,
 		st::msgDateImgBg,
 		st::msgDateImgBgSelected);
@@ -511,14 +594,45 @@ ChatStyle::ChatStyle() {
 		&MessageImageStyle::historyVideoMessageMute,
 		st::historyVideoMessageMute,
 		st::historyVideoMessageMuteSelected);
+	make(
+		&MessageImageStyle::historyVideoMessageTtlIcon,
+		st::historyVideoMessageTtlIcon,
+		st::historyVideoMessageTtlIconSelected);
+	make(
+		&MessageImageStyle::historyPageEnlarge,
+		st::historyPageEnlarge,
+		st::historyPageEnlargeSelected);
+	make(
+		&MessageStyle::historyVoiceMessageTTL,
+		st::historyVoiceMessageInTTL,
+		st::historyVoiceMessageInTTLSelected,
+		st::historyVoiceMessageOutTTL,
+		st::historyVoiceMessageOutTTLSelected);
+
+	updateDarkValue();
 }
 
+ChatStyle::ChatStyle(not_null<const style::palette*> isolated)
+: ChatStyle(rpl::producer<ColorIndicesCompressed>()) {
+	assignPalette(isolated);
+}
+
+ChatStyle::~ChatStyle() = default;
+
 void ChatStyle::apply(not_null<ChatTheme*> theme) {
-	const auto themePalette = theme->palette();
-	assignPalette(themePalette
-		? themePalette
-		: style::main_palette::get().get());
-	if (themePalette) {
+	applyCustomPalette(theme->palette());
+}
+
+void ChatStyle::updateDarkValue() {
+	const auto withBg = [&](const QColor &color) {
+		return CountContrast(windowBg()->c, color);
+	};
+	_dark = (withBg({ 0, 0, 0 }) < withBg({ 255, 255, 255 }));
+}
+
+void ChatStyle::applyCustomPalette(const style::palette *palette) {
+	assignPalette(palette ? palette : style::main_palette::get().get());
+	if (palette) {
 		_defaultPaletteChangeLifetime.destroy();
 	} else {
 		style::PaletteChanged(
@@ -528,28 +642,98 @@ void ChatStyle::apply(not_null<ChatTheme*> theme) {
 	}
 }
 
+void ChatStyle::applyAdjustedServiceBg(QColor serviceBg) {
+	auto r = 0, g = 0, b = 0, a = 0;
+	serviceBg.getRgb(&r, &g, &b, &a);
+	msgServiceBg().set(uchar(r), uchar(g), uchar(b), uchar(a));
+}
+
+std::span<Text::SpecialColor> ChatStyle::highlightColors() const {
+	if (_highlightColors.empty()) {
+		const auto push = [&](const style::color &color) {
+			_highlightColors.push_back({ &color->p, &color->p });
+		};
+
+		// comment, block-comment, prolog, doctype, cdata
+		push(statisticsChartLineLightblue());
+
+		// punctuation
+		push(statisticsChartLineRed());
+
+		// property, tag, boolean, number,
+		// constant, symbol, deleted
+		push(statisticsChartLineRed());
+
+		// selector, attr-name, string, char, builtin, inserted
+		push(statisticsChartLineOrange());
+
+		// operator, entity, url
+		push(statisticsChartLineRed());
+
+		// atrule, attr-value, keyword, function
+		push(statisticsChartLineBlue());
+
+		// class-name
+		push(statisticsChartLinePurple());
+
+		//push(statisticsChartLineLightgreen());
+		//push(statisticsChartLineGreen());
+		//push(statisticsChartLineGolden());
+	}
+	return _highlightColors;
+}
+
+void ChatStyle::clearColorIndexCaches() {
+	for (auto &style : _messageStyles) {
+		for (auto &cache : style.quoteCache) {
+			cache = nullptr;
+		}
+		for (auto &cache : style.replyCache) {
+			cache = nullptr;
+		}
+	}
+	for (auto &values : _coloredValues) {
+		values.reset();
+	}
+	for (auto &palette : _coloredTextPalettes) {
+		palette.linkFg.reset();
+	}
+	for (auto &cache : _coloredReplyCaches) {
+		cache = nullptr;
+	}
+	for (auto &cache : _coloredQuoteCaches) {
+		cache = nullptr;
+	}
+}
+
 void ChatStyle::assignPalette(not_null<const style::palette*> palette) {
 	*static_cast<style::palette*>(this) = *palette;
 	style::internal::resetIcons();
+
+	clearColorIndexCaches();
 	for (auto &style : _messageStyles) {
-		style.msgBgCorners = {};
+		style.msgBgCornersSmall = {};
+		style.msgBgCornersLarge = {};
+		style.preCache = nullptr;
+		style.textPalette.linkAlwaysActive
+			= style.semiboldPalette.linkAlwaysActive
+			= (style.textPalette.linkFg->c == style.historyTextFg->c);
 	}
 	for (auto &style : _imageStyles) {
 		style.msgDateImgBgCorners = {};
-		style.msgServiceBgCorners = {};
-		style.msgShadowCorners = {};
+		style.msgServiceBgCornersSmall = {};
+		style.msgServiceBgCornersLarge = {};
+		style.msgShadowCornersSmall = {};
+		style.msgShadowCornersLarge = {};
 	}
 	_serviceBgCornersNormal = {};
 	_serviceBgCornersInverted = {};
-	_msgBotKbOverBgAddCorners = {};
-	_msgSelectOverlayCornersSmall = {};
-	_msgSelectOverlayCornersLarge = {};
-
-	for (auto &stm : _messageStyles) {
-		const auto same = (stm.textPalette.linkFg->c == stm.historyTextFg->c);
-		stm.textPalette.linkAlwaysActive = same ? 1 : 0;
-		stm.semiboldPalette.linkAlwaysActive = same ? 1 : 0;
+	_msgBotKbOverBgAddCornersSmall = {};
+	_msgBotKbOverBgAddCornersLarge = {};
+	for (auto &corners : _msgSelectOverlayCorners) {
+		corners = {};
 	}
+	updateDarkValue();
 
 	_paletteChanged.fire({});
 }
@@ -564,20 +748,9 @@ const CornersPixmaps &ChatStyle::serviceBgCornersNormal() const {
 
 const CornersPixmaps &ChatStyle::serviceBgCornersInverted() const {
 	if (_serviceBgCornersInverted.p[0].isNull()) {
-		const auto radius = HistoryServiceMsgInvertedRadius();
-		const auto size = radius * style::DevicePixelRatio();
-		auto circle = style::colorizeImage(
-			style::createInvertedCircleMask(radius * 2),
+		_serviceBgCornersInverted = PrepareInvertedCornerPixmaps(
+			HistoryServiceMsgInvertedRadius(),
 			msgServiceBg());
-		circle.setDevicePixelRatio(style::DevicePixelRatio());
-		const auto fill = [&](int index, int xoffset, int yoffset) {
-			_serviceBgCornersInverted.p[index] = PixmapFromImage(
-				circle.copy(QRect(xoffset, yoffset, size, size)));
-		};
-		fill(0, 0, 0);
-		fill(1, size, 0);
-		fill(2, size, size);
-		fill(3, 0, size);
 	}
 	return _serviceBgCornersInverted;
 }
@@ -585,10 +758,35 @@ const CornersPixmaps &ChatStyle::serviceBgCornersInverted() const {
 const MessageStyle &ChatStyle::messageStyle(bool outbg, bool selected) const {
 	auto &result = messageStyleRaw(outbg, selected);
 	EnsureCorners(
-		result.msgBgCorners,
-		st::historyMessageRadius,
+		result.msgBgCornersSmall,
+		BubbleRadiusSmall(),
 		result.msgBg,
 		&result.msgShadow);
+	EnsureCorners(
+		result.msgBgCornersLarge,
+		BubbleRadiusLarge(),
+		result.msgBg,
+		&result.msgShadow);
+	const auto &replyBar = result.msgReplyBarColor->c;
+	for (auto i = 0; i != kColorPatternsCount; ++i) {
+		EnsureBlockquoteCache(
+			result.replyCache[i],
+			[&] { return SimpleColorIndexValues(replyBar, i); });
+		if (!result.quoteCache[i]) {
+			result.quoteCache[i] = std::make_unique<Text::QuotePaintCache>(
+				*result.replyCache[i]);
+		}
+	}
+
+	const auto preBgOverride = [&] {
+		return _dark ? QColor(0, 0, 0, 192) : std::optional<QColor>();
+	};
+	EnsurePreCache(
+		result.preCache,
+		(selected
+			? result.textPalette.selectMonoFg
+			: result.textPalette.monoFg),
+		preBgOverride);
 	return result;
 }
 
@@ -596,41 +794,210 @@ const MessageImageStyle &ChatStyle::imageStyle(bool selected) const {
 	auto &result = imageStyleRaw(selected);
 	EnsureCorners(
 		result.msgDateImgBgCorners,
-		st::dateRadius,
+		(st::msgDateImgPadding.y() * 2 + st::normalFont->height) / 2,
 		result.msgDateImgBg);
 	EnsureCorners(
-		result.msgServiceBgCorners,
-		st::dateRadius,
+		result.msgServiceBgCornersSmall,
+		BubbleRadiusSmall(),
 		result.msgServiceBg);
 	EnsureCorners(
-		result.msgShadowCorners,
-		st::historyMessageRadius,
+		result.msgServiceBgCornersLarge,
+		BubbleRadiusLarge(),
+		result.msgServiceBg);
+	EnsureCorners(
+		result.msgShadowCornersSmall,
+		BubbleRadiusSmall(),
 		result.msgShadow);
+	EnsureCorners(
+		result.msgShadowCornersLarge,
+		BubbleRadiusLarge(),
+		result.msgShadow);
+
 	return result;
 }
 
-const CornersPixmaps &ChatStyle::msgBotKbOverBgAddCorners() const {
+int ChatStyle::colorPatternIndex(uint8 colorIndex) const {
+	Expects(colorIndex >= 0 && colorIndex < kColorIndexCount);
+
+	if (!_colorIndices.colors
+		|| colorIndex < kSimpleColorIndexCount) {
+		return 0;
+	}
+	auto &data = (*_colorIndices.colors)[colorIndex];
+	auto &colors = _dark ? data.dark : data.light;
+	return colors[2] ? 2 : colors[1] ? 1 : 0;
+}
+
+ColorIndexValues ChatStyle::computeColorIndexValues(
+		bool selected,
+		uint8 colorIndex) const {
+	if (!_colorIndices.colors) {
+		colorIndex %= kSimpleColorIndexCount;
+	}
+	if (colorIndex < kSimpleColorIndexCount) {
+		const auto list = std::array{
+			&historyPeer1NameFg(),
+			&historyPeer2NameFg(),
+			&historyPeer3NameFg(),
+			&historyPeer4NameFg(),
+			&historyPeer5NameFg(),
+			&historyPeer6NameFg(),
+			&historyPeer7NameFg(),
+			&historyPeer8NameFg(),
+		};
+		const auto listSelected = std::array{
+			&historyPeer1NameFgSelected(),
+			&historyPeer2NameFgSelected(),
+			&historyPeer3NameFgSelected(),
+			&historyPeer4NameFgSelected(),
+			&historyPeer5NameFgSelected(),
+			&historyPeer6NameFgSelected(),
+			&historyPeer7NameFgSelected(),
+			&historyPeer8NameFgSelected(),
+		};
+		const auto paletteIndex = ColorIndexToPaletteIndex(colorIndex);
+		auto result = ColorIndexValues{
+			.name = (*(selected ? listSelected : list)[paletteIndex])->c,
+		};
+		result.bg = result.name;
+		result.bg.setAlpha(kDefaultBgOpacity * 255);
+		result.outlines[0] = result.name;
+		result.outlines[0].setAlpha(kDefaultOutline1Opacity * 255);
+		result.outlines[1] = result.outlines[2] = QColor(0, 0, 0, 0);
+		return result;
+	}
+	auto &data = (*_colorIndices.colors)[colorIndex];
+	auto &colors = _dark ? data.dark : data.light;
+	if (!colors[0]) {
+		return computeColorIndexValues(
+			selected,
+			colorIndex % kSimpleColorIndexCount);
+	}
+	const auto color = [&](int index) {
+		const auto v = colors[index];
+		return v
+			? QColor((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF)
+			: QColor(0, 0, 0, 0);
+	};
+	auto result = ColorIndexValues{
+		.outlines = { color(0), color(1), color(2) }
+	};
+	result.bg = result.outlines[0];
+	result.bg.setAlpha(kDefaultBgOpacity * 255);
+	result.name = result.outlines[0];
+	return result;
+}
+
+not_null<Text::QuotePaintCache*> ChatStyle::serviceQuoteCache(
+		bool twoColored) const {
+	const auto index = (twoColored ? 1 : 0);
+	const auto &service = msgServiceFg()->c;
+	EnsureBlockquoteCache(
+		_serviceQuoteCache[index],
+		[&] { return SimpleColorIndexValues(service, twoColored); });
+	return _serviceQuoteCache[index].get();
+}
+
+not_null<Text::QuotePaintCache*> ChatStyle::serviceReplyCache(
+		bool twoColored) const {
+	const auto index = (twoColored ? 1 : 0);
+	const auto &service = msgServiceFg()->c;
+	EnsureBlockquoteCache(
+		_serviceReplyCache[index],
+		[&] { return SimpleColorIndexValues(service, twoColored); });
+	return _serviceReplyCache[index].get();
+}
+
+const ColorIndexValues &ChatStyle::coloredValues(
+		bool selected,
+		uint8 colorIndex) const {
+	Expects(colorIndex >= 0 && colorIndex < kColorIndexCount);
+
+	const auto shift = (selected ? kColorIndexCount : 0);
+	auto &result = _coloredValues[shift + colorIndex];
+	if (!result) {
+		result.emplace(computeColorIndexValues(selected, colorIndex));
+	}
+	return *result;
+}
+
+const style::TextPalette &ChatStyle::coloredTextPalette(
+		bool selected,
+		uint8 colorIndex) const {
+	Expects(colorIndex >= 0 && colorIndex < kColorIndexCount);
+
+	const auto shift = (selected ? kColorIndexCount : 0);
+	auto &result = _coloredTextPalettes[shift + colorIndex];
+	if (!result.linkFg) {
+		result.linkFg.emplace(coloredValues(selected, colorIndex).name);
+		make(
+			result.data,
+			(selected
+				? st::inReplyTextPaletteSelected
+				: st::inReplyTextPalette));
+		result.data.linkFg = result.linkFg->color();
+		result.data.selectLinkFg = result.data.linkFg;
+	}
+	return result.data;
+}
+
+not_null<BackgroundEmojiData*> ChatStyle::backgroundEmojiData(
+		uint64 id) const {
+	return &_backgroundEmojis[id];
+}
+
+not_null<Text::QuotePaintCache*> ChatStyle::coloredQuoteCache(
+		bool selected,
+		uint8 colorIndex) const {
+	return coloredCache(_coloredQuoteCaches, selected, colorIndex);
+}
+
+not_null<Text::QuotePaintCache*> ChatStyle::coloredReplyCache(
+		bool selected,
+		uint8 colorIndex) const {
+	return coloredCache(_coloredReplyCaches, selected, colorIndex);
+}
+
+not_null<Text::QuotePaintCache*> ChatStyle::coloredCache(
+		ColoredQuotePaintCaches &caches,
+		bool selected,
+		uint8 colorIndex) const {
+	Expects(colorIndex >= 0 && colorIndex < kColorIndexCount);
+
+	const auto shift = (selected ? kColorIndexCount : 0);
+	auto &cache = caches[shift + colorIndex];
+	EnsureBlockquoteCache(cache, [&] {
+		return coloredValues(selected, colorIndex);
+	});
+	return cache.get();
+}
+
+const CornersPixmaps &ChatStyle::msgBotKbOverBgAddCornersSmall() const {
 	EnsureCorners(
-		_msgBotKbOverBgAddCorners,
-		st::dateRadius,
+		_msgBotKbOverBgAddCornersSmall,
+		BubbleRadiusSmall(),
 		msgBotKbOverBgAdd());
-	return _msgBotKbOverBgAddCorners;
+	return _msgBotKbOverBgAddCornersSmall;
 }
 
-const CornersPixmaps &ChatStyle::msgSelectOverlayCornersSmall() const {
+const CornersPixmaps &ChatStyle::msgBotKbOverBgAddCornersLarge() const {
 	EnsureCorners(
-		_msgSelectOverlayCornersSmall,
-		st::roundRadiusSmall,
-		msgSelectOverlay());
-	return _msgSelectOverlayCornersSmall;
+		_msgBotKbOverBgAddCornersLarge,
+		BubbleRadiusLarge(),
+		msgBotKbOverBgAdd());
+	return _msgBotKbOverBgAddCornersLarge;
 }
 
-const CornersPixmaps &ChatStyle::msgSelectOverlayCornersLarge() const {
+const CornersPixmaps &ChatStyle::msgSelectOverlayCorners(
+		CachedCornerRadius radius) const {
+	const auto index = static_cast<int>(radius);
+	Assert(index >= 0 && index < int(CachedCornerRadius::kCount));
+
 	EnsureCorners(
-		_msgSelectOverlayCornersLarge,
-		st::historyMessageRadius,
+		_msgSelectOverlayCorners[index],
+		CachedCornerRadiusValue(radius),
 		msgSelectOverlay());
-	return _msgSelectOverlayCornersLarge;
+	return _msgSelectOverlayCorners[index];
 }
 
 MessageStyle &ChatStyle::messageStyleRaw(bool outbg, bool selected) const {
@@ -679,14 +1046,13 @@ void ChatStyle::make(
 	my.linkAlwaysActive = original.linkAlwaysActive;
 	make(my.linkFg, original.linkFg);
 	make(my.monoFg, original.monoFg);
+	make(my.spoilerFg, original.spoilerFg);
 	make(my.selectBg, original.selectBg);
 	make(my.selectFg, original.selectFg);
 	make(my.selectLinkFg, original.selectLinkFg);
 	make(my.selectMonoFg, original.selectMonoFg);
+	make(my.selectSpoilerFg, original.selectSpoilerFg);
 	make(my.selectOverlay, original.selectOverlay);
-	make(my.spoilerBg, original.spoilerBg);
-	make(my.spoilerActiveBg, original.spoilerActiveBg);
-	make(my.spoilerActiveFg, original.spoilerActiveFg);
 }
 
 void ChatStyle::make(
@@ -733,34 +1099,136 @@ void ChatStyle::make(
 	make(imageSelected().*my, originalSelected);
 }
 
-void FillComplexOverlayRect(
-		Painter &p,
+uint8 DecideColorIndex(uint64 id) {
+	return id % kSimpleColorIndexCount;
+}
+
+uint8 ColorIndexToPaletteIndex(uint8 colorIndex) {
+	Expects(colorIndex >= 0 && colorIndex < kColorIndexCount);
+
+	const int8 map[] = { 0, 7, 4, 1, 6, 3, 5 };
+	return map[colorIndex % kSimpleColorIndexCount];
+}
+
+QColor FromNameFg(
 		not_null<const ChatStyle*> st,
+		bool selected,
+		uint8 colorIndex) {
+	return st->coloredValues(selected, colorIndex).name;
+}
+
+void FillComplexOverlayRect(
+		QPainter &p,
 		QRect rect,
-		ImageRoundRadius radius,
-		RectParts roundCorners) {
-	const auto bg = st->msgSelectOverlay();
-	if (radius == ImageRoundRadius::Ellipse) {
-		PainterHighQualityEnabler hq(p);
-		p.setPen(Qt::NoPen);
-		p.setBrush(bg);
-		p.drawEllipse(rect);
-	} else {
-		const auto &corners = (radius == ImageRoundRadius::Small)
-			? st->msgSelectOverlayCornersSmall()
-			: st->msgSelectOverlayCornersLarge();
-		RectWithCorners(p, rect, bg, corners, roundCorners);
+		const style::color &color,
+		const CornersPixmaps &corners) {
+	using namespace Images;
+
+	const auto pix = corners.p;
+	const auto fillRect = [&](QRect rect) {
+		p.fillRect(rect, color);
+	};
+	if (pix[kTopLeft].isNull()
+		&& pix[kTopRight].isNull()
+		&& pix[kBottomLeft].isNull()
+		&& pix[kBottomRight].isNull()) {
+		fillRect(rect);
+		return;
+	}
+
+	const auto ratio = style::DevicePixelRatio();
+	const auto fillCorner = [&](int left, int top, int index) {
+		p.drawPixmap(left, top, pix[index]);
+	};
+	const auto cornerSize = [&](int index) {
+		const auto &p = pix[index];
+		return p.isNull() ? 0 : p.width() / ratio;
+	};
+	const auto verticalSkip = [&](int left, int right) {
+		return std::max(cornerSize(left), cornerSize(right));
+	};
+	const auto top = verticalSkip(kTopLeft, kTopRight);
+	const auto bottom = verticalSkip(kBottomLeft, kBottomRight);
+	if (top) {
+		const auto left = cornerSize(kTopLeft);
+		const auto right = cornerSize(kTopRight);
+		if (left) {
+			fillCorner(rect.left(), rect.top(), kTopLeft);
+			if (const auto add = top - left) {
+				fillRect({ rect.left(), rect.top() + left, left, add });
+			}
+		}
+		if (const auto fill = rect.width() - left - right; fill > 0) {
+			fillRect({ rect.left() + left, rect.top(), fill, top });
+		}
+		if (right) {
+			fillCorner(
+				rect.left() + rect.width() - right,
+				rect.top(),
+				kTopRight);
+			if (const auto add = top - right) {
+				fillRect({
+					rect.left() + rect.width() - right,
+					rect.top() + right,
+					right,
+					add,
+				});
+			}
+		}
+	}
+	if (const auto h = rect.height() - top - bottom; h > 0) {
+		fillRect({ rect.left(), rect.top() + top, rect.width(), h });
+	}
+	if (bottom) {
+		const auto left = cornerSize(kBottomLeft);
+		const auto right = cornerSize(kBottomRight);
+		if (left) {
+			fillCorner(
+				rect.left(),
+				rect.top() + rect.height() - left,
+				kBottomLeft);
+			if (const auto add = bottom - left) {
+				fillRect({
+					rect.left(),
+					rect.top() + rect.height() - bottom,
+					left,
+					add,
+				});
+			}
+		}
+		if (const auto fill = rect.width() - left - right; fill > 0) {
+			fillRect({
+				rect.left() + left,
+				rect.top() + rect.height() - bottom,
+				fill,
+				bottom,
+			});
+		}
+		if (right) {
+			fillCorner(
+				rect.left() + rect.width() - right,
+				rect.top() + rect.height() - right,
+				kBottomRight);
+			if (const auto add = bottom - right) {
+				fillRect({
+					rect.left() + rect.width() - right,
+					rect.top() + rect.height() - bottom,
+					right,
+					add,
+				});
+			}
+		}
 	}
 }
 
-void FillComplexLocationRect(
-		Painter &p,
+void FillComplexEllipse(
+		QPainter &p,
 		not_null<const ChatStyle*> st,
-		QRect rect,
-		ImageRoundRadius radius,
-		RectParts roundCorners) {
-	const auto stm = &st->messageStyle(false, false);
-	RectWithCorners(p, rect, stm->msgBg, stm->msgBgCorners, roundCorners);
+		QRect rect) {
+	PainterHighQualityEnabler hq(p);
+	p.setPen(Qt::NoPen);
+	p.setBrush(st->msgSelectOverlay());
+	p.drawEllipse(rect);
 }
 
 } // namespace Ui

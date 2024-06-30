@@ -7,8 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "ui/widgets/continuous_sliders.h"
 
+#include "ui/painter.h"
 #include "base/timer.h"
 #include "base/platform/base_platform_info.h"
+#include "styles/style_widgets.h"
 
 namespace Ui {
 namespace {
@@ -165,7 +167,7 @@ float64 FilledSlider::getOverDuration() const {
 }
 
 void FilledSlider::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 	PainterHighQualityEnabler hq(p);
 
 	p.setPen(Qt::NoPen);
@@ -228,7 +230,7 @@ void MediaSlider::paintEvent(QPaintEvent *e) {
 	if (_paintDisabled) {
 		return;
 	}
-	Painter p(this);
+	auto p = QPainter(this);
 	PainterHighQualityEnabler hq(p);
 
 	p.setPen(Qt::NoPen);

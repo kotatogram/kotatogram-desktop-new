@@ -7,13 +7,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/timer.h"
 #include "ui/rp_widget.h"
 #include "ui/effects/animations.h"
-#include "ui/chat/select_scroll_manager.h" // Has base/timer.h.
+#include "ui/dragging_scroll_manager.h"
 #include "ui/widgets/tooltip.h"
 #include "mtproto/sender.h"
 #include "data/data_messages.h"
 #include "history/view/history_view_element.h"
+#include "history/history_view_highlight_manager.h"
+#include "history/history_view_top_toast.h"
+
+struct ClickHandlerContext;
 
 namespace Main {
 class Session;
@@ -22,6 +27,9 @@ class Session;
 namespace Ui {
 class PopupMenu;
 class ChatTheme;
+struct ChatPaintContext;
+enum class TouchScrollState;
+struct PeerUserpicView;
 } // namespace Ui
 
 namespace Window {
@@ -30,19 +38,26 @@ class SessionController;
 
 namespace Data {
 struct Group;
-class CloudImageView;
 struct Reaction;
+struct AllowedReactions;
 } // namespace Data
 
 namespace HistoryView::Reactions {
 class Manager;
+struct ChosenReaction;
 struct ButtonParameters;
 } // namespace HistoryView::Reactions
+
+namespace Window {
+struct SectionShow;
+} // namespace Window
 
 namespace HistoryView {
 
 struct TextState;
 struct StateRequest;
+class EmojiInteractions;
+class TranslateTracker;
 enum class CursorState : char;
 enum class PointState : char;
 enum class Context : char;
@@ -79,9 +94,10 @@ using SelectedItems = std::vector<SelectedItem>;
 class ListDelegate {
 public:
 	virtual Context listContext() = 0;
-	virtual void listScrollTo(int top) = 0;
+	virtual bool listScrollTo(int top, bool syntetic = true) = 0;
 	virtual void listCancelRequest() = 0;
 	virtual void listDeleteRequest() = 0;
+	virtual void listTryProcessKeyInput(not_null<QKeyEvent*> e) = 0;
 	virtual rpl::producer<Data::MessagesSlice> listSource(
 		Data::MessagePosition aroundId,
 		int limitBefore,
@@ -92,17 +108,24 @@ public:
 		not_null<HistoryItem*> first,
 		not_null<HistoryItem*> second) = 0;
 	virtual void listSelectionChanged(SelectedItems &&items) = 0;
-	virtual void listVisibleItemsChanged(HistoryItemsList &&items) = 0;
+	virtual void listMarkReadTill(not_null<HistoryItem*> item) = 0;
+	virtual void listMarkContentsRead(
+		const base::flat_set<not_null<HistoryItem*>> &items) = 0;
 	virtual MessagesBarData listMessagesBar(
 		const std::vector<not_null<Element*>> &elements) = 0;
 	virtual void listContentRefreshed() = 0;
-	virtual ClickHandlerPtr listDateLink(not_null<Element*> view) = 0;
+	virtual void listUpdateDateLink(
+		ClickHandlerPtr &link,
+		not_null<Element*> view) = 0;
 	virtual bool listElementHideReply(not_null<const Element*> view) = 0;
 	virtual bool listElementShownUnread(not_null<const Element*> view) = 0;
 	virtual bool listIsGoodForAroundPosition(
 		not_null<const Element*> view) = 0;
 	virtual void listSendBotCommand(
 		const QString &command,
+		const FullMsgId &context) = 0;
+	virtual void listSearch(
+		const QString &query,
 		const FullMsgId &context) = 0;
 	virtual void listHandleViaClick(not_null<UserData*> bot) = 0;
 	virtual not_null<Ui::ChatTheme*> listChatTheme() = 0;
@@ -111,9 +134,26 @@ public:
 	CopyRestrictionType listCopyRestrictionType() {
 		return listCopyRestrictionType(nullptr);
 	}
+	virtual CopyRestrictionType listCopyMediaRestrictionType(
+		not_null<HistoryItem*> item) = 0;
 	virtual CopyRestrictionType listSelectRestrictionType() = 0;
 	virtual auto listAllowedReactionsValue()
-		-> rpl::producer<std::optional<base::flat_set<QString>>> = 0;
+		-> rpl::producer<Data::AllowedReactions> = 0;
+	virtual void listShowPremiumToast(not_null<DocumentData*> document) = 0;
+	virtual void listOpenPhoto(
+		not_null<PhotoData*> photo,
+		FullMsgId context) = 0;
+	virtual void listOpenDocument(
+		not_null<DocumentData*> document,
+		FullMsgId context,
+		bool showInMediaView) = 0;
+	virtual void listPaintEmpty(
+		Painter &p,
+		const Ui::ChatPaintContext &context) = 0;
+	virtual QString listElementAuthorRank(not_null<const Element*> view) = 0;
+	virtual History *listTranslateHistory() = 0;
+	virtual void listAddTranslatedItems(
+		not_null<TranslateTracker*> tracker) = 0;
 };
 
 struct SelectionData {
@@ -167,8 +207,7 @@ private:
 class ListWidget final
 	: public Ui::RpWidget
 	, public ElementDelegate
-	, public Ui::AbstractTooltipShower
-	, private base::Subscriber {
+	, public Ui::AbstractTooltipShower {
 public:
 	ListWidget(
 		QWidget *parent,
@@ -192,23 +231,19 @@ public:
 		Data::MessagePosition position) const;
 	Element *viewByPosition(Data::MessagePosition position) const;
 	std::optional<int> scrollTopForView(not_null<Element*> view) const;
-	enum class AnimatedScroll {
-		Full,
-		Part,
-		None,
-	};
-	void scrollTo(
-		int scrollTop,
-		Data::MessagePosition attachPosition,
-		int delta,
-		AnimatedScroll type);
 	[[nodiscard]] bool animatedScrolling() const;
 	bool isAbovePosition(Data::MessagePosition position) const;
 	bool isBelowPosition(Data::MessagePosition position) const;
-	void highlightMessage(FullMsgId itemId);
-	void showAroundPosition(
+	void highlightMessage(
+		FullMsgId itemId,
+		const TextWithEntities &part,
+		int partOffsetHint);
+
+	void showAtPosition(
 		Data::MessagePosition position,
-		Fn<bool()> overrideInitialScroll);
+		const Window::SectionShow &params,
+		Fn<void(bool found)> done = nullptr);
+	void refreshViewer();
 
 	[[nodiscard]] TextForMimeData getSelectedText() const;
 	[[nodiscard]] MessageIdsList getSelectedIds() const;
@@ -217,17 +252,32 @@ public:
 	void selectItem(not_null<HistoryItem*> item);
 	void selectItemAsGroup(not_null<HistoryItem*> item);
 
+	void touchScrollUpdated(const QPoint &screenPos);
+
 	[[nodiscard]] bool loadedAtTopKnown() const;
 	[[nodiscard]] bool loadedAtTop() const;
 	[[nodiscard]] bool loadedAtBottomKnown() const;
 	[[nodiscard]] bool loadedAtBottom() const;
 	[[nodiscard]] bool isEmpty() const;
 
+	[[nodiscard]] bool markingContentsRead() const;
+	[[nodiscard]] bool markingMessagesRead() const;
+	void showFinished();
+	void checkActivation();
+
 	[[nodiscard]] bool hasCopyRestriction(HistoryItem *item = nullptr) const;
+	[[nodiscard]] bool hasCopyMediaRestriction(
+		not_null<HistoryItem*> item) const;
 	[[nodiscard]] bool showCopyRestriction(HistoryItem *item = nullptr);
+	[[nodiscard]] bool showCopyMediaRestriction(not_null<HistoryItem*> item);
 	[[nodiscard]] bool hasCopyRestrictionForSelected() const;
 	[[nodiscard]] bool showCopyRestrictionForSelected();
 	[[nodiscard]] bool hasSelectRestriction() const;
+
+	[[nodiscard]] std::pair<Element*, int> findViewForPinnedTracking(
+		int top) const;
+	[[nodiscard]] ClickHandlerContext prepareClickHandlerContext(
+		FullMsgId id);
 
 	// AbstractTooltipShower interface
 	QString tooltipText() const override;
@@ -237,8 +287,8 @@ public:
 	[[nodiscard]] rpl::producer<FullMsgId> editMessageRequested() const;
 	void editMessageRequestNotify(FullMsgId item) const;
 	[[nodiscard]] bool lastMessageEditRequestNotify() const;
-	[[nodiscard]] rpl::producer<FullMsgId> replyToMessageRequested() const;
-	void replyToMessageRequestNotify(FullMsgId item);
+	[[nodiscard]] rpl::producer<FullReplyTo> replyToMessageRequested() const;
+	void replyToMessageRequestNotify(FullReplyTo id);
 	[[nodiscard]] rpl::producer<FullMsgId> readMessageRequested() const;
 	[[nodiscard]] rpl::producer<FullMsgId> showMessageRequested() const;
 	void replyNextMessage(FullMsgId fullId, bool next = true);
@@ -247,18 +297,11 @@ public:
 		not_null<const Element*> view,
 		QPoint position,
 		const TextState &reactionState) const;
+	void toggleFavoriteReaction(not_null<Element*> view) const;
 
 	// ElementDelegate interface.
 	Context elementContext() override;
-	std::unique_ptr<Element> elementCreate(
-		not_null<HistoryMessage*> message,
-		Element *replacing = nullptr) override;
-	std::unique_ptr<Element> elementCreate(
-		not_null<HistoryService*> message,
-		Element *replacing = nullptr) override;
 	bool elementUnderCursor(not_null<const Element*> view) override;
-	crl::time elementHighlightTime(
-		not_null<const HistoryItem*> item) override;
 	bool elementInSelectionMode() override;
 	bool elementIntersectsRange(
 		not_null<const Element*> view,
@@ -279,20 +322,28 @@ public:
 	void elementShowTooltip(
 		const TextWithEntities &text,
 		Fn<void()> hiddenCallback) override;
-	bool elementIsGifPaused() override;
+	bool elementAnimationsPaused() override;
 	bool elementHideReply(not_null<const Element*> view) override;
 	bool elementShownUnread(not_null<const Element*> view) override;
 	void elementSendBotCommand(
 		const QString &command,
 		const FullMsgId &context) override;
+	void elementSearchInList(
+		const QString &query,
+		const FullMsgId &context) override;
 	void elementHandleViaClick(not_null<UserData*> bot) override;
 	bool elementIsChatWide() override;
 	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
-	void elementReplyTo(const FullMsgId &to) override;
+	void elementReplyTo(const FullReplyTo &to) override;
 	void elementStartInteraction(not_null<const Element*> view) override;
-	void elementShowSpoilerAnimation() override;
+	void elementStartPremium(
+		not_null<const Element*> view,
+		Element *replacing) override;
+	void elementCancelPremium(not_null<const Element*> view) override;
+	QString elementAuthorRank(not_null<const Element*> view) override;
 
 	void setEmptyInfoWidget(base::unique_qptr<Ui::RpWidget> &&w);
+	void overrideIsChatWide(bool isWide);
 
 	~ListWidget();
 
@@ -301,6 +352,8 @@ protected:
 		int visibleTop,
 		int visibleBottom) override;
 
+	bool eventHook(QEvent *e) override; // calls touchEvent when necessary
+	void touchEvent(QTouchEvent *e);
 	void paintEvent(QPaintEvent *e) override;
 	void keyPressEvent(QKeyEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
@@ -315,6 +368,14 @@ protected:
 	int resizeGetHeight(int newWidth) override;
 
 private:
+	using ScrollTopState = ListMemento::ScrollTopState;
+	using PointState = HistoryView::PointState;
+	using CursorState = HistoryView::CursorState;
+	using ChosenReaction = HistoryView::Reactions::ChosenReaction;
+	using ViewsMap = base::flat_map<
+		not_null<HistoryItem*>,
+		std::unique_ptr<Element>>;
+
 	struct MouseState {
 		MouseState();
 		MouseState(
@@ -365,20 +426,32 @@ private:
 		Selecting,
 		Deselecting,
 	};
-	using ScrollTopState = ListMemento::ScrollTopState;
-	using PointState = HistoryView::PointState;
-	using CursorState = HistoryView::CursorState;
 
-	void refreshViewer();
+	void onTouchSelect();
+	void onTouchScrollTimer();
+
 	void updateAroundPositionFromNearest(int nearestIndex);
 	void refreshRows(const Data::MessagesSlice &old);
 	ScrollTopState countScrollState() const;
 	void saveScrollState();
 	void restoreScrollState();
 
+	[[nodiscard]] bool jumpToBottomInsteadOfUnread() const;
+	void showAroundPosition(
+		Data::MessagePosition position,
+		Fn<bool()> overrideInitialScroll);
+	bool showAtPositionNow(
+		Data::MessagePosition position,
+		const Window::SectionShow &params,
+		Fn<void(bool found)> done);
+
+	Ui::ChatPaintContext preparePaintContext(const QRect &clip) const;
+
 	Element *viewForItem(FullMsgId itemId) const;
 	Element *viewForItem(const HistoryItem *item) const;
-	not_null<Element*> enforceViewForItem(not_null<HistoryItem*> item);
+	not_null<Element*> enforceViewForItem(
+		not_null<HistoryItem*> item,
+		ViewsMap &old);
 
 	void mouseActionStart(
 		const QPoint &globalPosition,
@@ -395,13 +468,17 @@ private:
 	int itemTop(not_null<const Element*> view) const;
 	void repaintItem(FullMsgId itemId);
 	void repaintItem(const Element *view);
-	void repaintHighlightedItem(not_null<const Element*> view);
 	void resizeItem(not_null<Element*> view);
 	void refreshItem(not_null<const Element*> view);
 	void itemRemoved(not_null<const HistoryItem*> item);
 	QPoint mapPointToItem(QPoint point, const Element *view) const;
 
 	void showContextMenu(QContextMenuEvent *e, bool showFromTouch = false);
+	void reactionChosen(ChosenReaction reaction);
+
+	void touchResetSpeed();
+	void touchUpdateSpeed();
+	void touchDeaccelerate(int32 elapsed);
 
 	[[nodiscard]] int findItemIndexByY(int y) const;
 	[[nodiscard]] not_null<Element*> findItemByY(int y) const;
@@ -424,6 +501,21 @@ private:
 	void scrollDateCheck();
 	void scrollDateHideByTimer();
 	void keepScrollDateForNow();
+
+	void computeScrollTo(
+		int to,
+		Data::MessagePosition position,
+		anim::type animated);
+	enum class AnimatedScroll {
+		Full,
+		Part,
+		None,
+	};
+	void scrollTo(
+		int scrollTop,
+		Data::MessagePosition attachPosition,
+		int delta,
+		AnimatedScroll type);
 
 	void trySwitchToWordSelection();
 	void switchToWordSelection();
@@ -503,9 +595,20 @@ private:
 	void scrollToAnimationCallback(FullMsgId attachToId, int relativeTo);
 	void startItemRevealAnimations();
 	void revealItemsCallback();
+	void maybeMarkReactionsRead(not_null<HistoryItem*> item);
 
-	void updateHighlightedMessage();
-	void clearHighlightedMessage();
+	void startMessageSendingAnimation(not_null<HistoryItem*> item);
+	void showPremiumStickerTooltip(
+		not_null<const HistoryView::Element*> view);
+
+	void paintUserpics(
+		Painter &p,
+		const Ui::ChatPaintContext &context,
+		QRect clip);
+	void paintDates(
+		Painter &p,
+		const Ui::ChatPaintContext &context,
+		QRect clip);
 
 	// This function finds all history items that are displayed and calls template method
 	// for each found message (in given direction) in the passed history with passed top offset.
@@ -531,21 +634,23 @@ private:
 	template <typename Method>
 	void enumerateDates(Method method);
 
+	void setGeometryCrashAnnotations(not_null<Element*> view);
+
 	static constexpr auto kMinimalIdsLimit = 24;
 
 	const not_null<ListDelegate*> _delegate;
 	const not_null<Window::SessionController*> _controller;
+	const std::unique_ptr<EmojiInteractions> _emojiInteractions;
+	const Context _context;
+
 	Data::MessagePosition _aroundPosition;
 	Data::MessagePosition _shownAtPosition;
-	Context _context;
+	Data::MessagePosition _initialAroundPosition;
 	int _aroundIndex = -1;
 	int _idsLimit = kMinimalIdsLimit;
 	Data::MessagesSlice _slice;
 	std::vector<not_null<Element*>> _items;
-	std::map<
-		not_null<HistoryItem*>,
-		std::unique_ptr<Element>,
-		std::less<>> _views;
+	ViewsMap _views, _viewsCapacity;
 	int _itemsTop = 0;
 	int _itemsWidth = 0;
 	int _itemsHeight = 0;
@@ -556,15 +661,20 @@ private:
 		ItemRevealAnimation> _itemRevealAnimations;
 	int _itemsRevealHeight = 0;
 	base::flat_set<FullMsgId> _animatedStickersPlayed;
-	base::flat_map<
-		not_null<PeerData*>,
-		std::shared_ptr<Data::CloudImageView>> _userpics, _userpicsCache;
+	base::flat_map<not_null<PeerData*>, Ui::PeerUserpicView> _userpics;
+	base::flat_map<not_null<PeerData*>, Ui::PeerUserpicView> _userpicsCache;
+	base::flat_map<MsgId, Ui::PeerUserpicView> _hiddenSenderUserpics;
 
 	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
+	QPainterPath _highlightPathCache;
 
 	base::unique_qptr<Ui::RpWidget> _emptyInfo = nullptr;
 
 	std::unique_ptr<HistoryView::Reactions::Manager> _reactionsManager;
+	rpl::variable<HistoryItem*> _reactionsItem;
+	bool _useCornerReaction = false;
+
+	std::unique_ptr<TranslateTracker> _translateTracker;
 
 	int _minHeight = 0;
 	int _visibleTop = 0;
@@ -613,6 +723,10 @@ private:
 	Qt::CursorShape _cursor = style::cur_default;
 
 	bool _isChatWide = false;
+	bool _refreshingViewer = false;
+	bool _showFinished = false;
+	bool _resizePending = false;
+	std::optional<bool> _overrideIsChatWide;
 
 	// _menu must be destroyed before _whoReactedMenuLifetime.
 	rpl::lifetime _whoReactedMenuLifetime;
@@ -621,16 +735,30 @@ private:
 	QPoint _trippleClickPoint;
 	crl::time _trippleClickStartTime = 0;
 
-	crl::time _highlightStart = 0;
-	FullMsgId _highlightedMessageId;
-	base::Timer _highlightTimer;
+	ElementHighlighter _highlighter;
 
-	Ui::Animations::Simple _spoilerOpacity;
+	// scroll by touch support (at least Windows Surface tablets)
+	bool _touchScroll = false;
+	bool _touchSelect = false;
+	bool _touchInProgress = false;
+	QPoint _touchStart, _touchPrevPos, _touchPos;
+	base::Timer _touchSelectTimer;
 
-	Ui::SelectScrollManager _selectScroll;
+	Ui::DraggingScrollManager _selectScroll;
+
+	InfoTooltip _topToast;
+
+	Ui::TouchScrollState _touchScrollState = Ui::TouchScrollState();
+	bool _touchPrevPosValid = false;
+	bool _touchWaitingAcceleration = false;
+	QPoint _touchSpeed;
+	crl::time _touchSpeedTime = 0;
+	crl::time _touchAccelerationTime = 0;
+	crl::time _touchTime = 0;
+	base::Timer _touchScrollTimer;
 
 	rpl::event_stream<FullMsgId> _requestedToEditMessage;
-	rpl::event_stream<FullMsgId> _requestedToReplyToMessage;
+	rpl::event_stream<FullReplyTo> _requestedToReplyToMessage;
 	rpl::event_stream<FullMsgId> _requestedToReadMessage;
 	rpl::event_stream<FullMsgId> _requestedToShowMessage;
 
@@ -645,6 +773,9 @@ void ConfirmSendNowSelectedItems(not_null<ListWidget*> widget);
 [[nodiscard]] CopyRestrictionType CopyRestrictionTypeFor(
 	not_null<PeerData*> peer,
 	HistoryItem *item = nullptr);
+[[nodiscard]] CopyRestrictionType CopyMediaRestrictionTypeFor(
+	not_null<PeerData*> peer,
+	not_null<HistoryItem*> item);
 [[nodiscard]] CopyRestrictionType SelectRestrictionTypeFor(
 	not_null<PeerData*> peer);
 

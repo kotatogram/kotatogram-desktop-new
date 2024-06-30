@@ -22,22 +22,26 @@ class SingleMediaPreview final : public AbstractSingleMediaPreview {
 public:
 	static SingleMediaPreview *Create(
 		QWidget *parent,
+		const style::ComposeControls &st,
 		Fn<bool()> gifPaused,
 		const PreparedFile &file,
 		AttachControls::Type type = AttachControls::Type::Full);
 
 	SingleMediaPreview(
 		QWidget *parent,
+		const style::ComposeControls &st,
 		Fn<bool()> gifPaused,
 		QImage preview,
 		bool animated,
 		bool sticker,
+		bool spoiler,
 		const QString &animatedPreviewPath,
 		AttachControls::Type type);
 
 protected:
+	bool supportsSpoilers() const override;
 	bool drawBackground() const override;
-	bool tryPaintAnimation(Painter &p) override;
+	bool tryPaintAnimation(QPainter &p) override;
 	bool isAnimatedPreviewReady() const override;
 
 private:

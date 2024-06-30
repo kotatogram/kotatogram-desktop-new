@@ -12,28 +12,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_file_origin.h"
 #include "data/data_session.h"
 #include "data/stickers/data_stickers.h"
+#include "window/window_session_controller.h"
 #include "main/main_session.h"
 
 namespace Api {
 namespace {
 
-template <typename ToggleRequest, typename DoneCallback>
+template <typename ToggleRequestCallback, typename DoneCallback>
 void ToggleExistingMedia(
 		not_null<DocumentData*> document,
 		Data::FileOrigin origin,
-		ToggleRequest toggleRequest,
+		ToggleRequestCallback toggleRequest,
 		DoneCallback &&done) {
 	const auto api = &document->owner().session().api();
 
 	auto performRequest = [=](const auto &repeatRequest) -> void {
 		const auto usedFileReference = document->fileReference();
-		api->request(std::move(
-			toggleRequest
-		)).done([=](const MTPBool &result) {
-			if (mtpIsTrue(result)) {
-				done();
-			}
-		}).fail([=](const MTP::Error &error) {
+		api->request(
+			toggleRequest()
+		).done(done).fail([=](const MTP::Error &error) {
 			if (error.code() == 400
 				&& error.type().startsWith(u"FILE_REFERENCE_"_q)) {
 				auto refreshed = [=](const Data::UpdatedFileReferences &d) {
@@ -51,26 +48,34 @@ void ToggleExistingMedia(
 } // namespace
 
 void ToggleFavedSticker(
+		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<DocumentData*> document,
 		Data::FileOrigin origin) {
 	ToggleFavedSticker(
+		std::move(show),
 		document,
 		std::move(origin),
 		!document->owner().stickers().isFaved(document));
 }
 
 void ToggleFavedSticker(
+		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<DocumentData*> document,
 		Data::FileOrigin origin,
 		bool faved) {
 	if (faved && !document->sticker()) {
 		return;
 	}
+	auto done = [=] {
+		document->owner().stickers().setFaved(show, document, faved);
+	};
 	ToggleExistingMedia(
 		document,
 		std::move(origin),
-		MTPmessages_FaveSticker(document->mtpInput(), MTP_bool(!faved)),
-		[=] { document->owner().stickers().setFaved(document, faved); });
+		[=, d = document] {
+			return MTPmessages_FaveSticker(d->mtpInput(), MTP_bool(!faved));
+		},
+		std::move(done));
 }
 
 void ToggleRecentSticker(
@@ -88,14 +93,17 @@ void ToggleRecentSticker(
 	ToggleExistingMedia(
 		document,
 		std::move(origin),
-		MTPmessages_SaveRecentSticker(
-			MTP_flags(MTPmessages_SaveRecentSticker::Flag(0)),
-			document->mtpInput(),
-			MTP_bool(!saved)),
+		[=] {
+			return MTPmessages_SaveRecentSticker(
+				MTP_flags(MTPmessages_SaveRecentSticker::Flag(0)),
+				document->mtpInput(),
+				MTP_bool(!saved));
+		},
 		std::move(done));
 }
 
 void ToggleSavedGif(
+		std::shared_ptr<ChatHelpers::Show> show,
 		not_null<DocumentData*> document,
 		Data::FileOrigin origin,
 		bool saved) {
@@ -104,13 +112,29 @@ void ToggleSavedGif(
 	}
 	auto done = [=] {
 		if (saved) {
-			document->owner().stickers().addSavedGif(document);
+			document->owner().stickers().addSavedGif(show, document);
 		}
 	};
 	ToggleExistingMedia(
 		document,
 		std::move(origin),
-		MTPmessages_SaveGif(document->mtpInput(), MTP_bool(!saved)),
+		[=, d = document] {
+			return MTPmessages_SaveGif(d->mtpInput(), MTP_bool(!saved));
+		},
+		std::move(done));
+}
+
+void ToggleSavedRingtone(
+		not_null<DocumentData*> document,
+		Data::FileOrigin origin,
+		Fn<void()> &&done,
+		bool saved) {
+	ToggleExistingMedia(
+		document,
+		std::move(origin),
+		[=, d = document] {
+			return MTPaccount_SaveRingtone(d->mtpInput(), MTP_bool(!saved));
+		},
 		std::move(done));
 }
 

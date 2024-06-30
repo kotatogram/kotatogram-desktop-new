@@ -91,6 +91,7 @@ ReaderImplementation::ReadResult FFMpegReaderImplementation::readNextFrame() {
 			_frameMs = 0;
 			_lastReadVideoMs = _lastReadAudioMs = 0;
 			_skippedInvalidDataPackets = 0;
+			_frameIndex = -1;
 
 			continue;
 		} else if (res != AVERROR(EAGAIN)) {
@@ -162,6 +163,7 @@ void FFMpegReaderImplementation::processReadFrame() {
 
 	_hadFrame = _frameRead = true;
 	_frameTime += _currentFrameDelay;
+	++_frameIndex;
 }
 
 ReaderImplementation::ReadResult FFMpegReaderImplementation::readFramesTill(crl::time frameMs, crl::time systemMs) {
@@ -200,10 +202,15 @@ crl::time FFMpegReaderImplementation::durationMs() const {
 	return 0;
 }
 
-bool FFMpegReaderImplementation::renderFrame(QImage &to, bool &hasAlpha, const QSize &size) {
+bool FFMpegReaderImplementation::renderFrame(
+		QImage &to,
+		bool &hasAlpha,
+		int &index,
+		const QSize &size) {
 	Expects(_frameRead);
-	_frameRead = false;
 
+	_frameRead = false;
+	index = _frameIndex;
 	if (!_width || !_height) {
 		_width = _frame->width;
 		_height = _frame->height;
@@ -276,7 +283,7 @@ bool FFMpegReaderImplementation::start(Mode mode, crl::time &positionMs) {
 		return false;
 	}
 	_ioBuffer = (uchar*)av_malloc(FFmpeg::kAVBlockSize);
-	_ioContext = avio_alloc_context(_ioBuffer, FFmpeg::kAVBlockSize, 0, static_cast<void*>(this), &FFMpegReaderImplementation::_read, nullptr, &FFMpegReaderImplementation::_seek);
+	_ioContext = avio_alloc_context(_ioBuffer, FFmpeg::kAVBlockSize, 0, static_cast<void*>(this), &FFMpegReaderImplementation::Read, nullptr, &FFMpegReaderImplementation::Seek);
 	_fmtContext = avformat_alloc_context();
 	if (!_fmtContext) {
 		LOG(("Gif Error: Unable to avformat_alloc_context %1").arg(logData()));
@@ -328,6 +335,10 @@ bool FFMpegReaderImplementation::start(Mode mode, crl::time &positionMs) {
 	av_opt_set_int(_codecContext, "refcounted_frames", 1, 0);
 
 	const auto codec = FFmpeg::FindDecoder(_codecContext);
+	if (!codec) {
+		LOG(("Gif Error: Unable to avcodec_find_decoder %1").arg(logData()));
+		return false;
+	}
 	if (_mode == Mode::Inspecting) {
 		const auto audioStreamId = av_find_best_stream(_fmtContext, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
 		_hasAudioStream = (audioStreamId >= 0);
@@ -473,12 +484,17 @@ FFMpegReaderImplementation::PacketResult FFMpegReaderImplementation::readAndProc
 	return result;
 }
 
-int FFMpegReaderImplementation::_read(void *opaque, uint8_t *buf, int buf_size) {
+int FFMpegReaderImplementation::Read(void *opaque, uint8_t *buf, int buf_size) {
 	FFMpegReaderImplementation *l = reinterpret_cast<FFMpegReaderImplementation*>(opaque);
-	return int(l->_device->read((char*)(buf), buf_size));
+	int ret = l->_device->read((char*)(buf), buf_size);
+	switch (ret) {
+	case -1: return AVERROR_EXTERNAL;
+	case 0: return AVERROR_EOF;
+	default: return ret;
+	}
 }
 
-int64_t FFMpegReaderImplementation::_seek(void *opaque, int64_t offset, int whence) {
+int64_t FFMpegReaderImplementation::Seek(void *opaque, int64_t offset, int whence) {
 	FFMpegReaderImplementation *l = reinterpret_cast<FFMpegReaderImplementation*>(opaque);
 
 	switch (whence) {

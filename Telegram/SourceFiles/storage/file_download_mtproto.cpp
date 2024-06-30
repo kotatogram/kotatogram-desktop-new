@@ -22,8 +22,8 @@ mtpFileLoader::mtpFileLoader(
 	Data::FileOrigin origin,
 	LocationType type,
 	const QString &to,
-	int loadSize,
-	int fullSize,
+	int64 loadSize,
+	int64 fullSize,
 	LoadToCacheSetting toCache,
 	LoadFromCloudSetting fromCloud,
 	bool autoLoading,
@@ -44,8 +44,8 @@ mtpFileLoader::mtpFileLoader(
 mtpFileLoader::mtpFileLoader(
 	not_null<Main::Session*> session,
 	const WebFileLocation &location,
-	int loadSize,
-	int fullSize,
+	int64 loadSize,
+	int64 fullSize,
 	LoadFromCloudSetting fromCloud,
 	bool autoLoading,
 	uint8 cacheTag)
@@ -68,8 +68,32 @@ mtpFileLoader::mtpFileLoader(
 mtpFileLoader::mtpFileLoader(
 	not_null<Main::Session*> session,
 	const GeoPointLocation &location,
-	int loadSize,
-	int fullSize,
+	int64 loadSize,
+	int64 fullSize,
+	LoadFromCloudSetting fromCloud,
+	bool autoLoading,
+	uint8 cacheTag)
+: FileLoader(
+	session,
+	QString(),
+	loadSize,
+	fullSize,
+	UnknownFileLocation,
+	LoadToCacheAsWell,
+	fromCloud,
+	autoLoading,
+	cacheTag)
+, DownloadMtprotoTask(
+	&session->downloader(),
+	session->serverConfig().webFileDcId,
+	{ location }) {
+}
+
+mtpFileLoader::mtpFileLoader(
+	not_null<Main::Session*> session,
+	const AudioAlbumThumbLocation &location,
+	int64 loadSize,
+	int64 fullSize,
 	LoadFromCloudSetting fromCloud,
 	bool autoLoading,
 	uint8 cacheTag)
@@ -110,7 +134,7 @@ bool mtpFileLoader::readyToRequest() const {
 		&& (!_fullSize || _nextRequestOffset < _loadSize);
 }
 
-int mtpFileLoader::takeNextRequestOffset() {
+int64 mtpFileLoader::takeNextRequestOffset() {
 	Expects(readyToRequest());
 
 	const auto result = _nextRequestOffset;
@@ -118,7 +142,7 @@ int mtpFileLoader::takeNextRequestOffset() {
 	return result;
 }
 
-bool mtpFileLoader::feedPart(int offset, const QByteArray &bytes) {
+bool mtpFileLoader::feedPart(int64 offset, const QByteArray &bytes) {
 	const auto buffer = bytes::make_span(bytes);
 	if (!writeResultPart(offset, buffer)) {
 		return false;
@@ -140,10 +164,10 @@ bool mtpFileLoader::feedPart(int offset, const QByteArray &bytes) {
 }
 
 void mtpFileLoader::cancelOnFail() {
-	cancel(true);
+	cancel(FailureReason::OtherFailure);
 }
 
-bool mtpFileLoader::setWebFileSizeHook(int size) {
+bool mtpFileLoader::setWebFileSizeHook(int64 size) {
 	if (!_fullSize || _fullSize == size) {
 		_fullSize = _loadSize = size;
 		return true;
@@ -152,7 +176,7 @@ bool mtpFileLoader::setWebFileSizeHook(int size) {
 		"Bad size provided by bot for webDocument: %1, real: %2"
 		).arg(_fullSize
 		).arg(size));
-	cancel(true);
+	cancel(FailureReason::OtherFailure);
 	return false;
 }
 
@@ -165,7 +189,7 @@ void mtpFileLoader::startLoadingWithPartial(const QByteArray &data) {
 
 	constexpr auto kPrefix = 8;
 	const auto parts = (data.size() - kPrefix) / Storage::kDownloadPartSize;
-	const auto use = parts * Storage::kDownloadPartSize;
+	const auto use = parts * int64(Storage::kDownloadPartSize);
 	if (use > 0) {
 		_nextRequestOffset = use;
 		feedPart(0, QByteArray::fromRawData(data.data() + kPrefix, use));
@@ -184,6 +208,8 @@ Storage::Cache::Key mtpFileLoader::cacheKey() const {
 		return Data::GeoPointCacheKey(location);
 	}, [&](const StorageFileLocation &location) {
 		return location.cacheKey();
+	}, [&](const AudioAlbumThumbLocation &location) {
+		return Data::AudioAlbumThumbCacheKey(location);
 	});
 }
 

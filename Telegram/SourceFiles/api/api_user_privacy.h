@@ -28,10 +28,13 @@ public:
 		CallsPeer2Peer,
 		Forwards,
 		ProfilePhoto,
+		Voices,
+		About,
 	};
 	enum class Option {
 		Everyone,
 		Contacts,
+		CloseFriends,
 		Nobody,
 	};
 	struct Rule {

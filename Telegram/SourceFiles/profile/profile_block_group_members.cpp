@@ -26,7 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "main/main_session.h"
 #include "lang/lang_keys.h"
-#include "facades.h" // Ui::showPeerProfile
+#include "window/window_session_controller.h"
 
 namespace Profile {
 namespace {
@@ -44,9 +44,11 @@ not_null<UserData*> GroupMembersWidget::Member::user() const {
 
 GroupMembersWidget::GroupMembersWidget(
 	QWidget *parent,
+	not_null<Window::SessionController*> controller,
 	not_null<PeerData*> peer,
 	const style::PeerListItem &st)
 : PeerListWidget(parent, peer, QString(), st, tr::lng_profile_kick(tr::now))
+, _controller(controller)
 , _updateOnlineTimer([=] { updateOnlineDisplay(); }) {
 	peer->session().changes().peerUpdates(
 		UpdateFlag::Admins
@@ -60,7 +62,7 @@ GroupMembersWidget::GroupMembersWidget(
 		removePeer(selectedPeer);
 	});
 	setSelectedCallback([=](PeerData *selectedPeer) {
-		Ui::showPeerProfile(selectedPeer);
+		controller->showPeerInfo(selectedPeer);
 	});
 	setUpdateItemCallback([=](Item *item) {
 		updateItemStatusText(item);
@@ -76,8 +78,10 @@ void GroupMembersWidget::removePeer(PeerData *selectedPeer) {
 	const auto user = selectedPeer->asUser();
 	Assert(user != nullptr);
 
-	auto text = tr::lng_profile_sure_kick(tr::now, lt_user, user->firstName);
-	auto currentRestrictedRights = [&]() -> ChatRestrictionsInfo {
+	const auto text = tr::lng_profile_sure_kick(
+		tr::now,
+		lt_user, user->firstName);
+	const auto currentRestrictedRights = [&]() -> ChatRestrictionsInfo {
 		if (auto channel = peer()->asMegagroup()) {
 			auto it = channel->mgInfo->lastRestricted.find(user);
 			if (it != channel->mgInfo->lastRestricted.cend()) {
@@ -88,11 +92,14 @@ void GroupMembersWidget::removePeer(PeerData *selectedPeer) {
 	}();
 
 	const auto peer = this->peer();
-	const auto callback = [=] {
-		Ui::hideLayer();
+	const auto callback = [=, controller = _controller] {
+		controller->hideLayer();
 		if (const auto chat = peer->asChat()) {
 			chat->session().api().chatParticipants().kick(chat, user);
-			Ui::showPeerHistory(chat, ShowAtTheEndMsgId);
+			controller->showPeerHistory(
+				chat->id,
+				Window::SectionShow::Way::ClearStack,
+				ShowAtTheEndMsgId);
 		} else if (const auto channel = peer->asChannel()) {
 			channel->session().api().chatParticipants().kick(
 				channel,
@@ -100,10 +107,11 @@ void GroupMembersWidget::removePeer(PeerData *selectedPeer) {
 				currentRestrictedRights);
 		}
 	};
-	Ui::show(Box<Ui::ConfirmBox>(
-		text,
-		tr::lng_box_remove(tr::now),
-		crl::guard(&peer->session(), callback)));
+	_controller->show(Ui::MakeConfirmBox({
+		.text = text,
+		.confirmed = crl::guard(&peer->session(), callback),
+		.confirmText = tr::lng_box_remove(),
+	}));
 }
 
 void GroupMembersWidget::notifyPeerUpdated(const Data::PeerUpdate &update) {
@@ -141,9 +149,8 @@ void GroupMembersWidget::refreshUserOnline(UserData *user) {
 	_now = base::unixtime::now();
 
 	auto member = getMember(it->second);
-	member->statusHasOnlineColor = !user->isBot()
-		&& Data::OnlineTextActive(user->onlineTill, _now);
-	member->onlineTill = user->onlineTill;
+	member->lastseen = user->lastseen();
+	member->statusHasOnlineColor = Data::OnlineTextActive(user, _now);
 	member->onlineForSort = user->isSelf()
 		? std::numeric_limits<TimeId>::max()
 		: Data::SortByOnlineValue(user, _now);
@@ -172,16 +179,17 @@ void GroupMembersWidget::updateItemStatusText(Item *item) {
 		if (user->isInaccessible()) {
 			member->statusText = ktr("ktg_user_status_unaccessible");
 		} else if (user->isBot()) {
-			auto seesAllMessages = (user->botInfo->readsAllHistory || (member->adminState != Item::AdminState::None));
+			const auto seesAllMessages = user->botInfo->readsAllHistory
+				|| member->rank.has_value();
 			member->statusText = seesAllMessages
 				? tr::lng_status_bot_reads_all(tr::now)
 				: tr::lng_status_bot_not_reads_all(tr::now);
 			member->onlineTextTill = _now + 86400;
 		} else {
-			member->statusHasOnlineColor = Data::OnlineTextActive(member->onlineTill, _now);
-			member->statusText = Data::OnlineText(member->onlineTill, _now);
+			member->statusHasOnlineColor = member->lastseen.isOnline(_now);
+			member->statusText = Data::OnlineText(member->lastseen, _now);
 			const auto changeInMs = Data::OnlineChangeTimeout(
-				member->onlineTill,
+				member->lastseen,
 				_now);
 			member->onlineTextTill = _now + TimeId(changeInMs / 1000);
 		}
@@ -241,7 +249,8 @@ void GroupMembersWidget::updateOnlineCount() {
 	for (const auto item : items()) {
 		auto member = getMember(item);
 		auto user = member->user();
-		auto isOnline = !user->isBot() && Data::OnlineTextActive(member->onlineTill, _now);
+		auto isOnline = !user->isBot()
+			&& member->lastseen.isOnline(_now);
 		if (member->statusHasOnlineColor != isOnline) {
 			member->statusHasOnlineColor = isOnline;
 			member->statusText = QString();
@@ -296,29 +305,24 @@ void GroupMembersWidget::fillChatMembers(not_null<ChatData*> chat) {
 void GroupMembersWidget::setItemFlags(
 		not_null<Item*> item,
 		not_null<ChatData*> chat) {
-	using AdminState = Item::AdminState;
 	const auto user = getMember(item)->user();
 	const auto isCreator = (peerFromUser(chat->creator) == item->peer->id);
 	const auto isAdmin = (item->peer->isSelf() && chat->hasAdminRights())
 		|| chat->admins.contains(user);
-	const auto adminState = isCreator
-		? AdminState::Creator
+	const auto rank = isCreator
+		? tr::lng_owner_badge(tr::now)
 		: isAdmin
-		? AdminState::Admin
-		: AdminState::None;
-	item->adminState = adminState;
-	if (isCreator) {
-		item->adminRank = tr::lng_owner_badge(tr::now);
-		item->adminRankWidth = st::normalFont->width(item->adminRank);
-	}
+		? tr::lng_admin_badge(tr::now)
+		: std::optional<QString>();
+	item->rank = rank;
+	item->rankWidth = rank ? st::normalFont->width(*rank) : 0;
 	if (item->peer->id == chat->session().userPeerId()) {
 		item->hasRemoveLink = false;
 	} else if (chat->amCreator()
 		|| ((chat->adminRights() & ChatAdminRight::BanUsers)
-			&& (adminState == AdminState::None))) {
+			&& !rank.has_value())) {
 		item->hasRemoveLink = true;
-	} else if (chat->invitedByMe.contains(user)
-		&& (adminState == AdminState::None)) {
+	} else if (chat->invitedByMe.contains(user) && !rank.has_value()) {
 		item->hasRemoveLink = true;
 	} else {
 		item->hasRemoveLink = false;
@@ -392,20 +396,27 @@ bool GroupMembersWidget::addUsersToEnd(not_null<ChannelData*> megagroup) {
 void GroupMembersWidget::setItemFlags(
 		not_null<Item*> item,
 		not_null<ChannelData*> megagroup) {
-	using AdminState = Item::AdminState;
-	auto amCreator = item->peer->isSelf() && megagroup->amCreator();
-	auto amAdmin = item->peer->isSelf() && megagroup->hasAdminRights();
-	auto adminIt = megagroup->mgInfo->lastAdmins.find(getMember(item)->user());
-	auto isAdmin = (adminIt != megagroup->mgInfo->lastAdmins.cend());
-	auto isCreator = megagroup->mgInfo->creator == item->peer;
-	auto adminCanEdit = isAdmin && adminIt->second.canEdit;
-	auto adminState = (amCreator || isCreator)
-		? AdminState::Creator
+	const auto amCreator = item->peer->isSelf() && megagroup->amCreator();
+	const auto amAdmin = item->peer->isSelf() && megagroup->hasAdminRights();
+	const auto user = getMember(item)->user();
+	const auto adminIt = megagroup->mgInfo->lastAdmins.find(user);
+	const auto isAdmin = (adminIt != megagroup->mgInfo->lastAdmins.cend());
+	const auto isCreator = (megagroup->mgInfo->creator == item->peer);
+	const auto rankIt = megagroup->mgInfo->admins.find(peerToUser(user->id));
+	const auto adminCanEdit = isAdmin && adminIt->second.canEdit;
+	const auto rank = (amCreator || isCreator)
+		? (!megagroup->mgInfo->creatorRank.isEmpty()
+			? megagroup->mgInfo->creatorRank
+			: tr::lng_owner_badge(tr::now))
 		: (amAdmin || isAdmin)
-		? AdminState::Admin
-		: AdminState::None;
-	if (item->adminState != adminState) {
-		item->adminState = adminState;
+		? ((rankIt != megagroup->mgInfo->admins.end()
+			&& !rankIt->second.isEmpty())
+			? rankIt->second
+			: tr::lng_admin_badge(tr::now))
+		: std::optional<QString>();
+	if (item->rank != rank) {
+		item->rank = rank;
+		item->rankWidth = rank ? st::normalFont->width(*rank) : 0;
 		auto user = item->peer->asUser();
 		Assert(user != nullptr);
 		if (user->isBot()) {
@@ -414,11 +425,11 @@ void GroupMembersWidget::setItemFlags(
 			updateItemStatusText(item);
 		}
 	}
-	item->adminRank = megagroup->adminRank(item->peer->asUser());
-	item->adminRankWidth = st::normalFont->width(item->adminRank);
 	if (item->peer->isSelf()) {
 		item->hasRemoveLink = false;
-	} else if (megagroup->amCreator() || (megagroup->canBanMembers() && ((adminState == AdminState::None) || adminCanEdit))) {
+	} else if (megagroup->amCreator()
+		|| (megagroup->canBanMembers()
+			&& (!rank.has_value() || adminCanEdit))) {
 		item->hasRemoveLink = true;
 	} else {
 		item->hasRemoveLink = false;
@@ -431,9 +442,9 @@ auto GroupMembersWidget::computeMember(not_null<UserData*> user)
 	if (it == _membersByUser.cend()) {
 		auto member = new Member(user);
 		it = _membersByUser.emplace(user, member).first;
+		member->lastseen = user->lastseen();
 		member->statusHasOnlineColor = !user->isBot()
-			&& Data::OnlineTextActive(user->onlineTill, _now);
-		member->onlineTill = user->onlineTill;
+			&& member->lastseen.isOnline(_now);
 		member->onlineForSort = Data::SortByOnlineValue(user, _now);
 	}
 	return it->second;
@@ -454,7 +465,7 @@ void GroupMembersWidget::updateOnlineDisplay() {
 			}
 			auto member = getMember(item);
 			bool isOnline = !member->user()->isBot()
-				&& Data::OnlineTextActive(member->onlineTill, _now);
+				&& member->lastseen.isOnline(_now);
 			if (!isOnline) {
 				changed = true;
 			}

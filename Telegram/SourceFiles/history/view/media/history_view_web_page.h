@@ -8,11 +8,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "history/view/media/history_view_media.h"
+#include "ui/userpic_view.h"
 
 namespace Data {
 class Media;
 class PhotoMedia;
 } // namespace Data
+
+namespace Ui {
+class RippleAnimation;
+} // namespace Ui
 
 namespace HistoryView {
 
@@ -20,7 +25,8 @@ class WebPage : public Media {
 public:
 	WebPage(
 		not_null<Element*> parent,
-		not_null<WebPageData*> data);
+		not_null<WebPageData*> data,
+		MediaWebPageFlags flags);
 
 	void refreshParentId(not_null<HistoryItem*> realParent) override;
 
@@ -34,24 +40,25 @@ public:
 	[[nodiscard]] TextSelection adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const override;
-	uint16 fullSelectionLength() const override {
-		return _title.length() + _description.length();
-	}
+	uint16 fullSelectionLength() const override;
 	bool hasTextForCopy() const override {
-		return false; // we do not add _title and _description in FullSelection text copy.
+		// We do not add _title and _description in FullSelection text copy.
+		return false;
 	}
+	QString additionalInfoString() const override;
 
-	bool toggleSelectionByHandlerClick(const ClickHandlerPtr &p) const override {
-		return _attach && _attach->toggleSelectionByHandlerClick(p);
-	}
-	bool dragItemByHandler(const ClickHandlerPtr &p) const override {
-		return _attach && _attach->dragItemByHandler(p);
-	}
+	bool toggleSelectionByHandlerClick(
+		const ClickHandlerPtr &p) const override;
+	bool allowTextSelectionByHandler(
+		const ClickHandlerPtr &p) const override;
+	bool dragItemByHandler(const ClickHandlerPtr &p) const override;
 
 	TextForMimeData selectedText(TextSelection selection) const override;
 
-	void clickHandlerActiveChanged(const ClickHandlerPtr &p, bool active) override;
-	void clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed) override;
+	void clickHandlerActiveChanged(
+		const ClickHandlerPtr &p, bool active) override;
+	void clickHandlerPressedChanged(
+		const ClickHandlerPtr &p, bool pressed) override;
 
 	bool isDisplayed() const override;
 	PhotoData *getPhoto() const override {
@@ -98,38 +105,58 @@ private:
 
 	void ensurePhotoMediaCreated() const;
 
-	TextSelection toTitleSelection(TextSelection selection) const;
-	TextSelection fromTitleSelection(TextSelection selection) const;
-	TextSelection toDescriptionSelection(TextSelection selection) const;
-	TextSelection fromDescriptionSelection(TextSelection selection) const;
-	QMargins inBubblePadding() const;
-	int bottomInfoPadding() const;
-	bool isLogEntryOriginal() const;
+	[[nodiscard]] TextSelection toTitleSelection(
+		TextSelection selection) const;
+	[[nodiscard]] TextSelection fromTitleSelection(
+		TextSelection selection) const;
+	[[nodiscard]] TextSelection toDescriptionSelection(
+		TextSelection selection) const;
+	[[nodiscard]] TextSelection fromDescriptionSelection(
+		TextSelection selection) const;
+	[[nodiscard]] QMargins inBubblePadding() const;
+	[[nodiscard]] QMargins innerMargin() const;
+	[[nodiscard]] int bottomInfoPadding() const;
+	[[nodiscard]] bool isLogEntryOriginal() const;
 
-	QString displayedSiteName() const;
-	ClickHandlerPtr replaceAttachLink(const ClickHandlerPtr &link) const;
-	bool asArticle() const;
+	[[nodiscard]] ClickHandlerPtr replaceAttachLink(
+		const ClickHandlerPtr &link) const;
+	[[nodiscard]] bool asArticle() const;
 
-	not_null<WebPageData*> _data;
+	const style::QuoteStyle &_st;
+	const not_null<WebPageData*> _data;
 	std::vector<std::unique_ptr<Data::Media>> _collage;
 	ClickHandlerPtr _openl;
 	std::unique_ptr<Media> _attach;
 	mutable std::shared_ptr<Data::PhotoMedia> _photoMedia;
+	mutable std::unique_ptr<Ui::RippleAnimation> _ripple;
 
-	bool _asArticle = false;
-	bool _hasViewButton = false;
+	struct SponsoredData final {
+		PeerData *peer = nullptr;
+		Ui::PeerUserpicView userpicView;
+		QString buttonText;
+		bool hasExternalLink = false;
+	};
+	mutable std::optional<SponsoredData> _sponsoredData;
+
 	int _dataVersion = -1;
 	int _siteNameLines = 0;
-	int _titleLines = 0;
 	int _descriptionLines = 0;
+	uint32 _titleLines : 31 = 0;
+	uint32 _asArticle : 1 = 0;
 
-	Ui::Text::String _siteName, _title, _description;
+	Ui::Text::String _siteName;
+	Ui::Text::String _title;
+	Ui::Text::String _description;
+	Ui::Text::String _openButton;
 
 	QString _duration;
 	int _durationWidth = 0;
 
+	mutable QPoint _lastPoint;
 	int _pixw = 0;
 	int _pixh = 0;
+
+	const MediaWebPageFlags _flags;
 
 };
 

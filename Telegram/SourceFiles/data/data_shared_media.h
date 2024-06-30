@@ -9,19 +9,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "storage/storage_shared_media.h"
 #include "base/weak_ptr.h"
+#include "base/qt/qt_compare.h"
 #include "data/data_sparse_ids.h"
-
-class History;
 
 namespace Main {
 class Session;
 } // namespace Main
 
-std::optional<Storage::SharedMediaType> SharedMediaOverviewType(
+[[nodiscard]] std::optional<Storage::SharedMediaType> SharedMediaOverviewType(
 	Storage::SharedMediaType type);
-void SharedMediaShowOverview(
-	Storage::SharedMediaType type,
-	not_null<History*> history);
 bool SharedMediaAllowSearch(Storage::SharedMediaType type);
 
 rpl::producer<SparseIdsSlice> SharedMediaViewer(
@@ -72,36 +68,32 @@ public:
 		MessageId,
 		not_null<PhotoData*>>;
 
+	static constexpr auto kScheduledTopicId
+		= SparseIdsMergedSlice::kScheduledTopicId;
 	struct Key {
 		Key(
 			PeerId peerId,
+			MsgId topicRootId,
 			PeerId migratedPeerId,
 			Type type,
-			UniversalMsgId universalId,
-			bool scheduled = false)
+			UniversalMsgId universalId)
 		: peerId(peerId)
+		, topicRootId(topicRootId)
 		, migratedPeerId(migratedPeerId)
 		, type(type)
-		, universalId(universalId)
-		, scheduled(scheduled) {
+		, universalId(universalId) {
 			Expects(v::is<MessageId>(universalId) || type == Type::ChatPhoto);
 		}
 
-		bool operator==(const Key &other) const {
-			return (peerId == other.peerId)
-				&& (migratedPeerId == other.migratedPeerId)
-				&& (type == other.type)
-				&& (universalId == other.universalId);
-		}
-		bool operator!=(const Key &other) const {
-			return !(*this == other);
-		}
+		friend inline constexpr auto operator<=>(
+			const Key&,
+			const Key&) = default;
 
 		PeerId peerId = 0;
+		MsgId topicRootId = 0;
 		PeerId migratedPeerId = 0;
 		Type type = Type::kCount;
 		UniversalMsgId universalId;
-		bool scheduled = false;
 
 	};
 
@@ -127,6 +119,7 @@ public:
 	static SparseIdsMergedSlice::Key ViewerKey(const Key &key) {
 		return {
 			key.peerId,
+			key.topicRootId,
 			key.migratedPeerId,
 			v::is<MessageId>(key.universalId)
 				? v::get<MessageId>(key.universalId)
@@ -136,6 +129,7 @@ public:
 	static SparseIdsMergedSlice::Key EndingKey(const Key &key) {
 		return {
 			key.peerId,
+			key.topicRootId,
 			key.migratedPeerId,
 			ServerMaxMsgId - 1
 		};

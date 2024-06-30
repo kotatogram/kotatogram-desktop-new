@@ -16,10 +16,6 @@ namespace Ui {
 class PathShiftGradient;
 } // namespace Ui
 
-namespace Data {
-class CloudImageView;
-} // namespace Data
-
 namespace InlineBots {
 
 class Result;
@@ -109,6 +105,11 @@ public:
 		update();
 	}
 
+	virtual QRect innerContentRect() const {
+		// Only stickers are supported for now.
+		Unexpected("Unsupported type to get a rect of inner content.");
+	}
+
 	static std::unique_ptr<ItemBase> createLayout(
 		not_null<Context*> context,
 		not_null<Result*> result,
@@ -121,7 +122,7 @@ protected:
 	DocumentData *getResultDocument() const;
 	PhotoData *getResultPhoto() const;
 	bool hasResultThumb() const;
-	Image *getResultThumb(Data::FileOrigin origin) const;
+	QImage *getResultThumb(Data::FileOrigin origin) const;
 	QPixmap getResultContactAvatar(int width, int height) const;
 	int getResultDuration() const;
 	QString getResultUrl() const;
@@ -143,7 +144,7 @@ protected:
 
 private:
 	not_null<Context*> _context;
-	mutable std::shared_ptr<Data::CloudImageView> _thumbnail;
+	mutable std::shared_ptr<QImage> _thumbnail;
 
 };
 

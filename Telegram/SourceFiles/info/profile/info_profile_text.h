@@ -28,12 +28,14 @@ namespace Profile {
 struct TextWithLabel {
 	object_ptr<Ui::SlideWrap<Ui::VerticalLayout>> wrap;
 	not_null<Ui::FlatLabel*> text;
+	not_null<Ui::FlatLabel*> subtext;
 };
 
 TextWithLabel CreateTextWithLabel(
 	QWidget *parent,
 	rpl::producer<TextWithEntities> &&label,
 	rpl::producer<TextWithEntities> &&text,
+	const style::FlatLabel &labelSt,
 	const style::FlatLabel &textSt,
 	const style::margins &padding);
 

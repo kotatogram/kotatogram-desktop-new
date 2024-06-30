@@ -58,6 +58,7 @@ private:
 	void restoreFloatPlayerDelegate();
 	not_null<::Media::Player::FloatDelegate*> floatPlayerDelegate();
 	not_null<Ui::RpWidget*> floatPlayerWidget() override;
+	void floatPlayerToggleGifsPaused(bool paused) override;
 	not_null<::Media::Player::FloatSectionDelegate*> floatPlayerGetSection(
 		Window::Column column) override;
 	void floatPlayerEnumerateSections(Fn<void(
@@ -68,13 +69,22 @@ private:
 		not_null<const HistoryItem*> item) override;
 
 	void setupHeightConsumers();
+	void setContentHeight(int height);
+	[[nodiscard]] QRect countGeometry(int newWidth);
 
 	not_null<Window::SessionController*> _controller;
-	object_ptr<WrapWidget> _content;
+	object_ptr<WrapWidget> _contentWrap;
 
 	int _desiredHeight = 0;
+	int _contentWrapHeight = 0;
+	int _savedHeight = 0;
+	Ui::Animations::Simple _heightAnimation;
+	Ui::Animations::Simple _savedHeightAnimation;
+	bool _heightAnimated = false;
 	bool _inResize = false;
+	bool _pendingResize = false;
 	bool _tillBottom = false;
+	bool _contentTillBottom = false;
 
 	bool _floatPlayerDelegateRestored = false;
 

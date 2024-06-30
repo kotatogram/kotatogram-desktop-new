@@ -16,6 +16,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/text/format_values.h"
 #include "ui/cached_round_corners.h"
+#include "ui/painter.h"
+#include "ui/power_saving.h"
 #include "data/data_media_types.h"
 #include "styles/style_chat.h"
 
@@ -33,10 +35,12 @@ Invoice::Invoice(
 
 void Invoice::fillFromData(not_null<Data::Invoice*> invoice) {
 	if (invoice->photo) {
+		const auto spoiler = false;
 		_attach = std::make_unique<Photo>(
 			_parent,
 			_parent->data(),
-			invoice->photo);
+			invoice->photo,
+			spoiler);
 	} else {
 		_attach = nullptr;
 	}
@@ -68,13 +72,10 @@ void Invoice::fillFromData(not_null<Data::Invoice*> invoice) {
 	_receiptMsgId = invoice->receiptMsgId;
 
 	// init strings
-	if (!invoice->description.isEmpty()) {
-		auto marked = TextWithEntities { invoice->description };
-		auto parseFlags = TextParseLinks | TextParseMultiline;
-		TextUtilities::ParseEntities(marked, parseFlags);
+	if (!invoice->description.empty()) {
 		_description.setMarkedText(
 			st::webPageDescriptionStyle,
-			marked,
+			invoice->description,
 			Ui::WebpageTextDescriptionOptions());
 	}
 	if (!invoice->title.isEmpty()) {
@@ -86,7 +87,7 @@ void Invoice::fillFromData(not_null<Data::Invoice*> invoice) {
 }
 
 QSize Invoice::countOptimalSize() {
-	auto lineHeight = unitedLineHeight();
+	auto lineHeight = UnitedLineHeight();
 
 	if (_attach) {
 		if (_status.hasSkipBlock()) {
@@ -142,7 +143,7 @@ QSize Invoice::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	auto innerWidth = newWidth - st::msgPadding.left() - st::msgPadding.right();
 
-	auto lineHeight = unitedLineHeight();
+	auto lineHeight = UnitedLineHeight();
 
 	auto newHeight = 0;
 	if (_title.isEmpty()) {
@@ -212,13 +213,9 @@ void Invoice::draw(Painter &p, const PaintContext &context) const {
 	QMargins bubble(_attach ? _attach->bubbleMargins() : QMargins());
 	auto padding = inBubblePadding();
 	auto tshift = padding.top();
-	auto bshift = padding.bottom();
 	paintw -= padding.left() + padding.right();
-	if (isBubbleBottom() && _attach && _attach->customInfoLayout() && _attach->width() + _parent->skipBlockWidth() > paintw + bubble.left() + bubble.right()) {
-		bshift += bottomInfoPadding();
-	}
 
-	auto lineHeight = unitedLineHeight();
+	auto lineHeight = UnitedLineHeight();
 	if (_titleHeight) {
 		p.setPen(semibold);
 		p.setTextPalette(stm->semiboldPalette);
@@ -234,7 +231,17 @@ void Invoice::draw(Painter &p, const PaintContext &context) const {
 	}
 	if (_descriptionHeight) {
 		p.setPen(stm->historyTextFg);
-		_description.drawLeft(p, padding.left(), tshift, paintw, width(), style::al_left, 0, -1, toDescriptionSelection(context.selection));
+		_parent->prepareCustomEmojiPaint(p, context, _description);
+		_description.draw(p, {
+			.position = { padding.left(), tshift },
+			.outerWidth = width(),
+			.availableWidth = paintw,
+			.spoiler = Ui::Text::DefaultSpoilerCache(),
+			.now = context.now,
+			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+			.selection = toDescriptionSelection(context.selection),
+		});
 		tshift += _descriptionHeight;
 	}
 	if (_attach) {
@@ -290,7 +297,7 @@ TextState Invoice::textState(QPoint point, StateRequest request) const {
 	}
 	paintw -= padding.left() + padding.right();
 
-	auto lineHeight = unitedLineHeight();
+	auto lineHeight = UnitedLineHeight();
 	auto symbolAdd = 0;
 	if (_titleHeight) {
 		if (point.y() >= tshift && point.y() < tshift + _titleHeight) {
@@ -357,6 +364,17 @@ void Invoice::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed)
 	if (_attach) {
 		_attach->clickHandlerPressedChanged(p, pressed);
 	}
+}
+
+bool Invoice::hasHeavyPart() const {
+	return _attach ? _attach->hasHeavyPart() : false;
+}
+
+void Invoice::unloadHeavyPart() {
+	if (_attach) {
+		_attach->unloadHeavyPart();
+	}
+	_description.unloadPersistentAnimation();
 }
 
 TextForMimeData Invoice::selectedText(TextSelection selection) const {

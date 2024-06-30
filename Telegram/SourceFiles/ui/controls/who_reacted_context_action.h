@@ -8,17 +8,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/unique_qptr.h"
+#include "ui/text/text_block.h"
+#include "ui/widgets/menu/menu_item_base.h"
 
 namespace Ui {
-namespace Menu {
-class ItemBase;
-} // namespace Menu
 
 class PopupMenu;
 
 struct WhoReadParticipant {
 	QString name;
-	QString reaction;
+	QString date;
+	bool dateReacted = false;
+	QString customEntityData;
 	QImage userpicSmall;
 	QImage userpicLarge;
 	std::pair<uint64, uint64> userpicKey = {};
@@ -37,41 +38,108 @@ enum class WhoReadType {
 	Reacted,
 };
 
+enum class WhoReadState : uchar {
+	Empty,
+	Unknown,
+	MyHidden,
+	HisHidden,
+	TooOld,
+};
+
 struct WhoReadContent {
 	std::vector<WhoReadParticipant> participants;
 	WhoReadType type = WhoReadType::Seen;
-	QString singleReaction;
+	QString singleCustomEntityData;
 	int fullReactionsCount = 0;
 	int fullReadCount = 0;
-	bool unknown = false;
+	WhoReadState state = WhoReadState::Empty;
 };
 
 [[nodiscard]] base::unique_qptr<Menu::ItemBase> WhoReactedContextAction(
 	not_null<PopupMenu*> menu,
 	rpl::producer<WhoReadContent> content,
-	Fn<void(uint64)> participantChosen,
-	Fn<void()> showAllChosen,
-	int userpicsRadius);
+	Text::CustomEmojiFactory factory,
+	Fn<void(WhoReadParticipant)> participantChosen,
+	Fn<void()> showAllChosen);
+
+[[nodiscard]] base::unique_qptr<Menu::ItemBase> WhenReadContextAction(
+	not_null<PopupMenu*> menu,
+	rpl::producer<WhoReadContent> content,
+	Fn<void()> showOrPremium);
+
+enum class WhoReactedType : uchar {
+	Viewed,
+	Reacted,
+	Reposted,
+	Forwarded,
+	Preloader,
+};
+
+struct WhoReactedEntryData {
+	QString text;
+	QString date;
+	WhoReactedType type = WhoReactedType::Viewed;
+	QString customEntityData;
+	QImage userpic;
+	Fn<void()> callback;
+};
+
+class WhoReactedEntryAction final : public Menu::ItemBase {
+public:
+	using Data = WhoReactedEntryData;
+
+	WhoReactedEntryAction(
+		not_null<RpWidget*> parent,
+		Text::CustomEmojiFactory factory,
+		const style::Menu &st,
+		Data &&data);
+
+	void setData(Data &&data);
+
+	not_null<QAction*> action() const override;
+	bool isEnabled() const override;
+
+private:
+	int contentHeight() const override;
+
+	void paint(Painter &&p);
+
+	const not_null<QAction*> _dummyAction;
+	const Text::CustomEmojiFactory _customEmojiFactory;
+	const style::Menu &_st;
+	const int _height = 0;
+
+	Text::String _text;
+	Text::String _date;
+	std::unique_ptr<Ui::Text::CustomEmoji> _custom;
+	QImage _userpic;
+	int _textWidth = 0;
+	int _customSize = 0;
+	WhoReactedType _type = WhoReactedType::Viewed;
+
+};
 
 class WhoReactedListMenu final {
 public:
 	WhoReactedListMenu(
-		Fn<void(uint64)> participantChosen,
+		Text::CustomEmojiFactory factory,
+		Fn<void(WhoReadParticipant)> participantChosen,
 		Fn<void()> showAllChosen);
 
 	void clear();
 	void populate(
 		not_null<PopupMenu*> menu,
 		const WhoReadContent &content,
-		Fn<void()> refillTopActions = nullptr);
+		Fn<void()> refillTopActions = nullptr,
+		int addedToBottom = 0,
+		Fn<void()> appendBottomActions = nullptr);
 
 private:
-	class EntryAction;
-
-	const Fn<void(uint64)> _participantChosen;
+	const Text::CustomEmojiFactory _customEmojiFactory;
+	const Fn<void(WhoReadParticipant)> _participantChosen;
 	const Fn<void()> _showAllChosen;
 
-	std::vector<not_null<EntryAction*>> _actions;
+	std::vector<not_null<WhoReactedEntryAction*>> _actions;
 
 };
 

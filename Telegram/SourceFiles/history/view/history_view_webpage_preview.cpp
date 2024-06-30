@@ -57,7 +57,7 @@ WebPageText TitleAndDescriptionFromWebPage(not_null<WebPageData*> d) {
 }
 
 bool DrawWebPageDataPreview(
-		Painter &p,
+		QPainter &p,
 		not_null<WebPageData*> webpage,
 		not_null<PeerData*> context,
 		QRect to) {
@@ -71,8 +71,8 @@ bool DrawWebPageDataPreview(
 	}
 
 	const auto preview = photo
-		? photo->getReplyPreview(Data::FileOrigin(), context)
-		: document->getReplyPreview(Data::FileOrigin(), context);
+		? photo->getReplyPreview(Data::FileOrigin(), context, false)
+		: document->getReplyPreview(Data::FileOrigin(), context, false);
 	if (preview) {
 		const auto w = preview->width();
 		const auto h = preview->height();

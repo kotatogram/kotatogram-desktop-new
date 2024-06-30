@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/effects/ripple_animation.h"
 #include "ui/text/text_options.h"
+#include "ui/painter.h"
 #include "data/data_peer.h"
 #include "data/data_cloud_file.h"
 #include "main/main_session.h"
@@ -98,8 +99,8 @@ void PeerListWidget::paintItem(Painter &p, int x, int y, Item *item, bool select
 
 	if (item->name.isEmpty()) {
 		item->name.setText(
-			st::msgNameStyle,
-			item->peer->name,
+			st::semiboldTextStyle,
+			item->peer->name(),
 			Ui::NameTextOptions());
 	}
 	int nameLeft = x + _st.namePosition.x();
@@ -110,15 +111,11 @@ void PeerListWidget::paintItem(Painter &p, int x, int y, Item *item, bool select
 		p.setPen(st::windowActiveTextFg);
 		p.drawTextLeft(nameLeft + nameWidth - _removeWidth, nameTop, width(), _removeText, _removeWidth);
 		nameWidth -= _removeWidth + skip;
-	} else if (item->adminState != Item::AdminState::None) {
+	} else if (item->rank) {
 		p.setFont(st::normalFont);
-		p.setPen(item->adminState == Item::AdminState::Creator
-			? _st.statusFgActive
-			: selected
-			? _st.statusFgOver
-			: _st.statusFg);
-		p.drawTextLeft(nameLeft + nameWidth - item->adminRankWidth, nameTop, width(), item->adminRank, item->adminRankWidth);
-		nameWidth -= item->adminRankWidth + skip;
+		p.setPen(st::windowActiveTextFg);
+		p.drawTextLeft(nameLeft + nameWidth - item->rankWidth, nameTop, width(), *item->rank, item->rankWidth);
+		nameWidth -= item->rankWidth + skip;
 	}
 	p.setPen(st::profileMemberNameFg);
 	item->name.drawLeftElided(p, nameLeft, nameTop, nameWidth, width());
@@ -152,7 +149,7 @@ void PeerListWidget::mousePressEvent(QMouseEvent *e) {
 		const auto item = _items[_pressed];
 		if (!item->ripple) {
 			auto memberRowWidth = rowWidth();
-			auto mask = Ui::RippleAnimation::rectMask(QSize(memberRowWidth, _st.height));
+			auto mask = Ui::RippleAnimation::RectMask(QSize(memberRowWidth, _st.height));
 			item->ripple = std::make_unique<Ui::RippleAnimation>(_st.button.ripple, std::move(mask), [this, index = _pressed] {
 				repaintRow(index);
 			});

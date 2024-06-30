@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "ui/widgets/tooltip.h"
 #include "ui/emoji_config.h"
+#include "ui/painter.h"
 #include "ui/rp_widget.h"
 #include "styles/style_calls.h"
 
@@ -188,7 +189,7 @@ object_ptr<Ui::RpWidget> CreateFingerprintAndSignalBars(
 		tr::lng_call_fingerprint_tooltip(
 			tr::now,
 			lt_user,
-			call->user()->name));
+			call->user()->name()));
 	raw->setMouseTracking(true);
 	raw->events(
 	) | rpl::start_with_next([=](not_null<QEvent*> e) {
@@ -237,7 +238,7 @@ object_ptr<Ui::RpWidget> CreateFingerprintAndSignalBars(
 		QImage::Format_ARGB32_Premultiplied);
 	background->setDevicePixelRatio(cRetinaFactor());
 	rpl::merge(
-		rpl::single(rpl::empty_value()),
+		rpl::single(rpl::empty),
 		Ui::Emoji::Updated(),
 		style::PaletteChanged()
 	) | rpl::start_with_next([=] {

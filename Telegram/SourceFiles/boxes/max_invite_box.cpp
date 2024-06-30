@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/layers/generic_box.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
+#include "ui/painter.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 
@@ -90,7 +91,7 @@ void MaxInviteBox::mousePressEvent(QMouseEvent *e) {
 	if (_linkOver) {
 		if (!_channel->inviteLink().isEmpty()) {
 			QGuiApplication::clipboard()->setText(_channel->inviteLink());
-			Ui::Toast::Show(tr::lng_create_channel_link_copied(tr::now));
+			showToast(tr::lng_create_channel_link_copied(tr::now));
 		} else if (_channel->isFullLoaded() && !_creatingInviteLink) {
 			_creatingInviteLink = true;
 			_channel->session().api().inviteLinks().create(_channel);

@@ -157,17 +157,18 @@ void RadioBox::prepare() {
 }
 
 void RadioBox::save() {
-	_saveCallback(_group->value());
+	_saveCallback(_group->current());
 	if (_warnRestart) {
 		const auto box = std::make_shared<QPointer<BoxContent>>();
 
 		*box = getDelegate()->show(
-			Box<Ui::ConfirmBox>(
-				tr::lng_settings_need_restart(tr::now),
-				tr::lng_settings_restart_now(tr::now),
-				tr::lng_settings_restart_later(tr::now),
-				[] { Core::Restart(); },
-				[=] { closeBox(); }));
+			Ui::MakeConfirmBox({
+				.text = tr::lng_settings_need_restart(),
+				.confirmed = [] { Core::Restart(); },
+				.cancelled = crl::guard(this, [=] { closeBox(); box->data()->closeBox(); }),
+				.confirmText = tr::lng_settings_restart_now(),
+				.cancelText = tr::lng_settings_restart_later(),
+			}));
 	} else {
 		closeBox();
 	}

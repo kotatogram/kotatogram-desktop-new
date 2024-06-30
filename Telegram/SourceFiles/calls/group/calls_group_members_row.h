@@ -19,6 +19,7 @@ struct GroupCallParticipant;
 
 namespace Ui {
 class RippleAnimation;
+struct PeerUserpicView;
 } // namespace Ui
 
 namespace Calls::Group {
@@ -47,11 +48,11 @@ public:
 	virtual void rowScheduleRaisedHandStatusRemove(
 		not_null<MembersRow*> row) = 0;
 	virtual void rowPaintIcon(
-		Painter &p,
+		QPainter &p,
 		QRect rect,
 		const IconState &state) = 0;
 	virtual int rowPaintStatusIcon(
-		Painter &p,
+		QPainter &p,
 		int x,
 		int y,
 		int outerWidth,
@@ -121,7 +122,8 @@ public:
 		bool selected,
 		bool actionSelected) override;
 
-	PaintRoundImageCallback generatePaintUserpicCallback() override;
+	PaintRoundImageCallback generatePaintUserpicCallback(
+		bool forceRound) override;
 	void paintComplexUserpic(
 		Painter &p,
 		int x,
@@ -150,7 +152,7 @@ public:
 		bool selected,
 		MembersRowStyle style);
 	void paintMuteIcon(
-		Painter &p,
+		QPainter &p,
 		QRect iconRect,
 		MembersRowStyle style = MembersRowStyle::Default);
 	[[nodiscard]] MembersRowDelegate::IconState computeIconState(
@@ -180,7 +182,7 @@ private:
 	void setVolume(int volume);
 
 	void ensureUserpicCache(
-		std::shared_ptr<Data::CloudImageView> &view,
+		Ui::PeerUserpicView &view,
 		int size);
 	void paintBlobs(
 		Painter &p,
@@ -190,7 +192,7 @@ private:
 		int sizeh, PanelMode mode);
 	void paintScaledUserpic(
 		Painter &p,
-		std::shared_ptr<Data::CloudImageView> &userpic,
+		Ui::PeerUserpicView &userpic,
 		int x,
 		int y,
 		int outerWidth,

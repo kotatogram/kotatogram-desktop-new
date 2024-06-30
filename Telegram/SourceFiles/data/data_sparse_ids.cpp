@@ -28,22 +28,22 @@ SparseIdsMergedSlice::SparseIdsMergedSlice(
 
 SparseIdsMergedSlice::SparseIdsMergedSlice(
 	Key key,
-	SparseUnsortedIdsSlice scheduled)
+	SparseUnsortedIdsSlice unsorted)
 : _key(key)
-, _scheduled(std::move(scheduled)) {
+, _unsorted(std::move(unsorted)) {
 }
 
 std::optional<int> SparseIdsMergedSlice::fullCount() const {
-	return _scheduled
-		? _scheduled->fullCount()
+	return _unsorted
+		? _unsorted->fullCount()
 		: Add(
 			_part.fullCount(),
 			_migrated ? _migrated->fullCount() : 0);
 }
 
 std::optional<int> SparseIdsMergedSlice::skippedBefore() const {
-	return _scheduled
-		? _scheduled->skippedBefore()
+	return _unsorted
+		? _unsorted->skippedBefore()
 		: Add(
 			isolatedInMigrated() ? 0 : _part.skippedBefore(),
 			_migrated
@@ -55,8 +55,8 @@ std::optional<int> SparseIdsMergedSlice::skippedBefore() const {
 }
 
 std::optional<int> SparseIdsMergedSlice::skippedAfter() const {
-	return _scheduled
-		? _scheduled->skippedAfter()
+	return _unsorted
+		? _unsorted->skippedAfter()
 		: Add(
 			isolatedInMigrated() ? _part.fullCount() : _part.skippedAfter(),
 			isolatedInPart() ? 0 : _migrated->skippedAfter()
@@ -65,8 +65,8 @@ std::optional<int> SparseIdsMergedSlice::skippedAfter() const {
 
 std::optional<int> SparseIdsMergedSlice::indexOf(
 		FullMsgId fullId) const {
-	return _scheduled
-		? _scheduled->indexOf(fullId.msg)
+	return _unsorted
+		? _unsorted->indexOf(fullId.msg)
 		: isFromPart(fullId)
 		? (_part.indexOf(fullId.msg) | func::add(migratedSize()))
 		: isolatedInPart()
@@ -77,8 +77,8 @@ std::optional<int> SparseIdsMergedSlice::indexOf(
 }
 
 int SparseIdsMergedSlice::size() const {
-	return _scheduled
-		? _scheduled->size()
+	return _unsorted
+		? _unsorted->size()
 		: (isolatedInPart() ? 0 : migratedSize())
 			+ (isolatedInMigrated() ? 0 : _part.size());
 }
@@ -86,8 +86,8 @@ int SparseIdsMergedSlice::size() const {
 FullMsgId SparseIdsMergedSlice::operator[](int index) const {
 	Expects(index >= 0 && index < size());
 
-	if (_scheduled) {
-		return ComputeId(_key.peerId, (*_scheduled)[index]);
+	if (_unsorted) {
+		return ComputeId(_key.peerId, (*_unsorted)[index]);
 	}
 
 	if (const auto size = migratedSize()) {
@@ -112,10 +112,13 @@ std::optional<int> SparseIdsMergedSlice::distance(
 
 auto SparseIdsMergedSlice::nearest(
 		UniversalMsgId id) const -> std::optional<FullMsgId> {
-	if (_scheduled) {
-		if (const auto nearestId = _scheduled->nearest(id)) {
-			return ComputeId(_key.peerId, *nearestId);
+	if (_unsorted) {
+		if (_unsorted->indexOf(id).has_value()) {
+			return ComputeId(_key.peerId, id);
+		} else if (const auto count = _unsorted->size()) {
+			return ComputeId(_key.peerId, (*_unsorted)[count / 2]);
 		}
+		return std::nullopt;
 	}
 	const auto convertFromPartNearest = [&](MsgId result) {
 		return ComputeId(_key.peerId, result);
@@ -374,6 +377,7 @@ rpl::producer<SparseIdsMergedSlice> SparseIdsMergedSlice::CreateViewer(
 		int limitBefore,
 		int limitAfter,
 		Fn<SimpleViewerFunction> simpleViewer) {
+	Expects(!key.topicRootId || !key.migratedPeerId);
 	Expects(IsServerMsgId(key.universalId)
 		|| (key.universalId == 0)
 		|| (IsServerMsgId(ServerMaxMsgId + key.universalId) && key.migratedPeerId != 0));
@@ -383,6 +387,7 @@ rpl::producer<SparseIdsMergedSlice> SparseIdsMergedSlice::CreateViewer(
 	return [=](auto consumer) {
 		auto partViewer = simpleViewer(
 			key.peerId,
+			key.topicRootId,
 			SparseIdsMergedSlice::PartKey(key),
 			limitBefore,
 			limitAfter
@@ -399,6 +404,7 @@ rpl::producer<SparseIdsMergedSlice> SparseIdsMergedSlice::CreateViewer(
 		}
 		auto migratedViewer = simpleViewer(
 			key.migratedPeerId,
+			MsgId(0), // topicRootId
 			SparseIdsMergedSlice::MigratedKey(key),
 			limitBefore,
 			limitAfter);

@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "media/streaming/media_streaming_common.h"
 #include "ui/image/image_prepare.h"
+#include "ui/painter.h"
 #include "ffmpeg/ffmpeg_utility.h"
 
 namespace Media {
@@ -20,14 +21,19 @@ constexpr auto kSkipInvalidDataPackets = 10;
 } // namespace
 
 crl::time FramePosition(const Stream &stream) {
-	const auto pts = !stream.frame
+	const auto pts = !stream.decodedFrame
 		? AV_NOPTS_VALUE
-		: (stream.frame->best_effort_timestamp != AV_NOPTS_VALUE)
-		? stream.frame->best_effort_timestamp
-		: (stream.frame->pts != AV_NOPTS_VALUE)
-		? stream.frame->pts
-		: stream.frame->pkt_dts;
-	return FFmpeg::PtsToTime(pts, stream.timeBase);
+		: (stream.decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE)
+		? stream.decodedFrame->best_effort_timestamp
+		: (stream.decodedFrame->pts != AV_NOPTS_VALUE)
+		? stream.decodedFrame->pts
+		: stream.decodedFrame->pkt_dts;
+	const auto result = FFmpeg::PtsToTime(pts, stream.timeBase);
+
+	// Sometimes the result here may be larger than the stream duration.
+	return (stream.duration == kDurationUnavailable)
+		? result
+		: std::min(result, stream.duration);
 }
 
 FFmpeg::AvErrorWrap ProcessPacket(Stream &stream, FFmpeg::Packet &&packet) {
@@ -50,7 +56,7 @@ FFmpeg::AvErrorWrap ProcessPacket(Stream &stream, FFmpeg::Packet &&packet) {
 		stream.codec.get(),
 		native->data ? native : nullptr); // Drain on eof.
 	if (error) {
-		LogError(qstr("avcodec_send_packet"), error);
+		LogError(u"avcodec_send_packet"_q, error);
 		if (error.code() == AVERROR_INVALIDDATA
 			// There is a sample voice message where skipping such packet
 			// results in a crash (read_access to nullptr) in swr_convert().
@@ -66,14 +72,14 @@ FFmpeg::AvErrorWrap ProcessPacket(Stream &stream, FFmpeg::Packet &&packet) {
 }
 
 FFmpeg::AvErrorWrap ReadNextFrame(Stream &stream) {
-	Expects(stream.frame != nullptr);
+	Expects(stream.decodedFrame != nullptr);
 
 	auto error = FFmpeg::AvErrorWrap();
 
 	do {
 		error = avcodec_receive_frame(
 			stream.codec.get(),
-			stream.frame.get());
+			stream.decodedFrame.get());
 		if (!error
 			|| error.code() != AVERROR(EAGAIN)
 			|| stream.queue.empty()) {
@@ -96,25 +102,40 @@ bool GoodForRequest(
 		|| (hasAlpha && !request.keepAlpha)
 		|| request.colored.alpha() != 0) {
 		return false;
-	} else if (request.resize.isEmpty()) {
+	} else if (!request.blurredBackground && request.resize.isEmpty()) {
 		return true;
 	} else if (rotation != 0) {
 		return false;
-	} else if ((request.radius != ImageRoundRadius::None)
-		&& ((request.corners & RectPart::AllCorners) != 0)) {
+	} else if (!request.rounding.empty() || !request.mask.isNull()) {
 		return false;
 	}
-	return (request.resize == request.outer)
-		&& (request.resize == image.size());
+	const auto size = request.blurredBackground
+		? request.outer
+		: request.resize;
+	return (size == request.outer) && (size == image.size());
+}
+
+bool TransferFrame(
+		Stream &stream,
+		not_null<AVFrame*> decodedFrame,
+		not_null<AVFrame*> transferredFrame) {
+	Expects(decodedFrame->hw_frames_ctx != nullptr);
+
+	const auto error = FFmpeg::AvErrorWrap(
+		av_hwframe_transfer_data(transferredFrame, decodedFrame, 0));
+	if (error) {
+		LogError(u"av_hwframe_transfer_data"_q, error);
+		return false;
+	}
+	FFmpeg::ClearFrameMemory(decodedFrame);
+	return true;
 }
 
 QImage ConvertFrame(
 		Stream &stream,
-		AVFrame *frame,
+		not_null<AVFrame*> frame,
 		QSize resize,
 		QImage storage) {
-	Expects(frame != nullptr);
-
 	const auto frameSize = QSize(frame->width, frame->height);
 	if (frameSize.isEmpty()) {
 		LOG(("Streaming Error: Bad frame size %1,%2"
@@ -134,6 +155,7 @@ QImage ConvertFrame(
 	if (!FFmpeg::GoodStorageForFrame(storage, resize)) {
 		storage = FFmpeg::CreateFrameStorage(resize);
 	}
+
 	const auto format = AV_PIX_FMT_BGRA;
 	const auto hasDesiredFormat = (frame->format == format);
 	if (frameSize == storage.size() && hasDesiredFormat) {
@@ -183,7 +205,7 @@ QImage ConvertFrame(
 	return storage;
 }
 
-FrameYUV420 ExtractYUV420(Stream &stream, AVFrame *frame) {
+FrameYUV ExtractYUV(Stream &stream, AVFrame *frame) {
 	return {
 		.size = { frame->width, frame->height },
 		.chromaSize = {
@@ -264,48 +286,141 @@ void PaintFrameInner(
 	p.drawImage(rect, original);
 }
 
+QImage PrepareBlurredBackground(QSize outer, QImage frame) {
+	const auto bsize = frame.size();
+	const auto copyw = std::min(
+		bsize.width(),
+		std::max(outer.width() * bsize.height() / outer.height(), 1));
+	const auto copyh = std::min(
+		bsize.height(),
+		std::max(outer.height() * bsize.width() / outer.width(), 1));
+	auto copy = (bsize == QSize(copyw, copyh))
+		? std::move(frame)
+		: frame.copy(
+			(bsize.width() - copyw) / 2,
+			(bsize.height() - copyh) / 2,
+			copyw,
+			copyh);
+	auto scaled = (copy.width() <= 100 && copy.height() <= 100)
+		? std::move(copy)
+		: copy.scaled(40, 40, Qt::KeepAspectRatio, Qt::FastTransformation);
+	return Images::Blur(std::move(scaled), true);
+}
+
+void FillBlurredBackground(QPainter &p, QSize outer, QImage bg) {
+	auto hq = PainterHighQualityEnabler(p);
+	const auto rect = QRect(QPoint(), outer);
+	const auto ratio = p.device()->devicePixelRatio();
+	p.drawImage(
+		rect,
+		PrepareBlurredBackground(outer * ratio, std::move(bg)));
+	p.fillRect(rect, QColor(0, 0, 0, 48));
+}
+
 void PaintFrameContent(
 		QPainter &p,
 		const QImage &original,
-		bool alpha,
+		bool hasAlpha,
+		const AVRational &aspect,
 		int rotation,
 		const FrameRequest &request) {
-	const auto full = request.outer.isEmpty()
-		? original.size()
-		: request.outer;
-	const auto size = request.resize.isEmpty()
-		? original.size()
-		: request.resize;
-	const auto to = QRect(
+	const auto outer = request.outer;
+	const auto full = request.outer.isEmpty() ? original.size() : outer;
+	const auto deAlpha = hasAlpha && !request.keepAlpha;
+	const auto resize = request.blurredBackground
+		? DecideVideoFrameResize(
+			outer,
+			FFmpeg::TransposeSizeByRotation(
+				FFmpeg::CorrectByAspect(original.size(), aspect), rotation))
+		: ExpandDecision{ request.resize.isEmpty()
+			? original.size()
+			: request.resize };
+	const auto size = resize.result;
+	const auto target = QRect(
 		(full.width() - size.width()) / 2,
 		(full.height() - size.height()) / 2,
 		size.width(),
 		size.height());
-	if (!alpha || !request.keepAlpha) {
-		PaintFrameOuter(p, to, full);
+	if (request.blurredBackground) {
+		if (!resize.expanding) {
+			FillBlurredBackground(p, full, original);
+		}
+	} else if (!hasAlpha || !request.keepAlpha) {
+		PaintFrameOuter(p, target, full);
 	}
-	const auto deAlpha = alpha && !request.keepAlpha;
-	PaintFrameInner(p, to, original, deAlpha, rotation);
+	PaintFrameInner(p, target, original, deAlpha, rotation);
 }
 
 void ApplyFrameRounding(QImage &storage, const FrameRequest &request) {
-	if (!(request.corners & RectPart::AllCorners)
-		|| (request.radius == ImageRoundRadius::None)) {
-		return;
+	if (!request.mask.isNull()) {
+		auto p = QPainter(&storage);
+		p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+		p.drawImage(
+			QRect(QPoint(), storage.size() / storage.devicePixelRatio()),
+			request.mask);
+	} else if (!request.rounding.empty()) {
+		storage = Images::Round(std::move(storage), request.rounding);
 	}
-	storage = Images::Round(
-		std::move(storage),
-		request.radius,
-		request.corners);
+}
+
+ExpandDecision DecideFrameResize(
+		QSize outer,
+		QSize original,
+		int minVisibleNominator,
+		int minVisibleDenominator) {
+	if (outer.isEmpty()) {
+		// Often "expanding" means that we don't need to fill the background.
+		return { .result = original, .expanding = true };
+	}
+	const auto big = original.scaled(outer, Qt::KeepAspectRatioByExpanding);
+	if ((big.width() <= outer.width())
+		&& (big.height() * minVisibleNominator
+			<= outer.height() * minVisibleDenominator)) {
+		return { .result = big, .expanding = true };
+	}
+	return { .result = original.scaled(outer, Qt::KeepAspectRatio) };
+}
+
+bool FrameResizeMayExpand(
+		QSize outer,
+		QSize original,
+		int minVisibleNominator,
+		int minVisibleDenominator) {
+	const auto min = std::min({
+		outer.width(),
+		outer.height(),
+		original.width(),
+		original.height(),
+	});
+	// Count for: (nominator / denominator) - (1 / min).
+	// In case the result is less than 1 / 2, just return.
+	if (2 * minVisibleNominator * min
+		< 2 * minVisibleDenominator + minVisibleDenominator * min) {
+		return false;
+	}
+	return DecideFrameResize(
+		outer,
+		original,
+		minVisibleNominator * min - minVisibleDenominator,
+		minVisibleDenominator * min).expanding;
+}
+
+ExpandDecision DecideVideoFrameResize(QSize outer, QSize original) {
+	return DecideFrameResize(outer, original, 1, 2);
+}
+
+QSize CalculateResizeFromOuter(QSize outer, QSize original) {
+	return DecideVideoFrameResize(outer, original).result;
 }
 
 QImage PrepareByRequest(
 		const QImage &original,
-		bool alpha,
+		bool hasAlpha,
+		const AVRational &aspect,
 		int rotation,
 		const FrameRequest &request,
 		QImage storage) {
-	Expects(!request.outer.isEmpty() || alpha);
+	Expects(!request.outer.isEmpty() || hasAlpha);
 
 	const auto outer = request.outer.isEmpty()
 		? original.size()
@@ -314,12 +429,12 @@ QImage PrepareByRequest(
 		storage = FFmpeg::CreateFrameStorage(outer);
 	}
 
-	if (alpha && request.keepAlpha) {
+	if (hasAlpha && request.keepAlpha) {
 		storage.fill(Qt::transparent);
 	}
 
 	QPainter p(&storage);
-	PaintFrameContent(p, original, alpha, rotation, request);
+	PaintFrameContent(p, original, hasAlpha, aspect, rotation, request);
 	p.end();
 
 	ApplyFrameRounding(storage, request);

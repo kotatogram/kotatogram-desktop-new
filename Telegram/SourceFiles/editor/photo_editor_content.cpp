@@ -80,16 +80,16 @@ PhotoEditorContent::PhotoEditorContent(
 			mods.angle,
 			mods.flipped, imageSizeF);
 		_paint->applyTransform(geometry, mods.angle, mods.flipped);
+
+		_innerRect = geometry;
 	}, lifetime());
 
 	paintRequest(
 	) | rpl::start_with_next([=](const QRect &clip) {
-		Painter p(this);
+		auto p = QPainter(this);
 
 		p.fillRect(clip, Qt::transparent);
-
 		p.setTransform(_imageMatrix);
-
 		p.drawPixmap(_imageRect, _photo->pix(_imageRect.size()));
 	}, lifetime());
 

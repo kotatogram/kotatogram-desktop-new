@@ -7,13 +7,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/abstract_box.h"
-#include "base/observer.h"
+#include "ui/layers/box_content.h"
 #include "base/timer.h"
+#include "history/view/history_view_schedule_box.h"
 #include "ui/chat/forward_options_box.h"
 #include "ui/effects/animations.h"
 #include "ui/effects/round_checkbox.h"
 #include "mtproto/sender.h"
+
+class History;
 
 namespace style {
 struct MultiSelect;
@@ -26,7 +28,7 @@ enum class Type;
 } // namespace SendMenu
 
 namespace Window {
-class SessionNavigation;
+class SessionController;
 } // namespace Window
 
 namespace Api {
@@ -45,6 +47,7 @@ class IndexedList;
 namespace Data {
 enum class ForwardOptions;
 enum class GroupingOptions;
+class Thread;
 } // namespace Data
 
 namespace Ui {
@@ -62,21 +65,33 @@ QString AppendShareGameScoreUrl(
 	const QString &url,
 	const FullMsgId &fullId);
 void ShareGameScoreByHash(
-	not_null<Main::Session*> session,
+	not_null<Window::SessionController*> controller,
 	const QString &hash);
+void FastShareMessage(
+	not_null<Window::SessionController*> controller,
+	not_null<HistoryItem*> item);
+
+struct RecipientPremiumRequiredError;
+[[nodiscard]] auto SharePremiumRequiredError()
+-> Fn<RecipientPremiumRequiredError(not_null<UserData*>)>;
 
 class ShareBox final : public Ui::BoxContent {
 public:
 	using CopyCallback = Fn<void()>;
 	using SubmitCallback = Fn<void(
-		std::vector<not_null<PeerData*>>&&,
+		std::vector<not_null<Data::Thread*>>&&,
 		TextWithTags&&,
 		Api::SendOptions,
 		Data::ForwardOptions option,
 		Data::GroupingOptions groupOption)>;
-	using FilterCallback = Fn<bool(PeerData*)>;
+	using FilterCallback = Fn<bool(not_null<Data::Thread*>)>;
+
+	[[nodiscard]] static SubmitCallback DefaultForwardCallback(
+		std::shared_ptr<Ui::Show> show,
+		not_null<History*> history,
+		MessageIdsList msgIds);
 	using GoToChatCallback = Fn<void(
-		PeerData*,
+		Data::Thread*,
 		Data::ForwardOptions option,
 		Data::GroupingOptions groupOption)>;
 
@@ -86,21 +101,23 @@ public:
 		SubmitCallback submitCallback;
 		FilterCallback filterCallback;
 		GoToChatCallback goToChatCallback;
-		Window::SessionNavigation *navigation = nullptr;
-		Fn<void(not_null<Ui::InputField*>)> initSpellchecker;
-		Fn<void(not_null<Ui::InputField*>)> initEditLink;
 		object_ptr<Ui::RpWidget> bottomWidget = { nullptr };
 		rpl::producer<QString> copyLinkText;
 		const style::MultiSelect *stMultiSelect = nullptr;
 		const style::InputField *stComment = nullptr;
 		const style::PeerList *st = nullptr;
+		const style::InputField *stLabel = nullptr;
 		struct {
-			int messagesCount = 0;
+			int sendersCount = 0;
+			int captionsCount = 0;
 			bool show = false;
-			bool hasCaptions = false;
 			bool hasMedia = false;
 			bool isShare = true;
 		} forwardOptions;
+		HistoryView::ScheduleBoxStyleArgs scheduleBoxStyle;
+
+		using PremiumRequiredError = RecipientPremiumRequiredError;
+		Fn<PremiumRequiredError(not_null<UserData*>)> premiumRequiredError;
 	};
 	ShareBox(QWidget*, Descriptor &&descriptor);
 
@@ -118,8 +135,9 @@ private:
 	void submit(Api::SendOptions options);
 	void submitSilent();
 	void submitScheduled();
-	void copyLink();
-	void goToChat(not_null<PeerData*> peer);
+	void submitWhenOnline();
+	void copyLink() const;
+	void goToChat(not_null<Data::Thread*> thread);
 	bool searchByUsername(bool useCache = false);
 
 	SendMenu::Type sendMenuType() const;
@@ -136,8 +154,8 @@ private:
 	int contentHeight() const;
 	void updateScrollSkips();
 
-	void addPeerToMultiSelect(PeerData *peer, bool skipAnimation = false);
-	void innerSelectedChanged(PeerData *peer, bool checked);
+	void addPeerToMultiSelect(not_null<Data::Thread*> thread);
+	void innerSelectedChanged(not_null<Data::Thread*> thread, bool checked);
 
 	void peopleDone(
 		const MTPcontacts_Found &result,

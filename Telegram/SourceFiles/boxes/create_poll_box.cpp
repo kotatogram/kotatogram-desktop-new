@@ -13,21 +13,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/fade_wrap.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/shadow.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
-#include "ui/toast/toast.h"
 #include "ui/text/text_utilities.h"
+#include "ui/vertical_list.h"
 #include "main/main_session.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "chat_helpers/emoji_suggestions_widget.h"
 #include "chat_helpers/message_field.h"
-#include "chat_helpers/send_context_menu.h"
+#include "menu/menu_send.h"
 #include "history/view/history_view_schedule_box.h"
-#include "settings/settings_common.h"
 #include "base/unique_qptr.h"
 #include "base/event_filter.h"
 #include "base/call_delayed.h"
@@ -35,7 +34,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
-#include "styles/style_settings.h"
 
 namespace {
 
@@ -183,7 +181,8 @@ not_null<Ui::FlatLabel*> CreateWarningLabel(
 		QString(),
 		st::createPollWarning);
 	result->setAttribute(Qt::WA_TransparentForMouseEvents);
-	QObject::connect(field, &Ui::InputField::changed, [=] {
+	field->changes(
+	) | rpl::start_with_next([=] {
 		Ui::PostponeCall(crl::guard(field, [=] {
 			const auto length = field->getLastText().size();
 			const auto value = valueLimit - length;
@@ -192,12 +191,12 @@ not_null<Ui::FlatLabel*> CreateWarningLabel(
 			if (value >= 0) {
 				result->setText(QString::number(value));
 			} else {
-				result->setMarkedText(Ui::Text::PlainLink(
+				result->setMarkedText(Ui::Text::Colorized(
 					QString::number(value)));
 			}
 			result->setVisible(shown);
 		}));
-	});
+	}, field->lifetime());
 	return result;
 }
 
@@ -242,13 +241,14 @@ Options::Option::Option(
 		_content->resize(_content->width(), height);
 	}, _field->lifetime());
 
-	QObject::connect(_field, &Ui::InputField::changed, [=] {
+	_field->changes(
+	) | rpl::start_with_next([=] {
 		Ui::PostponeCall(crl::guard(_field, [=] {
 			if (_hasCorrect) {
 				_correct->toggle(isGood(), anim::type::normal);
 			}
 		}));
-	});
+	}, _field->lifetime());
 
 	createShadow();
 	createRemove();
@@ -302,10 +302,11 @@ void Options::Option::createRemove() {
 	const auto toggle = lifetime.make_state<rpl::variable<bool>>(false);
 	_removeAlways = lifetime.make_state<rpl::variable<bool>>(false);
 
-	QObject::connect(field, &Ui::InputField::changed, [=] {
+	field->changes(
+	) | rpl::start_with_next([field, toggle] {
 		// Don't capture 'this'! Because Option is a value type.
 		*toggle = !field->getLastText().isEmpty();
-	});
+	}, field->lifetime());
 	rpl::combine(
 		toggle->value(),
 		_removeAlways->value(),
@@ -648,28 +649,32 @@ void Options::addEmptyOption() {
 		_position + _list.size() + _destroyed.size(),
 		_chooseCorrectGroup));
 	const auto field = _list.back()->field();
-	QObject::connect(field, &Ui::InputField::submitted, [=] {
+	field->submits(
+	) | rpl::start_with_next([=] {
 		const auto index = findField(field);
 		if (_list[index]->isGood() && index + 1 < _list.size()) {
 			_list[index + 1]->setFocus();
 		}
-	});
-	QObject::connect(field, &Ui::InputField::changed, [=] {
+	}, field->lifetime());
+	field->changes(
+	) | rpl::start_with_next([=] {
 		Ui::PostponeCall(crl::guard(field, [=] {
 			validateState();
 		}));
-	});
-	QObject::connect(field, &Ui::InputField::focused, [=] {
+	}, field->lifetime());
+	field->focusedChanges(
+	) | rpl::filter(rpl::mappers::_1) | rpl::start_with_next([=] {
 		_scrollToWidget.fire_copy(field);
-	});
-	QObject::connect(field, &Ui::InputField::tabbed, [=] {
+	}, field->lifetime());
+	field->tabbed(
+	) | rpl::start_with_next([=] {
 		const auto index = findField(field);
 		if (index + 1 < _list.size()) {
 			_list[index + 1]->setFocus();
 		} else {
 			_tabbed.fire({});
 		}
-	});
+	}, field->lifetime());
 	base::install_event_filter(field, [=](not_null<QEvent*> event) {
 		if (event->type() != QEvent::KeyPress
 			|| !field->getLastText().isEmpty()) {
@@ -774,7 +779,7 @@ void CreatePollBox::setInnerFocus() {
 }
 
 void CreatePollBox::submitFailed(const QString &error) {
-	Ui::Toast::Show(error);
+	showToast(error);
 }
 
 not_null<Ui::InputField*> CreatePollBox::setupQuestion(
@@ -782,7 +787,7 @@ not_null<Ui::InputField*> CreatePollBox::setupQuestion(
 	using namespace Settings;
 
 	const auto session = &_controller->session();
-	AddSubsectionTitle(container, tr::lng_polls_create_question());
+	Ui::AddSubsectionTitle(container, tr::lng_polls_create_question());
 	const auto question = container->add(
 		object_ptr<Ui::InputField>(
 			container,
@@ -810,9 +815,9 @@ not_null<Ui::InputField*> CreatePollBox::setupQuestion(
 				- st::createPollWarningPosition.x()),
 			(geometry.y()
 				- st::createPollFieldPadding.top()
-				- st::settingsSubsectionTitlePadding.bottom()
-				- st::settingsSubsectionTitle.style.font->height
-				+ st::settingsSubsectionTitle.style.font->ascent
+				- st::defaultSubsectionTitlePadding.bottom()
+				- st::defaultSubsectionTitle.style.font->height
+				+ st::defaultSubsectionTitle.style.font->ascent
 				- st::createPollWarning.style.font->ascent),
 			geometry.width());
 	}, warning->lifetime());
@@ -833,8 +838,8 @@ not_null<Ui::InputField*> CreatePollBox::setupSolution(
 	const auto inner = outer->entity();
 
 	const auto session = &_controller->session();
-	AddSkip(inner);
-	AddSubsectionTitle(inner, tr::lng_polls_solution_title());
+	Ui::AddSkip(inner);
+	Ui::AddSubsectionTitle(inner, tr::lng_polls_solution_title());
 	const auto solution = inner->add(
 		object_ptr<Ui::InputField>(
 			inner,
@@ -847,7 +852,7 @@ not_null<Ui::InputField*> CreatePollBox::setupSolution(
 	solution->setInstantReplaces(Core::App().settings().instantReplacesValue());
 	solution->setMarkdownReplacesEnabled(rpl::single(true));
 	solution->setEditLinkCallback(
-		DefaultEditLinkCallback(_controller, solution));
+		DefaultEditLinkCallback(_controller->uiShow(), solution));
 	solution->customTab(true);
 
 	const auto warning = CreateWarningLabel(
@@ -865,9 +870,9 @@ not_null<Ui::InputField*> CreatePollBox::setupSolution(
 				- st::createPollWarningPosition.x()),
 			(geometry.y()
 				- st::createPollFieldPadding.top()
-				- st::settingsSubsectionTitlePadding.bottom()
-				- st::settingsSubsectionTitle.style.font->height
-				+ st::settingsSubsectionTitle.style.font->ascent
+				- st::defaultSubsectionTitlePadding.bottom()
+				- st::defaultSubsectionTitle.style.font->height
+				+ st::defaultSubsectionTitle.style.font->ascent
 				- st::createPollWarning.style.font->ascent),
 			geometry.width());
 	}, warning->lifetime());
@@ -892,13 +897,13 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 	const auto container = result.data();
 
 	const auto question = setupQuestion(container);
-	AddDivider(container);
-	AddSkip(container);
+	Ui::AddDivider(container);
+	Ui::AddSkip(container);
 	container->add(
 		object_ptr<Ui::FlatLabel>(
 			container,
 			tr::lng_polls_create_options(),
-			st::settingsSubsectionTitle),
+			st::defaultSubsectionTitle),
 		st::createPollFieldTitlePadding);
 	const auto options = lifetime().make_state<Options>(
 		getDelegate()->outerContainer(),
@@ -924,12 +929,13 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 				st::boxDividerLabel),
 			st::createPollLimitPadding));
 
-	connect(question, &Ui::InputField::tabbed, [=] {
+	question->tabbed(
+	) | rpl::start_with_next([=] {
 		options->focusFirst();
-	});
+	}, question->lifetime());
 
-	AddSkip(container);
-	AddSubsectionTitle(container, tr::lng_polls_create_settings());
+	Ui::AddSkip(container);
+	Ui::AddSubsectionTitle(container, tr::lng_polls_create_settings());
 
 	const auto anonymous = (!(_disabled & PollData::Flag::PublicVotes))
 		? container->add(
@@ -972,9 +978,10 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 		}
 	}, question->lifetime());
 
-	connect(solution, &Ui::InputField::tabbed, [=] {
+	solution->tabbed(
+	) | rpl::start_with_next([=] {
 		question->setFocus();
-	});
+	}, solution->lifetime());
 
 	quiz->setDisabled(_disabled & PollData::Flag::Quiz);
 	if (multiple) {
@@ -982,9 +989,10 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 			|| (_chosen & PollData::Flag::Quiz));
 		multiple->events(
 		) | rpl::filter([=](not_null<QEvent*> e) {
-			return (e->type() == QEvent::MouseButtonPress) && quiz->checked();
-		}) | rpl::start_with_next([=] {
-			Ui::Toast::Show(tr::lng_polls_create_one_answer(tr::now));
+			return (e->type() == QEvent::MouseButtonPress)
+				&& quiz->checked();
+		}) | rpl::start_with_next([show = uiShow()] {
+			show->showToast(tr::lng_polls_create_one_answer(tr::now));
 		}, multiple->lifetime());
 	}
 
@@ -1005,12 +1013,12 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 		const auto text = question->getLastText().trimmed();
 		return !text.isEmpty() && (text.size() <= kQuestionLimit);
 	};
-
-	connect(question, &Ui::InputField::submitted, [=] {
+	question->submits(
+	) | rpl::start_with_next([=] {
 		if (isValidQuestion()) {
 			options->focusFirst();
 		}
-	});
+	}, question->lifetime());
 
 	_setInnerFocus = [=] {
 		question->setFocusFast();
@@ -1061,8 +1069,9 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 			*error &= ~Error::Solution;
 		}
 	};
-	const auto showError = [](tr::phrase<> text) {
-		Ui::Toast::Show(text(tr::now));
+	const auto showError = [show = uiShow()](
+			tr::phrase<> text) {
+		show->showToast(text(tr::now));
 	};
 	const auto send = [=](Api::SendOptions sendOptions) {
 		collectError();
@@ -1088,8 +1097,10 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 			HistoryView::PrepareScheduleBox(
 				this,
 				SendMenu::Type::Scheduled,
-				send),
-			Ui::LayerOption::KeepOther);
+				send));
+	};
+	const auto sendWhenOnline = [=] {
+		send(Api::DefaultSendWhenOnlineOptions());
 	};
 
 	options->scrollToWidget(
@@ -1119,7 +1130,8 @@ object_ptr<Ui::RpWidget> CreatePollBox::setupContent() {
 		submit.data(),
 		sendMenuType,
 		sendSilent,
-		sendScheduled);
+		sendScheduled,
+		sendWhenOnline);
 	addButton(tr::lng_cancel(), [=] { closeBox(); });
 
 	return result;

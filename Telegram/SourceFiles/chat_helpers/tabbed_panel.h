@@ -26,6 +26,12 @@ class TabbedSelector;
 
 extern const char kOptionTabbedPanelShowOnClick[];
 
+struct TabbedPanelDescriptor {
+	Window::SessionController *regularWindow = nullptr;
+	object_ptr<TabbedSelector> ownedSelector = { nullptr };
+	TabbedSelector *nonOwnedSelector = nullptr;
+};
+
 class TabbedPanel : public Ui::RpWidget {
 public:
 	TabbedPanel(
@@ -36,15 +42,19 @@ public:
 		QWidget *parent,
 		not_null<Window::SessionController*> controller,
 		object_ptr<TabbedSelector> selector);
+	TabbedPanel(QWidget *parent, TabbedPanelDescriptor &&descriptor);
 
 	[[nodiscard]] bool isSelectorStolen() const;
 	[[nodiscard]] not_null<TabbedSelector*> selector() const;
+	[[nodiscard]] rpl::producer<bool> pauseAnimations() const;
 
 	void moveBottomRight(int bottom, int right);
+	void moveTopRight(int top, int right);
 	void setDesiredHeightValues(
 		float64 ratio,
 		int minHeight,
 		int maxHeight);
+	void setDropDown(bool dropDown);
 
 	void hideFast();
 	bool hiding() const {
@@ -73,14 +83,8 @@ protected:
 	bool eventFilter(QObject *obj, QEvent *e) override;
 
 private:
-	TabbedPanel(
-		QWidget *parent,
-		not_null<Window::SessionController*> controller,
-		object_ptr<TabbedSelector> ownedSelector,
-		TabbedSelector *nonOwnedSelector);
-
 	void hideByTimerOrLeave();
-	void moveByBottom();
+	void moveHorizontally();
 	void showFromSelector();
 
 	style::margins innerPadding() const;
@@ -101,12 +105,14 @@ private:
 	bool preventAutoHide() const;
 	void updateContentHeight();
 
-	const not_null<Window::SessionController*> _controller;
+	Window::SessionController * const _regularWindow = nullptr;
 	const object_ptr<TabbedSelector> _ownedSelector = { nullptr };
 	const not_null<TabbedSelector*> _selector;
+	rpl::event_stream<bool> _pauseAnimations;
 
 	int _contentMaxHeight = 0;
 	int _contentHeight = 0;
+	int _top = 0;
 	int _bottom = 0;
 	int _right = 0;
 	float64 _heightRatio = 1.;
@@ -117,6 +123,7 @@ private:
 	Ui::Animations::Simple _a_show;
 
 	bool _shouldFinishHide = false;
+	bool _dropDown = false;
 
 	bool _hiding = false;
 	bool _hideAfterSlide = false;

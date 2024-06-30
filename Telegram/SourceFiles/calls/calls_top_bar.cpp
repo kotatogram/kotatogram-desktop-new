@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "calls/calls_top_bar.h"
 
-#include "kotato/kotato_settings.h"
 #include "ui/effects/cross_line.h"
 #include "ui/paint/blobs_linear.h"
 #include "ui/widgets/buttons.h"
@@ -18,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/padding_wrap.h"
 #include "ui/text/format_values.h"
 #include "ui/toast/toast.h"
+#include "ui/power_saving.h"
 #include "lang/lang_keys.h"
 #include "core/application.h"
 #include "calls/calls_call.h"
@@ -34,7 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/abstract_box.h"
 #include "base/timer.h"
 #include "styles/style_calls.h"
-#include "styles/style_chat.h" // style::GroupCallUserpics
+#include "styles/style_chat_helpers.h" // style::GroupCallUserpics
 #include "styles/style_layers.h"
 
 namespace Calls {
@@ -148,7 +148,7 @@ DebugInfoBox::DebugInfoBox(QWidget*, base::weak_ptr<Call> call)
 }
 
 void DebugInfoBox::prepare() {
-	setTitle(rpl::single(qsl("Call Debug")));
+	setTitle(rpl::single(u"Call Debug"_q));
 
 	addButton(tr::lng_close(), [this] { closeBox(); });
 	_text = setInnerWidget(
@@ -205,7 +205,7 @@ public:
 protected:
 	bool eventFilter(QObject *object, QEvent *event) {
 		if (event->type() == QEvent::Paint) {
-			Painter p(this);
+			auto p = QPainter(this);
 			paintRipple(
 				p,
 				_st.rippleAreaPosition.x(),
@@ -228,30 +228,33 @@ private:
 
 TopBar::TopBar(
 	QWidget *parent,
-	const base::weak_ptr<Call> &call)
-: TopBar(parent, call, nullptr) {
+	const base::weak_ptr<Call> &call,
+	std::shared_ptr<Ui::Show> show)
+: TopBar(parent, show, call, nullptr) {
 }
 
 TopBar::TopBar(
 	QWidget *parent,
-	const base::weak_ptr<GroupCall> &call)
-: TopBar(parent, nullptr, call) {
+	const base::weak_ptr<GroupCall> &call,
+	std::shared_ptr<Ui::Show> show)
+: TopBar(parent, show, nullptr, call) {
 }
 
 TopBar::TopBar(
 	QWidget *parent,
+	std::shared_ptr<Ui::Show> show,
 	const base::weak_ptr<Call> &call,
 	const base::weak_ptr<GroupCall> &groupCall)
 : RpWidget(parent)
 , _call(call)
 , _groupCall(groupCall)
+, _show(show)
 , _userpics(call
 	? nullptr
 	: std::make_unique<Ui::GroupCallUserpics>(
 		st::groupCallTopBarUserpics,
 		rpl::single(true),
-		[=] { updateUserpics(); },
-		::Kotato::JsonSettings::GetInt("userpic_corner_type")))
+		[=] { updateUserpics(); }))
 , _durationLabel(_call
 	? object_ptr<Ui::LabelSimple>(this, st::callBarLabel)
 	: object_ptr<Ui::LabelSimple>(nullptr))
@@ -264,7 +267,7 @@ TopBar::TopBar(
 	? object_ptr<Ui::LabelSimple>(
 		this,
 		st::callBarLabel,
-		tr::lng_call_bar_hangup(tr::now).toUpper())
+		tr::lng_call_bar_hangup(tr::now))
 	: object_ptr<Ui::LabelSimple>(nullptr))
 , _mute(this, st::callBarMuteToggle)
 , _info(this)
@@ -273,6 +276,14 @@ TopBar::TopBar(
 , _updateDurationTimer([=] { updateDurationText(); }) {
 	initControls();
 	resize(width(), st::callBarHeight);
+	setupInitialBrush();
+}
+
+void TopBar::setupInitialBrush() {
+	Expects(_switchStateCallback != nullptr);
+
+	_switchStateAnimation.stop();
+	_switchStateCallback(1.);
 }
 
 void TopBar::initControls() {
@@ -281,7 +292,8 @@ void TopBar::initControls() {
 			call->setMuted(!call->muted());
 		} else if (const auto group = _groupCall.get()) {
 			if (group->mutedByAdmin()) {
-				Ui::Toast::Show(tr::lng_group_call_force_muted_sub(tr::now));
+				_show->showToast(
+					tr::lng_group_call_force_muted_sub(tr::now));
 			} else {
 				group->setMuted((group->muted() == MuteState::Muted)
 					? MuteState::Active
@@ -312,14 +324,16 @@ void TopBar::initControls() {
 				| MapPushToTalkToActive()
 				| rpl::distinct_until_changed()
 				| rpl::type_erased()),
-			_groupCall->instanceStateValue(),
+			rpl::single(
+				_groupCall->instanceState()
+			) | rpl::then(_groupCall->instanceStateValue() | rpl::filter(
+				_1 != GroupCall::InstanceState::TransitionToRtc)),
 			rpl::single(
 				_groupCall->scheduleDate()
 			) | rpl::then(_groupCall->real(
 			) | rpl::map([](not_null<Data::GroupCall*> call) {
 				return call->scheduleDateValue();
-			}) | rpl::flatten_latest())
-		) | rpl::filter(_2 != GroupCall::InstanceState::TransitionToRtc);
+			}) | rpl::flatten_latest()));
 	std::move(
 		muted
 	) | rpl::map(
@@ -346,7 +360,7 @@ void TopBar::initControls() {
 		const auto crossFrom = (fromMuted != BarState::Active) ? 1. : 0.;
 		const auto crossTo = (toMuted != BarState::Active) ? 1. : 0.;
 
-		auto animationCallback = [=](float64 value) {
+		_switchStateCallback = [=](float64 value) {
 			if (_groupCall) {
 				_groupBrush = QBrush(
 					_gradients.gradient(fromMuted, toMuted, value));
@@ -355,14 +369,14 @@ void TopBar::initControls() {
 
 			const auto crossProgress = (crossFrom == crossTo)
 				? crossTo
-				: anim::interpolateF(crossFrom, crossTo, value);
+				: anim::interpolateToF(crossFrom, crossTo, value);
 			_mute->setProgress(crossProgress);
 		};
 
 		_switchStateAnimation.stop();
 		const auto duration = (to - from) * kSwitchStateDuration;
 		_switchStateAnimation.start(
-			std::move(animationCallback),
+			_switchStateCallback,
 			from,
 			to,
 			duration);
@@ -396,7 +410,9 @@ void TopBar::initControls() {
 		if (const auto call = _call.get()) {
 			if (Logs::DebugEnabled()
 				&& (_info->clickModifiers() & Qt::ControlModifier)) {
-				Ui::show(Box<DebugInfoBox>(_call));
+				_show->showBox(
+					Box<DebugInfoBox>(_call),
+					Ui::LayerOption::CloseOther);
 			} else {
 				Core::App().calls().showInfoPanel(call);
 			}
@@ -411,11 +427,13 @@ void TopBar::initControls() {
 			if (!group->peer()->canManageGroupCall()) {
 				group->hangup();
 			} else {
-				Ui::show(Box(
-					Group::LeaveBox,
-					group,
-					false,
-					Group::BoxContext::MainWindow));
+				_show->showBox(
+					Box(
+						Group::LeaveBox,
+						group,
+						false,
+						Group::BoxContext::MainWindow),
+					Ui::LayerOption::CloseOther);
 			}
 		}
 	});
@@ -478,18 +496,12 @@ void TopBar::initBlobsUnder(
 		}
 	}, lifetime());
 
+	using namespace rpl::mappers;
 	auto hideBlobs = rpl::combine(
-		rpl::single(anim::Disabled()) | rpl::then(anim::Disables()),
+		PowerSaving::OnValue(PowerSaving::kCalls),
 		Core::App().appDeactivatedValue(),
 		group->instanceStateValue()
-	) | rpl::map([](
-			bool animDisabled,
-			bool hide,
-			GroupCall::InstanceState instanceState) {
-		return (instanceState == GroupCall::InstanceState::Disconnected)
-			|| animDisabled
-			|| hide;
-	});
+	) | rpl::map(_1 || _2 || _3 == GroupCall::InstanceState::Disconnected);
 
 	std::move(
 		hideBlobs
@@ -537,7 +549,7 @@ void TopBar::initBlobsUnder(
 			return;
 		}
 
-		Painter p(_blobs);
+		auto p = QPainter(_blobs);
 		if (hidden > 0.) {
 			p.setOpacity(1. - hidden);
 		}
@@ -636,14 +648,14 @@ void TopBar::updateInfoLabels() {
 void TopBar::setInfoLabels() {
 	if (const auto call = _call.get()) {
 		const auto user = call->user();
-		const auto fullName = user->name;
+		const auto fullName = user->name();
 		const auto shortName = user->firstName;
 		_fullInfoLabel->setText(fullName);
 		_shortInfoLabel->setText(shortName);
 	} else if (const auto group = _groupCall.get()) {
 		const auto peer = group->peer();
 		const auto real = peer->groupCall();
-		const auto name = peer->name;
+		const auto name = peer->name();
 		const auto text = _isGroupConnecting.current()
 			? tr::lng_group_call_connecting(tr::now)
 			: (real && real->id() == group->id() && !real->title().isEmpty())
@@ -719,14 +731,14 @@ void TopBar::updateControlsGeometry() {
 		width() - _mute->width() - _hangup->width(),
 		height());
 
-	auto fullWidth = _fullInfoLabel->naturalWidth();
+	auto fullWidth = _fullInfoLabel->textMaxWidth();
 	auto showFull = (left + fullWidth + right <= width());
 	_fullInfoLabel->setVisible(showFull);
 	_shortInfoLabel->setVisible(!showFull);
 
 	auto setInfoLabelGeometry = [this, left, right](auto &&infoLabel) {
 		auto minPadding = qMax(left, right);
-		auto infoWidth = infoLabel->naturalWidth();
+		auto infoWidth = infoLabel->textMaxWidth();
 		auto infoLeft = (width() - infoWidth) / 2;
 		if (infoLeft < minPadding) {
 			infoLeft = left;
@@ -740,10 +752,13 @@ void TopBar::updateControlsGeometry() {
 	_gradients.set_points(
 		QPointF(0, st::callBarHeight / 2),
 		QPointF(width(), st::callBarHeight / 2));
+	if (!_switchStateAnimation.animating()) {
+		_switchStateCallback(1.);
+	}
 }
 
 void TopBar::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 	auto brush = _groupCall
 		? _groupBrush
 		: (_muted ? st::callBarBgMuted : st::callBarBg);

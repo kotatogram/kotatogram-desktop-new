@@ -7,7 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "settings/settings_common.h"
+#include "settings/settings_common_session.h"
 
 namespace Window {
 class Controller;
@@ -21,8 +21,8 @@ class VerticalLayout;
 namespace Settings {
 
 void SetupLanguageButton(
-	not_null<Ui::VerticalLayout*> container,
-	bool icon = true);
+	not_null<Window::Controller*> window,
+	not_null<Ui::VerticalLayout*> container);
 bool HasInterfaceScale();
 void SetupInterfaceScale(
 	not_null<Window::Controller*> window,
@@ -32,11 +32,14 @@ void SetupFaq(
 	not_null<Ui::VerticalLayout*> container,
 	bool icon = true);
 
-class Main : public Section {
+class Main : public Section<Main> {
 public:
 	Main(QWidget *parent, not_null<Window::SessionController*> controller);
 
-	rpl::producer<Type> sectionShowOther() override;
+	[[nodiscard]] rpl::producer<QString> title() override;
+
+	void fillTopBarMenu(
+		const Ui::Menu::MenuCallback &addAction) override;
 
 protected:
 	void keyPressEvent(QKeyEvent *e) override;
@@ -45,7 +48,6 @@ private:
 	void setupContent(not_null<Window::SessionController*> controller);
 
 	const not_null<Window::SessionController*> _controller;
-	rpl::event_stream<Type> _showOther;
 
 };
 

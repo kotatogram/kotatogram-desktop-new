@@ -19,7 +19,11 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
+#include <libavutil/version.h>
 } // extern "C"
+
+#define DA_FFMPEG_NEW_CHANNEL_LAYOUT (LIBAVUTIL_VERSION_MAJOR > 57 \
+	|| (LIBAVUTIL_VERSION_MAJOR == 57 && LIBAVUTIL_VERSION_MINOR >= 28))
 
 class QImage;
 
@@ -125,13 +129,19 @@ struct CodecDeleter {
 	void operator()(AVCodecContext *value);
 };
 using CodecPointer = std::unique_ptr<AVCodecContext, CodecDeleter>;
-[[nodiscard]] CodecPointer MakeCodecPointer(not_null<AVStream*> stream);
+
+struct CodecDescriptor {
+	not_null<AVStream*> stream;
+	bool hwAllowed = false;
+};
+[[nodiscard]] CodecPointer MakeCodecPointer(CodecDescriptor descriptor);
 
 struct FrameDeleter {
 	void operator()(AVFrame *value);
 };
 using FramePointer = std::unique_ptr<AVFrame, FrameDeleter>;
 [[nodiscard]] FramePointer MakeFramePointer();
+[[nodiscard]] FramePointer DuplicateFramePointer(AVFrame *frame);
 [[nodiscard]] bool FrameHasData(AVFrame *frame);
 void ClearFrameMemory(AVFrame *frame);
 
@@ -155,10 +165,10 @@ using SwscalePointer = std::unique_ptr<SwsContext, SwscaleDeleter>;
 	QSize resize,
 	SwscalePointer *existing = nullptr);
 
-void LogError(QLatin1String method);
-void LogError(QLatin1String method, FFmpeg::AvErrorWrap error);
+void LogError(const QString &method);
+void LogError(const QString &method, FFmpeg::AvErrorWrap error);
 
-[[nodiscard]] AVCodec *FindDecoder(not_null<AVCodecContext*> context);
+[[nodiscard]] const AVCodec *FindDecoder(not_null<AVCodecContext*> context);
 [[nodiscard]] crl::time PtsToTime(int64_t pts, AVRational timeBase);
 // Used for full duration conversion.
 [[nodiscard]] crl::time PtsToTimeCeil(int64_t pts, AVRational timeBase);
@@ -175,6 +185,7 @@ void LogError(QLatin1String method, FFmpeg::AvErrorWrap error);
 [[nodiscard]] int ReadRotationFromMetadata(not_null<AVStream*> stream);
 [[nodiscard]] AVRational ValidateAspectRatio(AVRational aspect);
 [[nodiscard]] bool RotationSwapWidthHeight(int rotation);
+[[nodiscard]] QSize TransposeSizeByRotation(QSize size, int rotation);
 [[nodiscard]] QSize CorrectByAspect(QSize size, AVRational aspect);
 
 [[nodiscard]] bool GoodStorageForFrame(const QImage &storage, QSize size);

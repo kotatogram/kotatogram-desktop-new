@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
+#include "data/data_document.h"
+#include "data/stickers/data_stickers.h"
 #include "storage/file_download.h"
 #include "ui/image/image.h"
 
@@ -49,8 +51,11 @@ StickersSetFlags ParseStickersSetFlags(const MTPDstickerSet &data) {
 	return (data.is_archived() ? Flag::Archived : Flag())
 		| (data.is_official() ? Flag::Official : Flag())
 		| (data.is_masks() ? Flag::Masks : Flag())
+		| (data.is_emojis() ? Flag::Emoji : Flag())
 		| (data.vinstalled_date() ? Flag::Installed : Flag())
-		| (data.is_gifs() ? Flag::Webm : Flag());
+		| (data.is_videos() ? Flag::Webm : Flag())
+		| (data.is_text_color() ? Flag::TextColor : Flag())
+		| (data.is_channel_emoji_status() ? Flag::ChannelStatus : Flag());
 }
 
 StickersSet::StickersSet(
@@ -74,6 +79,8 @@ StickersSet::StickersSet(
 , _owner(owner) {
 }
 
+StickersSet::~StickersSet() = default;
+
 Data::Session &StickersSet::owner() const {
 	return *_owner;
 }
@@ -93,6 +100,22 @@ StickerSetIdentifier StickersSet::identifier() const {
 		.id = id,
 		.accessHash = accessHash,
 	};
+}
+
+StickersType StickersSet::type() const {
+	return (flags & StickersSetFlag::Emoji)
+		? StickersType::Emoji
+		: (flags & StickersSetFlag::Masks)
+		? StickersType::Masks
+		: StickersType::Stickers;
+}
+
+bool StickersSet::textColor() const {
+	return flags & StickersSetFlag::TextColor;
+}
+
+bool StickersSet::channelStatus() const {
+	return flags & StickersSetFlag::ChannelStatus;
 }
 
 void StickersSet::setThumbnail(const ImageWithLocation &data) {
@@ -162,6 +185,23 @@ Storage::Cache::Key StickersSet::thumbnailBigFileBaseCacheKey() const {
 
 int StickersSet::thumbnailByteSize() const {
 	return _thumbnail.byteSize;
+}
+
+DocumentData *StickersSet::lookupThumbnailDocument() const {
+	if (thumbnailDocumentId) {
+		const auto i = ranges::find(
+			stickers,
+			thumbnailDocumentId,
+			&DocumentData::id);
+		if (i != stickers.end()) {
+			return *i;
+		}
+	}
+	return !stickers.empty()
+		? stickers.front()
+		: !covers.empty()
+		? covers.front()
+		: nullptr;
 }
 
 std::shared_ptr<StickersSetThumbnailView> StickersSet::createThumbnailView() {

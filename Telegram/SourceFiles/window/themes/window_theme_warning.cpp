@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/shadow.h"
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "ui/cached_round_corners.h"
 #include "window/themes/window_theme.h"
@@ -30,7 +31,10 @@ WarningWidget::WarningWidget(QWidget *parent)
 , _secondsLeft(kWaitBeforeRevertMs / 1000)
 , _keepChanges(this, tr::lng_theme_keep_changes(), st::defaultBoxButton)
 , _revert(this, tr::lng_theme_revert(), st::defaultBoxButton) {
+	using TextTransform = Ui::RoundButton::TextTransform;
+	_keepChanges->setTextTransform(TextTransform::NoTransform);
 	_keepChanges->setClickedCallback([] { KeepApplied(); });
+	_revert->setTextTransform(TextTransform::NoTransform);
 	_revert->setClickedCallback([] { Revert(); });
 	updateText();
 }
