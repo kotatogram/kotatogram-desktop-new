@@ -504,12 +504,6 @@ int main(int argc, char *argv[]) {
 			push("-workdir");
 			push(workdir);
 		}
-
-		auto args = vector<char*>();
-		for (auto &arg : values) {
-			args.push_back(arg.data());
-		}
-		args.push_back(nullptr);
 	
 		if (!useEnvApi) push("-no-env-api");
 		if (customApiId && customApiHash) {
