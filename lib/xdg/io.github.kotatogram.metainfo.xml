@@ -13,11 +13,11 @@
         <category>Network</category>
         <category>InstantMessaging</category>
     </categories>
-    <update_contact></update_contact>
     <developer_name>Eric Kotato</developer_name>
     <url type="homepage">https://kotatogram.github.io/</url>
     <url type="bugtracker">https://github.com/kotatogram/kotatogram-desktop/issues</url>
-    <url type="help">https://github.com/kotatogram/kotatogram-desktop/issues</url>
+    <url type="translate">https://crowdin.com/project/kotatogram-desktop</url>
+    <url type="contribute">https://github.com/kotatogram/kotatogram-desktop/blob/dev/.github/CONTRIBUTING.md</url>
     <screenshots>
       <screenshot type="default">
         <image>https://raw.githubusercontent.com/kotatogram/kotatogram-desktop/dev/docs/assets/ktg_preview.png</image>
