@@ -52,11 +52,8 @@ body:
       label: Installation source
       multiple: false
       options:
-        - Static binary from official website
-        - Microsoft Store
-        - Mac App Store
+        - Static binary from official website or Kotatogram channel
         - Flatpak
-        - Snap
         - Other (unofficial) source
     validations:
       required: true
