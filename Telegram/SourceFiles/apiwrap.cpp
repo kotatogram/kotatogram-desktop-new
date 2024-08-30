@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_authorizations.h"
 #include "api/api_attached_stickers.h"
 #include "api/api_blocked_peers.h"
+#include "api/api_chat_links.h"
 #include "api/api_chat_participants.h"
 #include "api/api_cloud_password.h"
 #include "api/api_hash.h"
@@ -35,6 +36,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_user_names.h"
 #include "api/api_websites.h"
 #include "data/business/data_shortcut_messages.h"
+#include "data/components/scheduled_messages.h"
 #include "data/notify/data_notify_settings.h"
 #include "data/data_changes.h"
 #include "data/data_poll.h"
@@ -44,13 +46,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_forum.h"
 #include "data/data_saved_sublist.h"
 #include "data/data_search_controller.h"
-#include "data/data_scheduled_messages.h"
 #include "data/data_session.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_user.h"
 #include "data/data_chat_filters.h"
 #include "data/data_histories.h"
+#include "data/data_history_messages.h"
 #include "core/core_cloud_password.h"
 #include "core/application.h"
 #include "base/unixtime.h"
@@ -165,6 +167,7 @@ ApiWrap::ApiWrap(not_null<Main::Session*> session)
 , _globalPrivacy(std::make_unique<Api::GlobalPrivacy>(this))
 , _userPrivacy(std::make_unique<Api::UserPrivacy>(this))
 , _inviteLinks(std::make_unique<Api::InviteLinks>(this))
+, _chatLinks(std::make_unique<Api::ChatLinks>(this))
 , _views(std::make_unique<Api::ViewsManager>(this))
 , _confirmPhone(std::make_unique<Api::ConfirmPhone>(this))
 , _peerPhoto(std::make_unique<Api::PeerPhoto>(this))
@@ -542,7 +545,7 @@ void ApiWrap::sendMessageFail(
 			}
 		}
 	} else if (error == u"SCHEDULE_STATUS_PRIVATE"_q) {
-		auto &scheduled = _session->data().scheduledMessages();
+		auto &scheduled = _session->scheduledMessages();
 		Assert(peer->isUser());
 		if (const auto item = scheduled.lookupItem(peer->id, itemId.msg)) {
 			scheduled.removeSending(item);
@@ -796,7 +799,7 @@ QString ApiWrap::exportDirectStoryLink(not_null<Data::Story*> story) {
 	const auto storyId = story->fullId();
 	const auto peer = story->peer();
 	const auto fallback = [&] {
-		const auto base = peer->userName();
+		const auto base = peer->username();
 		const auto story = QString::number(storyId.story);
 		const auto query = base + "/s/" + story;
 		return session().createInternalLinkFull(query);
@@ -1231,7 +1234,7 @@ void ApiWrap::requestPeerSettings(not_null<PeerData*> peer) {
 		result.match([&](const MTPDmessages_peerSettings &data) {
 			_session->data().processUsers(data.vusers());
 			_session->data().processChats(data.vchats());
-			peer->setSettings(data.vsettings());
+			peer->setBarSettings(data.vsettings());
 			_requestedPeerSettings.erase(peer);
 		});
 	}).fail([=] {
@@ -1544,8 +1547,8 @@ void ApiWrap::saveStickerSets(
 				writeRecent = true;
 			}
 
-			const auto isAttached =
-				(removedSetId == Data::Stickers::CloudRecentAttachedSetId);
+			const auto isAttached
+				= (removedSetId == Data::Stickers::CloudRecentAttachedSetId);
 			const auto flags = isAttached
 				? MTPmessages_ClearRecentStickers::Flag::f_attached
 				: MTPmessages_ClearRecentStickers::Flags(0);
@@ -1748,7 +1751,7 @@ void ApiWrap::joinChannel(not_null<ChannelData*> channel) {
 					}
 					return QString();
 				}();
-				if (!text.isEmpty()) {
+				if (show && !text.isEmpty()) {
 					show->showToast(text, kJoinErrorDuration);
 				}
 			}
@@ -2447,8 +2450,8 @@ void ApiWrap::refreshFileReference(
 					_session->data().peer(storyId.peer)->input,
 					MTP_vector<MTPint>(1, MTP_int(storyId.story))));
 			} else if (item->isScheduled()) {
-				const auto &scheduled = _session->data().scheduledMessages();
-				const auto realId = scheduled.lookupId(item);
+				const auto realId = _session->scheduledMessages().lookupId(
+					item);
 				request(MTPmessages_GetScheduledMessages(
 					item->history()->peer->input,
 					MTP_vector<MTPint>(1, MTP_int(realId))));
@@ -2494,8 +2497,8 @@ void ApiWrap::refreshFileReference(
 	}, [&](Data::FileOriginPeerPhoto data) {
 		fail();
 	}, [&](Data::FileOriginStickerSet data) {
-		const auto isRecentAttached =
-			(data.setId == Data::Stickers::CloudRecentAttachedSetId);
+		const auto isRecentAttached
+			= (data.setId == Data::Stickers::CloudRecentAttachedSetId);
 		if (data.setId == Data::Stickers::CloudRecentSetId
 			|| data.setId == Data::Stickers::RecentSetId
 			|| isRecentAttached) {
@@ -3076,6 +3079,46 @@ void ApiWrap::resolveJumpToHistoryDate(
 	} else {
 		jumpToDateInPeer();
 	}
+}
+
+void ApiWrap::requestHistory(
+		not_null<History*> history,
+		MsgId messageId,
+		SliceType slice) {
+	const auto peer = history->peer;
+	const auto key = HistoryRequest{
+		peer,
+		messageId,
+		slice,
+	};
+	if (_historyRequests.contains(key)) {
+		return;
+	}
+
+	const auto prepared = Api::PrepareHistoryRequest(peer, messageId, slice);
+	auto &histories = history->owner().histories();
+	const auto requestType = Data::Histories::RequestType::History;
+	histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
+		return request(
+			std::move(prepared)
+		).done([=](const Api::HistoryRequestResult &result) {
+			_historyRequests.remove(key);
+			auto parsed = Api::ParseHistoryResult(
+				peer,
+				messageId,
+				slice,
+				result);
+			history->messages().addSlice(
+				std::move(parsed.messageIds),
+				parsed.noSkipRange,
+				parsed.fullCount);
+			finish();
+		}).fail([=] {
+			_historyRequests.remove(key);
+			finish();
+		}).send();
+	});
+	_historyRequests.emplace(key);
 }
 
 void ApiWrap::requestSharedMedia(
@@ -4119,11 +4162,16 @@ void ApiWrap::cancelLocalItem(not_null<HistoryItem*> item) {
 void ApiWrap::sendShortcutMessages(
 		not_null<PeerData*> peer,
 		BusinessShortcutId id) {
+	auto ids = QVector<MTPint>();
+	auto randomIds = QVector<MTPlong>();
 	request(MTPmessages_SendQuickReplyMessages(
 		peer->input,
-		MTP_int(id)
+		MTP_int(id),
+		MTP_vector<MTPint>(ids),
+		MTP_vector<MTPlong>(randomIds)
 	)).done([=](const MTPUpdates &result) {
 		applyUpdates(result);
+	}).fail([=](const MTP::Error &error) {
 	}).send();
 }
 
@@ -4365,13 +4413,14 @@ void ApiWrap::sendMessage(
 }
 
 void ApiWrap::sendBotStart(
+		std::shared_ptr<Ui::Show> show,
 		not_null<UserData*> bot,
 		PeerData *chat,
 		const QString &startTokenForChat) {
 	Expects(bot->isBot());
 
 	if (chat && chat->isChannel() && !chat->isMegagroup()) {
-		ShowAddParticipantsError("USER_BOT", chat, { 1, bot });
+		ShowAddParticipantsError(show, "USER_BOT", chat, bot);
 		return;
 	}
 
@@ -4403,7 +4452,7 @@ void ApiWrap::sendBotStart(
 	}).fail([=](const MTP::Error &error) {
 		if (chat) {
 			const auto type = error.type();
-			ShowAddParticipantsError(type, chat, { 1, bot });
+			ShowAddParticipantsError(show, type, chat, bot);
 		}
 	}).send();
 }
@@ -4519,6 +4568,8 @@ void ApiWrap::uploadAlbumMedia(
 
 	};
 	request(MTPmessages_UploadMedia(
+		MTP_flags(0),
+		MTPstring(), // business_connection_id
 		item->history()->peer->input,
 		media
 	)).done([=](const MTPMessageMedia &result) {
@@ -4932,6 +4983,10 @@ Api::UserPrivacy &ApiWrap::userPrivacy() {
 
 Api::InviteLinks &ApiWrap::inviteLinks() {
 	return *_inviteLinks;
+}
+
+Api::ChatLinks &ApiWrap::chatLinks() {
+	return *_chatLinks;
 }
 
 Api::ViewsManager &ApiWrap::views() {

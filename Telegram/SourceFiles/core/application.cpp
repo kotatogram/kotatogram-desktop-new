@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 
 #include "kotato/kotato_lang.h"
+#include "kotato/kotato_settings.h"
 #include "data/data_abstract_structure.h"
 #include "data/data_photo.h"
 #include "data/data_document.h"
@@ -45,6 +46,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_updates.h"
 #include "calls/calls_instance.h"
 #include "countries/countries_manager.h"
+#include "iv/iv_delegate_impl.h"
 #include "iv/iv_instance.h"
 #include "lang/lang_file_parser.h"
 #include "lang/lang_translator.h"
@@ -165,7 +167,8 @@ Application::Application()
 , _domain(std::make_unique<Main::Domain>(cDataFile()))
 , _exportManager(std::make_unique<Export::Manager>())
 , _calls(std::make_unique<Calls::Instance>())
-, _iv(std::make_unique<Iv::Instance>())
+, _iv(std::make_unique<Iv::Instance>(
+	Ui::CreateChild<Iv::DelegateImpl>(this)))
 , _langpack(std::make_unique<Lang::Instance>())
 , _langCloudManager(std::make_unique<Lang::CloudManager>(langpack()))
 , _emojiKeywords(std::make_unique<ChatHelpers::EmojiKeywords>())
@@ -241,23 +244,26 @@ Application::~Application() {
 	_mediaControlsManager = nullptr;
 
 	Media::Player::finish(_audio.get());
-	style::stopManager();
-
-	ThirdParty::finish();
+	style::StopManager();
 
 	Instance = nullptr;
 }
 
 void Application::run() {
-	style::internal::StartFonts();
-
-	ThirdParty::start();
-
 	// Depends on OpenSSL on macOS, so on ThirdParty::start().
 	// Depends on notifications settings.
 	_notifications = std::make_unique<Window::Notifications::System>();
 
 	startLocalStorage();
+
+	style::SetCustomFont(settings().customFontFamily());
+	style::SetCustomFontSettings({
+		::Kotato::JsonSettings::GetString("fonts/monospaced"),
+		::Kotato::JsonSettings::GetInt("fonts/size"),
+		::Kotato::JsonSettings::GetBool("fonts/semibold_is_bold"),
+	});
+	style::internal::StartFonts();
+
 	ValidateScale();
 	Kotato::Lang::Load(Lang::GetInstance().baseId(), Lang::GetInstance().id());
 
@@ -281,7 +287,7 @@ void Application::run() {
 	_translator = std::make_unique<Lang::Translator>();
 	QCoreApplication::instance()->installTranslator(_translator.get());
 
-	style::startManager(cScale());
+	style::StartManager(cScale());
 	Ui::InitTextOptions();
 	Ui::StartCachedCorners();
 	Ui::Emoji::Init();
@@ -388,7 +394,7 @@ void Application::run() {
 	}
 
 	SetCrashAnnotationsGL();
-	if (!Platform::IsMac() && Ui::GL::LastCrashCheckFailed()) {
+	if (Ui::GL::LastCrashCheckFailed()) {
 		showOpenGLCrashNotification();
 	}
 
@@ -432,14 +438,12 @@ void Application::checkWindowAccount(not_null<Window::Controller*> window) {
 
 void Application::showOpenGLCrashNotification() {
 	const auto enable = [=] {
-		Ui::GL::ForceDisable(false);
 		Ui::GL::CrashCheckFinish();
 		settings().setDisableOpenGL(false);
 		Local::writeSettings();
 		Restart();
 	};
 	const auto keepDisabled = [=](Fn<void()> close) {
-		Ui::GL::ForceDisable(true);
 		Ui::GL::CrashCheckFinish();
 		settings().setDisableOpenGL(true);
 		Local::writeSettings();
@@ -797,6 +801,7 @@ void Application::badMtprotoConfigurationError() {
 }
 
 void Application::startLocalStorage() {
+	Ui::GL::DetectLastCheckCrash();
 	Local::start();
 	_saveSettingsTimer.emplace([=] { saveSettings(); });
 	settings().saveDelayedRequests() | rpl::start_with_next([=] {
@@ -936,8 +941,8 @@ void Application::handleAppDeactivated() {
 }
 
 rpl::producer<bool> Application::appDeactivatedValue() const {
-	const auto &app =
-		static_cast<QGuiApplication*>(QCoreApplication::instance());
+	const auto &app
+		= static_cast<QGuiApplication*>(QCoreApplication::instance());
 	return rpl::single(
 		app->applicationState()
 	) | rpl::then(
@@ -1373,6 +1378,25 @@ Window::Controller *Application::windowFor(
 	return activePrimaryWindow();
 }
 
+Window::Controller *Application::findWindow(
+		not_null<QWidget*> widget) const {
+	const auto window = widget->window();
+	if (_lastActiveWindow && _lastActiveWindow->widget() == window) {
+		return _lastActiveWindow;
+	}
+	for (const auto &[account, primary] : _primaryWindows) {
+		if (primary->widget() == window) {
+			return primary.get();
+		}
+	}
+	for (const auto &[history, secondary] : _secondaryWindows) {
+		if (secondary->widget() == window) {
+			return secondary.get();
+		}
+	}
+	return nullptr;
+}
+
 Window::Controller *Application::activeWindow() const {
 	return _lastActiveWindow;
 }
@@ -1509,14 +1533,14 @@ void Application::closeChatFromWindows(not_null<PeerData*> peer) {
 		}
 	}
 	if (const auto window = windowFor(&peer->account())) {
-		const auto primary = window->sessionController();
-		if ((primary->activeChatCurrent().peer() == peer)
-			&& (&primary->session() == &peer->session())) {
-			primary->clearSectionStack();
-		}
-		if (const auto forum = primary->shownForum().current()) {
-			if (peer->forum() == forum) {
-				primary->closeForum();
+		if (const auto primary = window->sessionController()) {
+			if (primary->activeChatCurrent().peer() == peer) {
+				primary->clearSectionStack();
+			}
+			if (const auto forum = primary->shownForum().current()) {
+				if (peer->forum() == forum) {
+					primary->closeForum();
+				}
 			}
 		}
 	}

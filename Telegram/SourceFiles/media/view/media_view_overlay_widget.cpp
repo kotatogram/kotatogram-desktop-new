@@ -444,9 +444,9 @@ OverlayWidget::OverlayWidget()
 	});
 
 	_docRectImage = QImage(
-		st::mediaviewFileSize * cIntRetinaFactor(),
+		st::mediaviewFileSize * style::DevicePixelRatio(),
 		QImage::Format_ARGB32_Premultiplied);
-	_docRectImage.setDevicePixelRatio(cIntRetinaFactor());
+	_docRectImage.setDevicePixelRatio(style::DevicePixelRatio());
 
 	Shortcuts::Requests(
 	) | rpl::start_with_next([=](not_null<Shortcuts::Request*> request) {
@@ -482,6 +482,10 @@ OverlayWidget::OverlayWidget()
 				moveToScreen(true);
 			}
 		} else if (type == QEvent::Resize) {
+			const auto size = static_cast<QResizeEvent*>(e.get())->size();
+			DEBUG_LOG(("Viewer Pos: Resized to %1, %2")
+				.arg(size.width())
+				.arg(size.height()));
 			if (_windowed) {
 				savePosition();
 			}
@@ -509,9 +513,6 @@ OverlayWidget::OverlayWidget()
 		const auto type = e->type();
 		if (type == QEvent::Resize) {
 			const auto size = static_cast<QResizeEvent*>(e.get())->size();
-			DEBUG_LOG(("Viewer Pos: Resized to %1, %2")
-				.arg(size.width())
-				.arg(size.height()));
 
 			// Somehow Windows 11 knows the geometry of first widget below
 			// the semi-native title control widgets and it uses
@@ -794,11 +795,9 @@ void OverlayWidget::moveToScreen(bool inMove) {
 		if (!widget) {
 			return nullptr;
 		}
-		if (!Platform::IsWayland()) {
-			if (const auto screen = QGuiApplication::screenAt(
+		if (const auto screen = QGuiApplication::screenAt(
 				widget->geometry().center())) {
-				return screen;
-			}
+			return screen;
 		}
 		return widget->screen();
 	};
@@ -910,7 +909,12 @@ void OverlayWidget::updateGeometry(bool inMove) {
 	if (_fullscreen && (!Platform::IsWindows11OrGreater() || !isHidden())) {
 		updateGeometryToScreen(inMove);
 	} else if (_windowed && _normalGeometryInited) {
-		_window->setGeometry(_normalGeometry);
+		DEBUG_LOG(("Viewer Pos: Setting %1, %2, %3, %4")
+			.arg(_normalGeometry.x())
+			.arg(_normalGeometry.y())
+			.arg(_normalGeometry.width())
+			.arg(_normalGeometry.height()));
+		_window->RpWidget::setGeometry(_normalGeometry);
 	}
 	if constexpr (!Platform::IsMac()) {
 		if (_fullscreen) {
@@ -1124,7 +1128,7 @@ void OverlayWidget::setStaticContent(QImage image) {
 		&& image.format() != QImage::Format_RGB32) {
 		image = std::move(image).convertToFormat(kGood);
 	}
-	image.setDevicePixelRatio(cRetinaFactor());
+	image.setDevicePixelRatio(style::DevicePixelRatio());
 	_staticContent = std::move(image);
 	_staticContentTransparent = IsSemitransparent(_staticContent);
 }
@@ -1495,17 +1499,17 @@ void OverlayWidget::fillContextMenuActions(const MenuCallback &addAction) {
 			&st::mediaMenuIconShowInChat);
 	}
 	if (story && story->peer()->isSelf()) {
-		const auto pinned = story->pinned();
-		const auto text = pinned
+		const auto inProfile = story->inProfile();
+		const auto text = inProfile
 			? tr::lng_mediaview_archive_story(tr::now)
 			: tr::lng_mediaview_save_to_profile(tr::now);
 		addAction(text, [=] {
 			if (_stories) {
-				_stories->togglePinnedRequested(!pinned);
+				_stories->toggleInProfileRequested(!inProfile);
 			}
-		}, pinned
+		}, (inProfile
 			? &st::mediaMenuIconArchiveStory
-			: &st::mediaMenuIconSaveStory);
+			: &st::mediaMenuIconSaveStory));
 	}
 	if ((!story || story->canDownloadChecked())
 		&& _document
@@ -4496,7 +4500,7 @@ void OverlayWidget::validatePhotoImage(Image *image, bool blurred) {
 		return;
 	}
 	const auto use = flipSizeByRotation({ _width, _height })
-		* cIntRetinaFactor();
+		* style::DevicePixelRatio();
 	setStaticContent(image->pixNoCache(
 		use,
 		{ .options = (blurred ? Images::Option::Blur : Images::Option()) }
@@ -4833,7 +4837,7 @@ void OverlayWidget::paintDocumentBubbleContent(
 				}
 			}
 		} else if (const auto thumbnail = _documentMedia->thumbnail()) {
-			int32 rf(cIntRetinaFactor());
+			int32 rf(style::DevicePixelRatio());
 			p.drawPixmap(icon.topLeft(), thumbnail->pix(_docThumbw), QRect(_docThumbx * rf, _docThumby * rf, st::mediaviewFileIconSize * rf, st::mediaviewFileIconSize * rf));
 		}
 	}

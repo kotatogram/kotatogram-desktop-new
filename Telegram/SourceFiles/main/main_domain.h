@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/timer.h"
+#include "base/weak_ptr.h"
 #include "base/build_config.h"
 
 namespace Storage {
@@ -24,7 +25,7 @@ namespace Main {
 class Account;
 class Session;
 
-class Domain final {
+class Domain final : public base::has_weak_ptr {
 public:
 	struct AccountWithIndex {
 		int index = 0;

@@ -10,8 +10,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/invoke_queued.h"
 #include "base/object_ptr.h"
 #include "base/unique_qptr.h"
+#include "iv/iv_delegate.h"
 #include "ui/effects/animations.h"
 #include "ui/text/text.h"
+#include "webview/webview_common.h"
 
 class Painter;
 
@@ -46,7 +48,9 @@ struct ShareBoxDescriptor {
 
 class Controller final {
 public:
-	explicit Controller(Fn<ShareBoxResult(ShareBoxDescriptor)> showShareBox);
+	Controller(
+		not_null<Delegate*> delegate,
+		Fn<ShareBoxResult(ShareBoxDescriptor)> showShareBox);
 	~Controller();
 
 	struct Event {
@@ -59,6 +63,7 @@ public:
 			OpenLink,
 			OpenLinkExternal,
 			OpenMedia,
+			Report,
 		};
 		Type type = Type::Close;
 		QString url;
@@ -66,7 +71,7 @@ public:
 	};
 
 	void show(
-		const QString &dataPath,
+		const Webview::StorageId &storageId,
 		Prepared page,
 		base::flat_map<QByteArray, rpl::producer<bool>> inChannelValues);
 	void update(Prepared page);
@@ -87,11 +92,11 @@ public:
 
 private:
 	void createWindow();
-	void createWebview(const QString &dataPath);
+	void createWebview(const Webview::StorageId &storageId);
 	[[nodiscard]] QByteArray navigateScript(int index, const QString &hash);
 	[[nodiscard]] QByteArray reloadScript(int index);
 
-	void showInWindow(const QString &dataPath, Prepared page);
+	void showInWindow(const Webview::StorageId &storageId, Prepared page);
 	[[nodiscard]] QByteArray fillInChannelValuesScript(
 		base::flat_map<QByteArray, rpl::producer<bool>> inChannelValues);
 	[[nodiscard]] QByteArray toggleInChannelScript(
@@ -112,8 +117,11 @@ private:
 	void quit();
 
 	[[nodiscard]] QString composeCurrentUrl() const;
+	[[nodiscard]] uint64 compuseCurrentPageId() const;
 	void showShareMenu();
 	void destroyShareMenu();
+
+	const not_null<Delegate*> _delegate;
 
 	std::unique_ptr<Ui::RpWindow> _window;
 	std::unique_ptr<Ui::RpWidget> _subtitleWrap;
@@ -142,6 +150,7 @@ private:
 	std::unique_ptr<QWidget> _shareContainer;
 	Fn<void()> _shareFocus;
 	Fn<void()> _shareHide;
+	bool _shareHidesContent = false;
 
 	std::vector<Prepared> _pages;
 	base::flat_map<QString, int> _indices;

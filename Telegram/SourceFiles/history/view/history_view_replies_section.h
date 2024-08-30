@@ -71,7 +71,7 @@ class TranslateBar;
 
 class RepliesWidget final
 	: public Window::SectionWidget
-	, private ListDelegate
+	, private WindowListDelegate
 	, private CornerButtonsDelegate {
 public:
 	RepliesWidget(
@@ -248,7 +248,8 @@ private:
 	void edit(
 		not_null<HistoryItem*> item,
 		Api::SendOptions options,
-		mtpRequestId *const saveEditMsgRequestId);
+		mtpRequestId *const saveEditMsgRequestId,
+		std::optional<bool> spoilerMediaOverride);
 	void chooseAttach(std::optional<bool> overrideSendImagesAsPhotos);
 	[[nodiscard]] SendMenu::Type sendMenuType() const;
 	[[nodiscard]] FullReplyTo replyTo() const;

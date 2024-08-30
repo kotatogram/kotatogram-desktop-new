@@ -357,6 +357,7 @@ CurrencyRule LookupCurrencyRule(const QString &currency) {
 
 		char do_decimal_point() const override { return decimal; }
 		char do_thousands_sep() const override { return thousands; }
+		std::string do_grouping() const override { return "\3"; }
 
 		char decimal = '.';
 		char thousands = ',';
@@ -381,13 +382,14 @@ QString FormatImageSizeText(const QSize &size) {
 		+ QString::number(size.height());
 }
 
-QString FormatPhone(const QString &phone) {
+QString FormatPhone(QString phone) {
 	if (phone.isEmpty()) {
 		return QString();
 	}
 	if (phone.at(0) == '0') {
 		return phone;
 	}
+	phone = phone.remove(QChar::Space);
 	return Countries::Instance().format({
 		.phone = (phone.at(0) == '+') ? phone.mid(1) : phone,
 	}).formatted;
@@ -480,6 +482,24 @@ QString FormatMuteForTiny(float64 sec) {
 
 QString FormatResetCloudPasswordIn(float64 sec) {
 	return (sec >= 3600) ? FormatTTL(sec) : FormatDurationText(sec);
+}
+
+QString FormatDialogsDate(const QDateTime &lastTime) {
+	// Show all dates that are in the last 20 hours in time format.
+	constexpr int kRecentlyInSeconds = 20 * 3600;
+
+	const auto now = QDateTime::currentDateTime();
+	const auto nowDate = now.date();
+	const auto lastDate = lastTime.date();
+
+	if ((lastDate == nowDate)
+		|| (std::abs(lastTime.secsTo(now)) < kRecentlyInSeconds)) {
+		return QLocale().toString(lastTime.time(), QLocale::ShortFormat);
+	} else if (std::abs(lastDate.daysTo(nowDate)) < 7) {
+		return langDayOfWeek(lastDate);
+	} else {
+		return QLocale().toString(lastDate, QLocale::ShortFormat);
+	}
 }
 
 } // namespace Ui

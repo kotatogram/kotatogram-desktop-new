@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "kotato/kotato_settings.h"
 #include "styles/style_chat.h"
 
+#include <QtCore/QtMath>
+
 namespace Stickers {
 
 EmojiImageLoader::EmojiImageLoader(crl::weak_on_queue<EmojiImageLoader> weak)
@@ -29,7 +31,7 @@ void EmojiImageLoader::init(
 
 QImage EmojiImageLoader::prepare(EmojiPtr emoji) const {
 	const auto loaded = _images->ensureLoaded();
-	const auto factor = cIntRetinaFactor();
+	const auto factor = style::DevicePixelRatio();
 	const auto side = st::largeEmojiSize + 2 * st::largeEmojiOutline;
 	auto tinted = QImage(
 		QSize(st::largeEmojiSize, st::largeEmojiSize) * factor,

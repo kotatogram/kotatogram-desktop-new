@@ -384,9 +384,9 @@ Main::Session &EditFilterChatsListController::session() const {
 }
 
 int EditFilterChatsListController::selectedTypesCount() const {
-	Expects(_chatlist || _typesDelegate != nullptr);
+	Expects(_chatlist || !_options || _typesDelegate != nullptr);
 
-	if (_chatlist) {
+	if (_chatlist || !_options) {
 		return 0;
 	}
 	auto result = 0;
@@ -429,7 +429,7 @@ bool EditFilterChatsListController::handleDeselectForeignRow(
 
 void EditFilterChatsListController::prepareViewHook() {
 	delegate()->peerListSetTitle(std::move(_title));
-	if (!_chatlist) {
+	if (!_chatlist && _options) {
 		delegate()->peerListSetAboveWidget(prepareTypesList());
 	}
 
@@ -512,7 +512,8 @@ object_ptr<Ui::RpWidget> EditFilterChatsListController::prepareTypesList() {
 
 auto EditFilterChatsListController::createRow(not_null<History*> history)
 -> std::unique_ptr<Row> {
-	const auto business = _options & (Flag::NewChats | Flag::ExistingChats);
+	const auto business = (_options & (Flag::NewChats | Flag::ExistingChats))
+		|| (!_options && !_chatlist);
 	if (business && (history->peer->isSelf() || !history->peer->isUser())) {
 		return nullptr;
 	}

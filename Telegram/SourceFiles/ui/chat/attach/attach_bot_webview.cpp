@@ -313,18 +313,18 @@ Panel::Progress::Progress(QWidget *parent, Fn<QRect()> rect)
 }
 
 Panel::Panel(
-	const QString &userDataPath,
+	const Webview::StorageId &storageId,
 	rpl::producer<QString> title,
 	not_null<Delegate*> delegate,
 	MenuButtons menuButtons,
 	bool allowClipboardRead)
-: _userDataPath(userDataPath)
+: _storageId(storageId)
 , _delegate(delegate)
 , _menuButtons(menuButtons)
 , _widget(std::make_unique<SeparatePanel>())
 , _allowClipboardRead(allowClipboardRead) {
-	_widget->setInnerSize(st::botWebViewPanelSize);
 	_widget->setWindowFlag(Qt::WindowStaysOnTopHint, false);
+	_widget->setInnerSize(st::botWebViewPanelSize);
 
 	_widget->closeRequests(
 	) | rpl::start_with_next([=] {
@@ -505,7 +505,7 @@ bool Panel::showWebview(
 	_webview->window.navigate(url);
 	_widget->setBackAllowed(allowBack);
 	_widget->setMenuAllowed([=](const Ui::Menu::MenuCallback &callback) {
-		if (_hasSettingsButton) {
+		if (_webview && _webview->window.widget() && _hasSettingsButton) {
 			callback(tr::lng_bot_settings(tr::now), [=] {
 				postEvent("settings_button_pressed");
 			}, &st::menuIconSettings);
@@ -525,6 +525,9 @@ bool Panel::showWebview(
 				_webview->window.navigate(url);
 			}
 		}, &st::menuIconRestore);
+		callback(tr::lng_bot_terms(tr::now), [=] {
+			File::OpenUrl(tr::lng_mini_apps_tos_url(tr::now));
+		}, &st::menuIconGroupLog);
 		const auto main = (_menuButtons & MenuButton::RemoveFromMainMenu);
 		if (main || (_menuButtons & MenuButton::RemoveFromMenu)) {
 			const auto handler = [=] {
@@ -567,17 +570,15 @@ void Panel::createWebviewBottom() {
 	label->show();
 	_webviewBottom->resize(_webviewBottom->width(), height);
 
-	bottom->heightValue(
-	) | rpl::start_with_next([=](int height) {
-		const auto inner = _widget->innerGeometry();
-		if (_mainButton && !_mainButton->isHidden()) {
-			height = _mainButton->height();
-		}
+	rpl::combine(
+		_webviewParent->geometryValue() | rpl::map([=] {
+			return _widget->innerGeometry();
+		}),
+		bottom->heightValue()
+	) | rpl::start_with_next([=](QRect inner, int height) {
 		bottom->move(inner.x(), inner.y() + inner.height() - height);
-		if (const auto container = _webviewParent.data()) {
-			container->setFixedSize(inner.width(), inner.height() - height);
-		}
 		bottom->resizeToWidth(inner.width());
+		updateFooterHeight();
 	}, bottom->lifetime());
 }
 
@@ -594,7 +595,7 @@ bool Panel::createWebview(const Webview::ThemeParams &params) {
 		container,
 		Webview::WindowConfig{
 			.opaqueBg = params.opaqueBg,
-			.userDataPath = _userDataPath,
+			.storageId = _storageId,
 		});
 	const auto raw = &_webview->window;
 
@@ -633,10 +634,13 @@ bool Panel::createWebview(const Webview::ThemeParams &params) {
 		});
 	});
 
-	container->geometryValue(
-	) | rpl::start_with_next([=](QRect geometry) {
-		if (raw->widget()) {
-			raw->widget()->setGeometry(geometry);
+	updateFooterHeight();
+	rpl::combine(
+		container->geometryValue(),
+		_footerHeight.value()
+	) | rpl::start_with_next([=](QRect geometry, int footer) {
+		if (const auto view = raw->widget()) {
+			view->setGeometry(geometry.marginsRemoved({ 0, 0, 0, footer }));
 		}
 	}, _webview->lifetime);
 
@@ -797,17 +801,20 @@ void Panel::openExternalLink(const QJsonObject &args) {
 		_delegate->botClose();
 		return;
 	}
+	const auto iv = args["try_instant_view"].toBool();
 	const auto url = args["url"].toString();
 	const auto lower = url.toLower();
-	if (url.isEmpty()
-		|| (!lower.startsWith("http://") && !lower.startsWith("https://"))) {
-		LOG(("BotWebView Error: Bad 'url' in openExternalLink."));
+	if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+		LOG(("BotWebView Error: Bad url in openExternalLink: %1").arg(url));
 		_delegate->botClose();
 		return;
 	} else if (!allowOpenLink()) {
 		return;
+	} else if (iv) {
+		_delegate->botOpenIvLink(url);
+	} else {
+		File::OpenUrl(url);
 	}
-	File::OpenUrl(url);
 }
 
 void Panel::openInvoice(const QJsonObject &args) {
@@ -1073,7 +1080,7 @@ void Panel::closeWithConfirmation() {
 	});
 	if (!weak) {
 		return;
-	} else if (result.id != "cancel") {
+	} else if (result.id == "close") {
 		_delegate->botClose();
 	} else {
 		_closeWithConfirmationScheduled = false;
@@ -1179,20 +1186,23 @@ void Panel::createMainButton() {
 	button->hide();
 
 	rpl::combine(
+		_webviewParent->geometryValue() | rpl::map([=] {
+			return _widget->innerGeometry();
+		}),
 		button->shownValue(),
 		button->heightValue()
-	) | rpl::start_with_next([=](bool shown, int height) {
-		const auto inner = _widget->innerGeometry();
-		if (!shown) {
-			height = _webviewBottom->height();
-		}
+	) | rpl::start_with_next([=](QRect inner, bool shown, int height) {
 		button->move(inner.x(), inner.y() + inner.height() - height);
-		if (const auto raw = _webviewParent.data()) {
-			raw->setFixedSize(inner.width(), inner.height() - height);
-		}
 		button->resizeToWidth(inner.width());
 		_webviewBottom->setVisible(!shown);
+		updateFooterHeight();
 	}, button->lifetime());
+}
+
+void Panel::updateFooterHeight() {
+	_footerHeight = (_mainButton && !_mainButton->isHidden())
+		? _mainButton->height()
+		: _webviewBottom->height();
 }
 
 void Panel::showBox(object_ptr<BoxContent> box) {
@@ -1284,6 +1294,11 @@ void Panel::postEvent(const QString &event) {
 }
 
 void Panel::postEvent(const QString &event, EventData data) {
+	if (!_webview) {
+		LOG(("BotWebView Error: Post event \"%1\" on crashed webview."
+			).arg(event));
+		return;
+	}
 	auto written = v::is<QString>(data)
 		? v::get<QString>(data).toUtf8()
 		: QJsonDocument(
@@ -1333,7 +1348,7 @@ rpl::lifetime &Panel::lifetime() {
 
 std::unique_ptr<Panel> Show(Args &&args) {
 	auto result = std::make_unique<Panel>(
-		args.userDataPath,
+		args.storageId,
 		std::move(args.title),
 		args.delegate,
 		args.menuButtons,

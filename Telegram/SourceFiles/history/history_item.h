@@ -197,6 +197,7 @@ public:
 	[[nodiscard]] BusinessShortcutId shortcutId() const;
 	[[nodiscard]] bool isBusinessShortcut() const;
 	void setRealShortcutId(BusinessShortcutId id);
+	void setCustomServiceLink(ClickHandlerPtr link);
 
 	void addLogEntryOriginal(
 		WebPageId localId,
@@ -358,6 +359,7 @@ public:
 
 	void indexAsNewItem();
 	void addToSharedMediaIndex();
+	void addToMessagesIndex();
 	void removeFromSharedMediaIndex();
 
 	struct NotificationTextOptions {

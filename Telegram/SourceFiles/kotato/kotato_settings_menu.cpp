@@ -99,26 +99,6 @@ QString GroupingModeDescription(int mode) {
 	return QString();
 }
 
-QString NetBoostLabel(int boost) {
-	switch (boost) {
-		case 0:
-			return ktr("ktg_net_speed_boost_default");
-
-		case 1:
-			return ktr("ktg_net_speed_boost_slight");
-
-		case 2:
-			return ktr("ktg_net_speed_boost_medium");
-
-		case 3:
-			return ktr("ktg_net_speed_boost_big");
-
-		default:
-			Unexpected("Boost in Settings::NetBoostLabel.");
-	}
-	return QString();
-}
-
 QString TrayIconLabel(int icon) {
 	switch (icon) {
 		case 0:
@@ -461,37 +441,6 @@ void SetupKotatoNetwork(not_null<Ui::VerticalLayout*> container) {
 	Ui::AddSkip(container);
 	Ui::AddSubsectionTitle(container, rktr("ktg_settings_network"));
 
-	const auto netBoostButton = container->add(
-		object_ptr<Button>(
-			container,
-			rktr("ktg_settings_net_speed_boost"),
-			st::settingsButtonNoIcon));
-	auto netBoostText = rpl::single(
-		NetBoostLabel(::Kotato::JsonSettings::GetIntWithPending("net_speed_boost"))
-	) | rpl::then(
-		::Kotato::JsonSettings::EventsWithPending(
-			"net_speed_boost"
-		) | rpl::map([] {
-			return NetBoostLabel(::Kotato::JsonSettings::GetIntWithPending("net_speed_boost"));
-		})
-	);
-	CreateRightLabel(
-		netBoostButton,
-		std::move(netBoostText),
-		st::settingsButtonNoIcon,
-		rktr("ktg_settings_net_speed_boost"));
-	netBoostButton->addClickHandler([=] {
-		Ui::show(Box<::Kotato::RadioBox>(
-			ktr("ktg_net_speed_boost_title"),
-			ktr("ktg_net_speed_boost_desc"),
-			::Kotato::JsonSettings::GetIntWithPending("net_speed_boost"),
-			4,
-			NetBoostLabel,
-			[=] (int value) {
-				::Kotato::JsonSettings::SetAfterRestart("net_speed_boost", value);
-				::Kotato::JsonSettings::Write();
-			}, true));
-	});
 
 	SettingsMenuJsonSwitch(ktg_settings_telegram_sites_autologin, telegram_sites_autologin);
 

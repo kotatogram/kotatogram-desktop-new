@@ -400,6 +400,7 @@ int Launcher::exec() {
 
 	// Must be started before Sandbox is created.
 	Platform::start();
+	ThirdParty::start();
 
 	if (::Kotato::JsonSettings::GetBool("api_use_env")
 		&& qEnvironmentVariableIsSet(kApiIdVarName.utf8().constData())
@@ -424,6 +425,7 @@ int Launcher::exec() {
 	}
 
 	CrashReports::Finish();
+	ThirdParty::finish();
 	Platform::finish();
 	Kotato::JsonSettings::Finish();
 	Logs::finish();

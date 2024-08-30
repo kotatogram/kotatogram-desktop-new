@@ -182,25 +182,6 @@ CheckHandler ReplacesLimit() {
 }
 
 
-CheckHandler NetSpeedBoostConv(CheckHandler wrapped = nullptr) {
-	return [=] (QVariant value) -> QVariant {
-		auto newValue = 0;
-		if (value.canConvert<int>()) {
-			newValue = value.value<int>();
-		} else if (value.canConvert<QString>()) {
-			const auto strValue = value.value<QString>();
-			if (strValue == "high") {
-				newValue = 3;
-			} else if (strValue == "medium") {
-				newValue = 2;
-			} else if (strValue == "low") {
-				newValue = 1;
-			}
-		}
-		return (wrapped) ? wrapped(newValue) : newValue;
-	};
-}
-
 struct Definition {
 	SettingScope scope = SettingScope::Global;
 	SettingStorage storage = SettingStorage::MainJson;
@@ -263,12 +244,6 @@ const std::map<QString, Definition, std::greater<QString>> DefinitionMap {
 		.defaultValue = false, }},
 
 	// Stored settings
-	{ "fonts/main", {
-		.type = SettingType::QStringSetting,
-		.fillerValue = qsl("Open Sans"), }},
-	{ "fonts/semibold", {
-		.type = SettingType::QStringSetting,
-		.fillerValue = qsl("Open Sans Semibold"), }},
 	{ "fonts/semibold_is_bold", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = false, }},
@@ -278,17 +253,6 @@ const std::map<QString, Definition, std::greater<QString>> DefinitionMap {
 	{ "fonts/size", {
 		.type = SettingType::IntSetting,
 		.defaultValue = 0, }},
-	{ "fonts/use_system_font", {
-		.type = SettingType::BoolSetting,
-#ifdef DESKTOP_APP_USE_PACKAGED_FONTS
-		.defaultValue = true,
-#else
-		.defaultValue = Platform::IsLinux(),
-#endif
-	}},
-	{ "fonts/use_original_metrics", {
-		.type = SettingType::BoolSetting,
-		.defaultValue = false, }},
 	{ "big_emoji_outline", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = true, }},
@@ -312,10 +276,6 @@ const std::map<QString, Definition, std::greater<QString>> DefinitionMap {
 		.type = SettingType::IntSetting,
 		.defaultValue = 2,
 		.limitHandler = IntLimit(0, 2, 2), }},
-	{ "net_speed_boost", {
-		.type = SettingType::IntSetting,
-		.defaultValue = 0,
-		.limitHandler = NetSpeedBoostConv(IntLimit(0, 3)), }},
 	{ "disable_up_edit", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = false, }},
@@ -349,7 +309,7 @@ const std::map<QString, Definition, std::greater<QString>> DefinitionMap {
 		.defaultValue = false, }},
 	{ "disable_tray_counter", {
 		.type = SettingType::BoolSetting,
-		.defaultValue = Platform::IsLinux(), }},
+		.defaultValue = false, }},
 	{ "use_telegram_panel_icon", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = false, }},
@@ -563,7 +523,6 @@ QByteArray GenerateSettingsJson(bool areDefault = false) {
 
 	if (areDefault) {
 		settings.insert(qsl("version"), QString::number(AppKotatoVersion));
-		settings.insert(qsl("net_speed_boost"), QJsonValue(QJsonValue::Null));
 	}
 
 	auto document = QJsonDocument();

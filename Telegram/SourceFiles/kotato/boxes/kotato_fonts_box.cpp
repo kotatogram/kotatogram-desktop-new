@@ -135,52 +135,6 @@ void FontsBox::prepare() {
 
 	addLeftButton(rktr("ktg_fonts_reset"), [=] { resetToDefault(); });
 
-	_useSystemFont = _content->add(
-		object_ptr<Ui::Checkbox>(_content,
-			ktr("ktg_fonts_use_system_font"),
-			::Kotato::JsonSettings::GetBoolWithPending("fonts/use_system_font")),
-		QMargins(
-			st::boxPadding.left(),
-			0,
-			st::boxPadding.right(),
-			st::boxPadding.bottom()));
-	_useOriginalMetrics = _content->add(
-		object_ptr<Ui::Checkbox>(_content,
-			ktr("ktg_fonts_use_original_metrics"),
-			::Kotato::JsonSettings::GetBoolWithPending("fonts/use_original_metrics")),
-		QMargins(
-			st::boxPadding.left(),
-			st::boxPadding.bottom(),
-			st::boxPadding.right(),
-			st::boxPadding.bottom()));
-	_mainFontName = _content->add(
-		object_ptr<Ui::InputField>(_content, st::defaultInputField, rktr("ktg_fonts_main")),
-		QMargins(
-			st::boxPadding.left(),
-			0,
-			st::boxPadding.right(),
-			st::boxPadding.bottom()));
-	_mainFontList = _content->add(
-		object_ptr<RpFontListView>(_content),
-		QMargins(
-			st::boxPadding.left(),
-			st::boxPadding.bottom(),
-			st::boxPadding.right(),
-			st::boxPadding.bottom()));
-	_semiboldFontName = _content->add(
-		object_ptr<Ui::InputField>(_content, st::defaultInputField, rktr("ktg_fonts_semibold")),
-		QMargins(
-			st::boxPadding.left(),
-			0,
-			st::boxPadding.right(),
-			st::boxPadding.bottom()));
-	_semiboldFontList = _content->add(
-		object_ptr<RpFontListView>(_content),
-		QMargins(
-			st::boxPadding.left(),
-			st::boxPadding.bottom(),
-			st::boxPadding.right(),
-			st::boxPadding.bottom()));
 	_semiboldIsBold = _content->add(
 		object_ptr<Ui::Checkbox>(_content,
 			ktr("ktg_fonts_semibold_is_bold"),
@@ -239,13 +193,9 @@ void FontsBox::prepare() {
 			st::boxPadding.right(),
 			st::boxPadding.bottom()));
 
-	_mainFontName->setText(::Kotato::JsonSettings::GetStringWithPending("fonts/main"));
-	_semiboldFontName->setText(::Kotato::JsonSettings::GetStringWithPending("fonts/semibold"));
 	_monospacedFontName->setText(::Kotato::JsonSettings::GetStringWithPending("fonts/monospaced"));
 
 	const auto fontNames = QFontDatabase().families();
-	_mainFontList->prepare(_mainFontName, fontNames);
-	_semiboldFontList->prepare(_semiboldFontName, fontNames);
 	_monospacedFontList->prepare(_monospacedFontName, fontNames);
 
 	auto wrap = object_ptr<Ui::OverrideMargins>(this, std::move(_owned));
@@ -255,16 +205,12 @@ void FontsBox::prepare() {
 
 
 void FontsBox::setInnerFocus() {
-	_mainFontName->setFocusFast();
+	_monospacedFontName->setFocusFast();
 }
 
 void FontsBox::save() {
-	::Kotato::JsonSettings::SetAfterRestart("fonts/main", _mainFontName->getLastText().trimmed());
-	::Kotato::JsonSettings::SetAfterRestart("fonts/semibold", _semiboldFontName->getLastText().trimmed());
 	::Kotato::JsonSettings::SetAfterRestart("fonts/monospaced", _monospacedFontName->getLastText().trimmed());
 	::Kotato::JsonSettings::SetAfterRestart("fonts/semibold_is_bold", _semiboldIsBold->checked());
-	::Kotato::JsonSettings::SetAfterRestart("fonts/use_system_font", _useSystemFont->checked());
-	::Kotato::JsonSettings::SetAfterRestart("fonts/use_original_metrics", _useOriginalMetrics->checked());
 	::Kotato::JsonSettings::SetAfterRestart("fonts/size", _fontSize);
 	::Kotato::JsonSettings::Write();
 
@@ -281,13 +227,9 @@ void FontsBox::save() {
 }
 
 void FontsBox::resetToDefault() {
-	::Kotato::JsonSettings::ResetAfterRestart("fonts/main");
-	::Kotato::JsonSettings::ResetAfterRestart("fonts/semibold");
 	::Kotato::JsonSettings::ResetAfterRestart("fonts/monospaced");
 	::Kotato::JsonSettings::ResetAfterRestart("fonts/semibold_is_bold");
 	::Kotato::JsonSettings::ResetAfterRestart("fonts/size");
-	::Kotato::JsonSettings::ResetAfterRestart("fonts/use_system_font");
-	::Kotato::JsonSettings::ResetAfterRestart("fonts/use_original_metrics");
 	::Kotato::JsonSettings::Write();
 
 	const auto box = std::make_shared<QPointer<BoxContent>>();

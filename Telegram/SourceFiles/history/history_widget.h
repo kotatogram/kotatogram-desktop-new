@@ -7,17 +7,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "history/view/controls/history_view_compose_media_edit_manager.h"
 #include "history/view/history_view_corner_buttons.h"
 #include "history/history_drag_area.h"
 #include "history/history_view_highlight_manager.h"
 #include "history/history_view_top_toast.h"
 #include "history/history.h"
 #include "chat_helpers/field_autocomplete.h"
+#include "chat_helpers/field_characters_count_manager.h"
 #include "window/section_widget.h"
 #include "ui/widgets/fields/input_field.h"
 #include "mtproto/sender.h"
 
-struct FileLoadResult;
 enum class SendMediaType;
 class MessageLinksParser;
 struct InlineBotQuery;
@@ -88,6 +89,7 @@ namespace HistoryView {
 class StickerToast;
 class TopBarWidget;
 class ContactStatus;
+class BusinessBotStatus;
 class Element;
 class PinnedTracker;
 class TranslateBar;
@@ -102,6 +104,7 @@ class ForwardPanel;
 class TTLButton;
 class WebpageProcessor;
 class CharactersLimitLabel;
+class PhotoEditSpoilerManager;
 } // namespace HistoryView::Controls
 
 class BotKeyboard;
@@ -195,8 +198,9 @@ public:
 		not_null<HistoryItem*> item,
 		TextWithEntities quote = {},
 		int quoteOffset = 0);
-	void editMessage(FullMsgId itemId);
-	void editMessage(not_null<HistoryItem*> item);
+	void editMessage(
+		not_null<HistoryItem*> item,
+		const TextSelection &selection);
 
 	[[nodiscard]] FullReplyTo replyTo() const;
 	bool lastForceReplyReplied(const FullMsgId &replyTo) const;
@@ -653,6 +657,7 @@ private:
 
 	void switchToSearch(QString query);
 
+	void checkCharsCount();
 	void checkCharsLimitation();
 
 	MTP::Sender _api;
@@ -665,6 +670,7 @@ private:
 	MsgId _editMsgId = 0;
 	std::shared_ptr<Data::PhotoMedia> _photoEditMedia;
 	bool _canReplaceMedia = false;
+	HistoryView::MediaEditSpoilerManager _mediaEditSpoiler;
 
 	HistoryItem *_replyEditMsg = nullptr;
 	Ui::Text::String _replyEditMsgText;
@@ -749,6 +755,7 @@ private:
 	bool _isInlineBot = false;
 
 	std::unique_ptr<HistoryView::ContactStatus> _contactStatus;
+	std::unique_ptr<HistoryView::BusinessBotStatus> _businessBotStatus;
 
 	const std::shared_ptr<Ui::SendButton> _send;
 	object_ptr<Ui::FlatButton> _unblock;
@@ -757,8 +764,11 @@ private:
 	object_ptr<Ui::FlatButton> _muteUnmute;
 	object_ptr<Ui::FlatButton> _discuss;
 	object_ptr<Ui::FlatButton> _reportMessages;
-	object_ptr<Ui::RoundButton> _botMenuButton = { nullptr };
-	QString _botMenuButtonText;
+	struct {
+		object_ptr<Ui::RoundButton> button = { nullptr };
+		QString text;
+		bool small = false;
+	} _botMenu;
 	object_ptr<Ui::IconButton> _attachToggle;
 	object_ptr<Ui::IconButton> _replaceMedia = { nullptr };
 	object_ptr<Ui::SendAsButton> _sendAs = { nullptr };
@@ -789,6 +799,8 @@ private:
 	HistoryItem *_kbReplyTo = nullptr;
 	object_ptr<Ui::ScrollArea> _kbScroll;
 	const not_null<BotKeyboard*> _keyboard;
+
+	FieldCharsCountManager _fieldCharsCountManager;
 
 	std::unique_ptr<Ui::ChooseThemeController> _chooseTheme;
 

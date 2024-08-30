@@ -62,12 +62,13 @@ if (NOT DESKTOP_APP_USE_PACKAGED)
     if (WIN32)
         set(qt_version 5.15.13)
     elseif (APPLE)
-        set(qt_version 6.2.7)
+        set(qt_version 6.2.8)
     endif()
 endif()
 include(cmake/external/qt/package.cmake)
 
 set(desktop_app_skip_libs
+    glibmm
     variant
 )
 

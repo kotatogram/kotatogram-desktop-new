@@ -20,8 +20,6 @@ class MainWindow : public Window::MainWindow {
 public:
 	explicit MainWindow(not_null<Window::Controller*> controller);
 
-	bool psFilterNativeEvent(void *event);
-
 	int getCustomTitleHeight() const {
 		return _customTitleHeight;
 	}
@@ -29,6 +27,10 @@ public:
 	~MainWindow();
 
 	void updateWindowIcon() override;
+
+	rpl::producer<QPoint> globalForceClicks() override {
+		return _forceClicks.events();
+	}
 
 	class Private;
 
@@ -46,6 +48,11 @@ protected:
 
 private:
 	friend class Private;
+
+	bool nativeEvent(
+		const QByteArray &eventType,
+		void *message,
+		qintptr *result) override;
 
 	void hideAndDeactivate();
 	void updateDockCounter();
@@ -82,7 +89,9 @@ private:
 	QAction *psMonospace = nullptr;
 	QAction *psClearFormat = nullptr;
 
+	rpl::event_stream<QPoint> _forceClicks;
 	int _customTitleHeight = 0;
+	int _lastPressureStage = 0;
 
 };
 

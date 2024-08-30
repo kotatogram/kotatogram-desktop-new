@@ -437,8 +437,8 @@ void FieldAutocomplete::updateFiltered(bool resetScroll) {
 
 		auto filterNotPassedByUsername = [this](UserData *user) -> bool {
 			if (PrimaryUsername(user).startsWith(_filter, Qt::CaseInsensitive)) {
-				const auto exactUsername =
-					(PrimaryUsername(user).size() == _filter.size());
+				const auto exactUsername
+					= (PrimaryUsername(user).size() == _filter.size());
 				return exactUsername;
 			}
 			return true;
@@ -446,8 +446,9 @@ void FieldAutocomplete::updateFiltered(bool resetScroll) {
 		auto filterNotPassedByName = [&](UserData *user) -> bool {
 			for (const auto &nameWord : user->nameWords()) {
 				if (nameWord.startsWith(_filter, Qt::CaseInsensitive)) {
-					const auto exactUsername =
-						(PrimaryUsername(user).compare(_filter, Qt::CaseInsensitive) == 0);
+					const auto exactUsername = PrimaryUsername(user).compare(
+						_filter,
+						Qt::CaseInsensitive) == 0;
 					return exactUsername;
 				}
 			}
@@ -976,7 +977,9 @@ void FieldAutocomplete::Inner::paintEvent(QPaintEvent *e) {
 				if (sticker.lottie && sticker.lottie->ready()) {
 					lottieFrame = sticker.lottie->frame();
 					p.drawImage(
-						QRect(ppos, lottieFrame.size() / cIntRetinaFactor()),
+						QRect(
+							ppos,
+							lottieFrame.size() / style::DevicePixelRatio()),
 						lottieFrame);
 					if (!paused) {
 						sticker.lottie->markFrameShown();
@@ -1396,7 +1399,7 @@ void FieldAutocomplete::Inner::contextMenuEvent(QContextMenuEvent *e) {
 		_menu,
 		type,
 		SendMenu::DefaultSilentCallback(send),
-		SendMenu::DefaultScheduleCallback(this, type, send),
+		SendMenu::DefaultScheduleCallback(_show, type, send),
 		SendMenu::DefaultWhenOnlineCallback(send));
 
 	if (!_menu->empty()) {
@@ -1485,7 +1488,7 @@ void FieldAutocomplete::Inner::setupLottie(StickerSuggestion &suggestion) {
 	suggestion.lottie = ChatHelpers::LottiePlayerFromDocument(
 		suggestion.documentMedia.get(),
 		ChatHelpers::StickerLottieSize::InlineResults,
-		stickerBoundingBox() * cIntRetinaFactor(),
+		stickerBoundingBox() * style::DevicePixelRatio(),
 		Lottie::Quality::Default,
 		getLottieRenderer());
 

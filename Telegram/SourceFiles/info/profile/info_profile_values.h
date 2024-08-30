@@ -17,6 +17,7 @@ struct ChannelLocation;
 namespace Data {
 class ForumTopic;
 class Thread;
+class Birthday;
 } // namespace Data
 
 namespace Main {
@@ -64,14 +65,23 @@ QString IDString(not_null<PeerData*> peer);
 	bool primary = false);
 [[nodiscard]] rpl::producer<std::vector<TextWithEntities>> UsernamesValue(
 	not_null<PeerData*> peer);
+[[nodiscard]] QString UsernameUrl(
+	not_null<PeerData*> peer,
+	const QString &username);
 [[nodiscard]] TextWithEntities AboutWithEntities(
 	not_null<PeerData*> peer,
 	const QString &value);
 [[nodiscard]] rpl::producer<TextWithEntities> AboutValue(
 	not_null<PeerData*> peer);
-[[nodiscard]] rpl::producer<QString> LinkValue(
+
+struct LinkWithUrl {
+	QString text;
+	QString url;
+};
+[[nodiscard]] rpl::producer<LinkWithUrl> LinkValue(
 	not_null<PeerData*> peer,
 	bool primary = false);
+
 [[nodiscard]] rpl::producer<const ChannelLocation*> LocationValue(
 	not_null<ChannelData*> channel);
 [[nodiscard]] rpl::producer<bool> NotificationsEnabledValue(
@@ -86,6 +96,10 @@ QString IDString(not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<bool> CanShareContactValue(
 	not_null<UserData*> user);
 [[nodiscard]] rpl::producer<bool> CanAddContactValue(
+	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<Data::Birthday> BirthdayValue(
+	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<ChannelData*> PersonalChannelValue(
 	not_null<UserData*> user);
 [[nodiscard]] rpl::producer<bool> HasLinkedChatValue(
 	not_null<ChannelData*> channel);
@@ -123,5 +137,10 @@ enum class BadgeType;
 [[nodiscard]] rpl::producer<BadgeType> BadgeValue(not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<DocumentId> EmojiStatusIdValue(
 	not_null<PeerData*> peer);
+
+[[nodiscard]] rpl::producer<QString> BirthdayLabelText(
+	rpl::producer<Data::Birthday> birthday);
+[[nodiscard]] rpl::producer<QString> BirthdayValueText(
+	rpl::producer<Data::Birthday> birthday);
 
 } // namespace Info::Profile

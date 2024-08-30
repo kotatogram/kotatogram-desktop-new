@@ -185,9 +185,9 @@ rpl::producer<bool> List::toggleExpandedRequests() const {
 	return _toggleExpandedRequests.events();
 }
 
-rpl::producer<> List::entered() const {
-	return _entered.events();
-}
+//rpl::producer<> List::entered() const {
+//	return _entered.events();
+//}
 
 rpl::producer<> List::loadMoreRequests() const {
 	return _loadMoreRequests.events();
@@ -218,9 +218,9 @@ void List::requestExpanded(bool expanded) {
 	_toggleExpandedRequests.fire_copy(_expanded);
 }
 
-void List::enterEventHook(QEnterEvent *e) {
-	_entered.fire({});
-}
+//void List::enterEventHook(QEnterEvent *e) {
+	//_entered.fire({});
+//}
 
 void List::resizeEvent(QResizeEvent *e) {
 	updateScrollMax();

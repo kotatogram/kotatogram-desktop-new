@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_widget.h"
 #include "dialogs/dialogs_search_from_controllers.h"
 #include "dialogs/dialogs_search_tags.h"
+#include "history/view/history_view_chat_preview.h"
 #include "history/view/history_view_context_menu.h"
 #include "history/history.h"
 #include "history/history_item.h"
@@ -82,6 +83,7 @@ namespace {
 
 constexpr auto kHashtagResultsLimit = 5;
 constexpr auto kStartReorderThreshold = 30;
+constexpr auto kChatPreviewDelay = crl::time(1000);
 
 int FixedOnTopDialogsCount(not_null<Dialogs::IndexedList*> list) {
 	auto result = 0;
@@ -159,6 +161,7 @@ InnerWidget::InnerWidget(
 	+ st::defaultDialogRow.padding.left())
 , _cancelSearchInChat(this, st::dialogsCancelSearchInPeer)
 , _cancelSearchFromUser(this, st::dialogsCancelSearchInPeer)
+, _chatPreviewTimer([=] { showChatPreview(true); })
 , _childListShown(std::move(childListShown)) {
 	setAttribute(Qt::WA_OpaquePaintEvent, true);
 
@@ -329,6 +332,11 @@ InnerWidget::InnerWidget(
 	_controller->activeChatsFilter(
 	) | rpl::start_with_next([=](FilterId filterId) {
 		switchToFilter(filterId);
+	}, lifetime());
+
+	_controller->window().widget()->globalForceClicks(
+	) | rpl::start_with_next([=](QPoint globalPosition) {
+		processGlobalForceClick(globalPosition);
 	}, lifetime());
 
 	session().data().stories().incrementPreloadingMainSources();
@@ -653,6 +661,8 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 		context.active = active;
 		context.selected = _menuRow.key
 			? (row->key() == _menuRow.key)
+			: _chatPreviewKey
+			? (row->key() == _chatPreviewKey)
 			: selected;
 		context.topicJumpSelected = selected
 			&& _selectedTopicJump
@@ -1089,7 +1099,7 @@ void InnerWidget::paintPeerSearchResult(
 
 	QRect tr(context.st->textLeft, context.st->textTop, namewidth, st::dialogsTextFont->height);
 	p.setFont(st::dialogsTextFont);
-	QString username = peer->userName();
+	QString username = peer->username();
 	if (!context.active && username.startsWith(_peerSearchQuery, Qt::CaseInsensitive)) {
 		auto first = '@' + username.mid(0, _peerSearchQuery.size());
 		auto second = username.mid(_peerSearchQuery.size());
@@ -1270,6 +1280,14 @@ void InnerWidget::mouseMoveEvent(QMouseEvent *e) {
 		return;
 	}
 	selectByMouse(globalPosition);
+	if (!isUserpicPress()) {
+		cancelChatPreview();
+	}
+}
+
+void InnerWidget::cancelChatPreview() {
+	_chatPreviewTimer.cancel();
+	_chatPreviewWillBeFor = {};
 }
 
 void InnerWidget::clearIrrelevantState() {
@@ -1332,8 +1350,7 @@ void InnerWidget::selectByMouse(QPoint globalPosition) {
 		const auto selectedTopicJump = selected
 			&& selected->lookupIsInTopicJump(
 				local.x(),
-				mouseY - offset - selected->top())
-			&& _controller->adaptive().isOneColumn();
+				mouseY - offset - selected->top());
 		if (_collapsedSelected != collapsedSelected
 			|| _selected != selected
 			|| _selectedTopicJump != selectedTopicJump) {
@@ -1375,8 +1392,7 @@ void InnerWidget::selectByMouse(QPoint globalPosition) {
 			const auto selectedTopicJump = (filteredSelected >= 0)
 				&& _filterResults[filteredSelected].row->lookupIsInTopicJump(
 					local.x(),
-					mouseY - skip - _filterResults[filteredSelected].top)
-				&& _controller->adaptive().isOneColumn();
+					mouseY - skip - _filterResults[filteredSelected].top);
 			if (_filteredSelected != filteredSelected
 				|| _selectedTopicJump != selectedTopicJump) {
 				updateSelectedRow();
@@ -1415,6 +1431,29 @@ void InnerWidget::selectByMouse(QPoint globalPosition) {
 	}
 }
 
+Key InnerWidget::computeChatPreviewRow() const {
+	auto result = computeChosenRow().key;
+	if (const auto peer = result.peer()) {
+		const auto topicId = _pressedTopicJump
+			? _pressedTopicJumpRootId
+			: 0;
+		if (const auto topic = peer->forumTopicFor(topicId)) {
+			return topic;
+		}
+	}
+	return result;
+}
+
+void InnerWidget::processGlobalForceClick(QPoint globalPosition) {
+	const auto parent = parentWidget();
+	if (_pressButton == Qt::LeftButton
+		&& parent->rect().contains(parent->mapFromGlobal(globalPosition))
+		&& pressShowsPreview(false)) {
+		_chatPreviewWillBeFor = computeChatPreviewRow();
+		showChatPreview(false);
+	}
+}
+
 void InnerWidget::mousePressEvent(QMouseEvent *e) {
 	selectByMouse(e->globalPos());
 
@@ -1426,6 +1465,18 @@ void InnerWidget::mousePressEvent(QMouseEvent *e) {
 	setFilteredPressed(_filteredSelected, _selectedTopicJump);
 	setPeerSearchPressed(_peerSearchSelected);
 	setSearchedPressed(_searchedSelected);
+
+	const auto alt = (e->modifiers() & Qt::AltModifier);
+	const auto onlyUserpic = !alt;
+	if (pressShowsPreview(onlyUserpic)) {
+		_chatPreviewWillBeFor = computeChatPreviewRow();
+		if (alt) {
+			showChatPreview(onlyUserpic);
+			return;
+		}
+		_chatPreviewTimer.callOnce(kChatPreviewDelay);
+	}
+
 	if (base::in_range(_collapsedSelected, 0, _collapsedRows.size())) {
 		auto row = &_collapsedRows[_collapsedSelected]->row;
 		row->addRipple(e->pos(), QSize(width(), st::dialogsImportantBarHeight), [this, index = _collapsedSelected] {
@@ -1495,10 +1546,12 @@ void InnerWidget::mousePressEvent(QMouseEvent *e) {
 	}
 	ClickHandler::pressed();
 	if (anim::Disabled()
+		&& !_chatPreviewTimer.isActive()
 		&& (!_pressed || !_pressed->entry()->isPinnedDialog(_filterId))) {
 		mousePressReleased(e->globalPos(), e->button(), e->modifiers());
 	}
 }
+
 const std::vector<Key> &InnerWidget::pinnedChatsOrder() const {
 	const auto owner = &session().data();
 	return _savedSublists
@@ -1517,6 +1570,7 @@ void InnerWidget::checkReorderPinnedStart(QPoint localPosition) {
 		< style::ConvertScale(kStartReorderThreshold)) {
 		return;
 	}
+	cancelChatPreview();
 	_dragging = _pressed;
 	if (updateReorderIndexGetCount() < 2) {
 		_dragging = nullptr;
@@ -1736,6 +1790,9 @@ void InnerWidget::mousePressReleased(
 		QPoint globalPosition,
 		Qt::MouseButton button,
 		Qt::KeyboardModifiers modifiers) {
+	_chatPreviewTimer.cancel();
+	_pressButton = Qt::NoButton;
+
 	auto wasDragging = (_dragging != nullptr);
 	if (wasDragging) {
 		updateReorderIndexGetCount();
@@ -2292,6 +2349,65 @@ void InnerWidget::fillArchiveSearchMenu(not_null<Ui::PopupMenu*> menu) {
 	});
 }
 
+void InnerWidget::showChatPreview(bool onlyUserpic) {
+	const auto key = base::take(_chatPreviewWillBeFor);
+	cancelChatPreview();
+	if (!pressShowsPreview(onlyUserpic) || key != computeChatPreviewRow()) {
+		return;
+	}
+	ClickHandler::unpressed();
+	mousePressReleased(QCursor::pos(), Qt::NoButton, Qt::NoModifier);
+
+	_chatPreviewKey = key;
+	auto preview = HistoryView::MakeChatPreview(this, key.entry());
+	if (!preview.menu) {
+		return;
+	}
+	_menu = std::move(preview.menu);
+	const auto weakMenu = Ui::MakeWeak(_menu.get());
+	const auto weakThread = base::make_weak(key.entry()->asThread());
+	const auto weakController = base::make_weak(_controller);
+	std::move(
+		preview.actions
+	) | rpl::start_with_next([=](HistoryView::ChatPreviewAction action) {
+		if (const auto controller = weakController.get()) {
+			if (const auto thread = weakThread.get()) {
+				const auto itemId = action.openItemId;
+				const auto owner = &thread->owner();
+				if (action.markRead) {
+					Window::MarkAsReadThread(thread);
+				} else if (action.markUnread) {
+					if (const auto history = thread->asHistory()) {
+						history->owner().histories().changeDialogUnreadMark(
+							history,
+							true);
+					}
+				} else if (action.openInfo) {
+					controller->showPeerInfo(thread);
+				} else if (const auto item = owner->message(itemId)) {
+					controller->showMessage(item);
+				} else {
+					controller->showThread(thread);
+				}
+			}
+		}
+		if (const auto strong = weakMenu.data()) {
+			strong->hideMenu();
+		}
+	}, _menu->lifetime());
+	QObject::connect(_menu.get(), &QObject::destroyed, [=] {
+		if (_chatPreviewKey) {
+			updateDialogRow(RowDescriptor(base::take(_chatPreviewKey), {}));
+		}
+		const auto globalPosition = QCursor::pos();
+		if (rect().contains(mapFromGlobal(globalPosition))) {
+			setMouseTracking(true);
+			selectByMouse(globalPosition);
+		}
+	});
+	_menu->popup(_lastMousePosition.value_or(QCursor::pos()));
+}
+
 void InnerWidget::contextMenuEvent(QContextMenuEvent *e) {
 	_menu = nullptr;
 
@@ -2320,7 +2436,9 @@ void InnerWidget::contextMenuEvent(QContextMenuEvent *e) {
 		}
 		return RowDescriptor();
 	}();
-	if (!row.key) return;
+	if (!row.key) {
+		return;
+	}
 
 	_menuRow = row;
 	if (_pressButton != Qt::LeftButton) {
@@ -2558,6 +2676,12 @@ void InnerWidget::trackSearchResultsHistory(not_null<History*> history) {
 			if (removed) {
 				refresh();
 				clearMouseSelection(true);
+			}
+			if (_chatPreviewWillBeFor.topic() == topic) {
+				_chatPreviewWillBeFor = {};
+			}
+			if (_chatPreviewKey.topic() == topic) {
+				_chatPreviewKey = {};
 			}
 		}, _searchResultsLifetime);
 	}
@@ -2873,8 +2997,6 @@ void InnerWidget::refresh(bool toTop) {
 		jumpToTop();
 		preloadRowsData();
 	}
-	_controller->setDialogsListDisplayForced(
-		_searchInChat || !_filter.isEmpty());
 	update();
 }
 
@@ -3062,9 +3184,6 @@ void InnerWidget::searchInChat(
 		_searchInChatUserpic = {};
 	}
 	moveCancelSearchButtons();
-
-	_controller->setDialogsListDisplayForced(
-		_searchInChat || !_filter.isEmpty());
 }
 
 auto InnerWidget::searchTagsChanges() const
@@ -3508,6 +3627,27 @@ ChosenRow InnerWidget::computeChosenRow() const {
 	return ChosenRow();
 }
 
+bool InnerWidget::isUserpicPress() const {
+	return  (_lastRowLocalMouseX >= 0)
+		&& (_lastRowLocalMouseX < _st->nameLeft);
+}
+
+bool InnerWidget::isUserpicPressOnWide() const {
+	return isUserpicPress() && (width() > _narrowWidth);
+}
+
+bool InnerWidget::pressShowsPreview(bool onlyUserpic) const {
+	if (onlyUserpic && !isUserpicPress()) {
+		return false;
+	}
+	const auto key = computeChosenRow().key;
+	if (const auto history = key.history()) {
+		return !history->peer->isForum()
+			|| (_pressedTopicJump && _pressedTopicJumpRootId);
+	}
+	return key.topic() != nullptr;
+}
+
 bool InnerWidget::chooseRow(
 		Qt::KeyboardModifiers modifiers,
 		MsgId pressedTopicRootId) {
@@ -3520,9 +3660,7 @@ bool InnerWidget::chooseRow(
 			ChosenRow row,
 			Qt::KeyboardModifiers modifiers) {
 		row.newWindow = (modifiers & Qt::ControlModifier);
-		row.userpicClick = (_lastRowLocalMouseX >= 0)
-			&& (_lastRowLocalMouseX < _st->nameLeft)
-			&& (width() > _narrowWidth);
+		row.userpicClick = isUserpicPressOnWide();
 		return row;
 	};
 	auto chosen = modifyChosenRow(computeChosenRow(), modifiers);
@@ -3861,7 +3999,8 @@ void InnerWidget::setupShortcuts() {
 		return isActiveWindow()
 			&& !_controller->isLayerShown()
 			&& !_controller->window().locked()
-			&& !_childListShown.current().shown;
+			&& !_childListShown.current().shown
+			&& !_chatPreviewKey;
 	}) | rpl::start_with_next([=](not_null<Shortcuts::Request*> request) {
 		using Command = Shortcuts::Command;
 
@@ -3893,6 +4032,12 @@ void InnerWidget::setupShortcuts() {
 			});
 			request->check(Command::ChatNext) && request->handle([=] {
 				return jumpToDialogRow(next);
+			});
+		} else if (_state == WidgetState::Default
+			? !_shownList->empty()
+			: !_filterResults.empty()) {
+			request->check(Command::ChatNext) && request->handle([=] {
+				return jumpToDialogRow(first);
 			});
 		}
 		request->check(Command::ChatFirst) && request->handle([=] {
@@ -4034,6 +4179,24 @@ void InnerWidget::setupShortcuts() {
 			}
 			return true;
 		});
+
+		(!_openedForum)
+			&& request->check(Command::ArchiveChat)
+			&& request->handle([=] {
+				const auto thread = _selected ? _selected->thread() : nullptr;
+				if (!thread) {
+					return false;
+				}
+				const auto history = thread->owningHistory();
+				const auto isArchived = history->folder()
+					&& (history->folder()->id() == Data::Folder::kId);
+
+				Window::ToggleHistoryArchived(
+					_controller->uiShow(),
+					history,
+					!isArchived);
+				return true;
+			});
 
 		request->check(Command::ShowContacts) && request->handle([=] {
 			_controller->show(PrepareContactsBox(_controller));

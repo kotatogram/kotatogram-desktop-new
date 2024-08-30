@@ -28,6 +28,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/file_upload.h"
 #include "storage/storage_account.h"
 #include "storage/storage_facade.h"
+#include "data/components/recent_peers.h"
+#include "data/components/scheduled_messages.h"
+#include "data/components/sponsored_messages.h"
+#include "data/components/top_peers.h"
 #include "data/data_session.h"
 #include "data/data_changes.h"
 #include "data/data_user.h"
@@ -96,6 +100,10 @@ Session::Session(
 , _giftBoxStickersPacks(std::make_unique<Stickers::GiftBoxPack>(this))
 , _sendAsPeers(std::make_unique<SendAsPeers>(this))
 , _attachWebView(std::make_unique<InlineBots::AttachWebView>(this))
+, _recentPeers(std::make_unique<Data::RecentPeers>(this))
+, _scheduledMessages(std::make_unique<Data::ScheduledMessages>(this))
+, _sponsoredMessages(std::make_unique<Data::SponsoredMessages>(this))
+, _topPeers(std::make_unique<Data::TopPeers>(this))
 , _supportHelper(Support::Helper::Create(this))
 , _saveSettingsTimer([=] { saveSettings(); }) {
 	Expects(_settings != nullptr);
@@ -138,10 +146,10 @@ Session::Session(
 		}, _lifetime);
 
 #ifndef OS_MAC_STORE
-		_account->appConfig().value(
+		appConfig().value(
 		) | rpl::start_with_next([=] {
-			_premiumPossible = !_account->appConfig().get<bool>(
-				"premium_purchase_blocked",
+			_premiumPossible = !appConfig().get<bool>(
+				u"premium_purchase_blocked"_q,
 				true);
 		}, _lifetime);
 #endif // OS_MAC_STORE
@@ -225,6 +233,10 @@ Domain &Session::domain() const {
 
 Storage::Domain &Session::domainLocal() const {
 	return _account->domainLocal();
+}
+
+AppConfig &Session::appConfig() const {
+	return _account->appConfig();
 }
 
 void Session::notifyDownloaderTaskFinished() {
@@ -422,6 +434,10 @@ void Session::uploadsStopWithConfirmation(Fn<void()> done) {
 	const auto window = message
 		? Core::App().windowFor(message->history()->peer)
 		: Core::App().activePrimaryWindow();
+	if (!window) {
+		done();
+		return;
+	}
 	auto box = Box([=](not_null<Ui::GenericBox*> box) {
 		box->addRow(
 			object_ptr<Ui::FlatLabel>(
@@ -464,8 +480,22 @@ auto Session::windows() const
 	return _windows;
 }
 
-Window::SessionController *Session::tryResolveWindow() const {
-	if (_windows.empty()) {
+Window::SessionController *Session::tryResolveWindow(
+		PeerData *forPeer) const {
+	if (forPeer) {
+		auto primary = (Window::SessionController*)nullptr;
+		for (const auto &window : _windows) {
+			if (window->singlePeer() == forPeer) {
+				return window;
+			} else if (window->isPrimary()) {
+				primary = window;
+			}
+		}
+		if (primary) {
+			return primary;
+		}
+	}
+	if (_windows.empty() || forPeer) {
 		domain().activate(_account);
 		if (_windows.empty()) {
 			return nullptr;

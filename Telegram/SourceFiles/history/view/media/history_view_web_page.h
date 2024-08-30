@@ -21,6 +21,8 @@ class RippleAnimation;
 
 namespace HistoryView {
 
+class Sticker;
+
 class WebPage : public Media {
 public:
 	WebPage(
@@ -130,11 +132,25 @@ private:
 	mutable std::shared_ptr<Data::PhotoMedia> _photoMedia;
 	mutable std::unique_ptr<Ui::RippleAnimation> _ripple;
 
+	struct StickerSet final {
+		std::vector<std::unique_ptr<Sticker>> views;
+	};
+
+	std::unique_ptr<StickerSet> _stickerSet;
+
 	struct SponsoredData final {
-		PeerData *peer = nullptr;
-		Ui::PeerUserpicView userpicView;
 		QString buttonText;
-		bool hasExternalLink = false;
+		bool isLinkInternal = false;
+
+		uint64 backgroundEmojiId = 0;
+		uint8 colorIndex : 6 = 0;
+
+		bool canReport = false;
+		QSize hintSize;
+		QPointF lastHintPos;
+		int widthBeforeHint = 0;
+		std::unique_ptr<Ui::RippleAnimation> hintRipple;
+		ClickHandlerPtr hintLink;
 	};
 	mutable std::optional<SponsoredData> _sponsoredData;
 

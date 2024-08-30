@@ -20,28 +20,21 @@ Install [poetry](https://python-poetry.org), go to ***BuildPath*** and run
 Go to ***BuildPath*/kotatogram-desktop** and run (using [your **api_id** and **api_hash**](#obtain-your-api-credentials))
 
     docker run --rm -it \
-        -v $PWD:/usr/src/tdesktop \
+        -v "$PWD:/usr/src/tdesktop" \
         kotatogram-desktop:centos_env \
         /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
         -D TDESKTOP_API_ID=YOUR_API_ID \
-        -D TDESKTOP_API_HASH=YOUR_API_HASH \
-        -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
+        -D TDESKTOP_API_HASH=YOUR_API_HASH
 
 Or, to create a debug build, run (also using [your **api_id** and **api_hash**](#obtain-your-api-credentials))
 
     docker run --rm -it \
-        -v $PWD:/usr/src/tdesktop \
+        -v "$PWD:/usr/src/tdesktop" \
         -e CONFIG=Debug \
         kotatogram-desktop:centos_env \
         /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
         -D TDESKTOP_API_ID=YOUR_API_ID \
-        -D TDESKTOP_API_HASH=YOUR_API_HASH \
-        -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
-
-If you want to build with crash reporter, use `-D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF` instead of `-D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON`.
-
-If you need a backward compatible binary (running on older OS like the official one), you should build the binary with LTO.  
-To do this, add `-D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON` option.
+        -D TDESKTOP_API_HASH=YOUR_API_HASH
 
 The built files will be in the `out` directory.
 

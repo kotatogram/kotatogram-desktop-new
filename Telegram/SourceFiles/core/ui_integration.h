@@ -46,7 +46,6 @@ public:
 	void activationFromTopPanel() override;
 
 	bool screenIsLocked() override;
-	style::CustomFontSettings fontSettings() override;
 
 	std::shared_ptr<ClickHandler> createLinkHandler(
 		const EntityLinkData &data,

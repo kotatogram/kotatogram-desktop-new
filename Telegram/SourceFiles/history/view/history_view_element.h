@@ -60,6 +60,8 @@ enum class Context : char {
 	SavedSublist,
 	TTLViewer,
 	ShortcutMessages,
+	ScheduledTopic,
+	ChatPreview,
 };
 
 enum class OnlyEmojiAndSpaces : char {
@@ -631,7 +633,5 @@ private:
 	Context _context = Context();
 
 };
-
-constexpr auto size = sizeof(Element);
 
 } // namespace HistoryView

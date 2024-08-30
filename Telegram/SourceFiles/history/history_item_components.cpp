@@ -34,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/audio/media_audio.h"
 #include "media/player/media_player_instance.h"
 #include "data/business/data_shortcut_messages.h"
+#include "data/components/scheduled_messages.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "data/data_channel.h"
 #include "data/data_media_types.h"
@@ -43,7 +44,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_web_page.h"
 #include "data/data_file_click_handler.h"
-#include "data/data_scheduled_messages.h"
 #include "data/data_session.h"
 #include "data/data_stories.h"
 #include "main/main_session.h"
@@ -184,8 +184,11 @@ bool HiddenSenderInfo::paintCustomUserpic(
 	return valid;
 }
 
-void HistoryMessageForwarded::create(const HistoryMessageVia *via) const {
+void HistoryMessageForwarded::create(
+		const HistoryMessageVia *via,
+		not_null<const HistoryItem*> item) const {
 	auto phrase = TextWithEntities();
+	auto context = Core::MarkedTextContext{};
 	const auto fromChannel = originalSender
 		&& originalSender->isChannel()
 		&& !originalSender->isMegagroup();
@@ -194,16 +197,27 @@ void HistoryMessageForwarded::create(const HistoryMessageVia *via) const {
 			? originalSender->name()
 			: originalHiddenSenderInfo->name)
 	};
+	if (originalSender) {
+		context.session = &originalSender->owner().session();
+		context.customEmojiRepaint = [=] {
+			originalSender->owner().requestItemRepaint(item);
+		};
+		phrase = Ui::Text::SingleCustomEmoji(
+			context.session->data().customEmojiManager().peerUserpicEmojiData(
+				originalSender,
+				st::fwdTextUserpicPadding));
+	}
 	if (!originalPostAuthor.isEmpty()) {
-		phrase = tr::lng_forwarded_signed(
-			tr::now,
-			lt_channel,
-			name,
-			lt_user,
-			{ .text = originalPostAuthor },
-			Ui::Text::WithEntities);
+		phrase.append(
+			tr::lng_forwarded_signed(
+				tr::now,
+				lt_channel,
+				name,
+				lt_user,
+				{ .text = originalPostAuthor },
+				Ui::Text::WithEntities));
 	} else {
-		phrase = name;
+		phrase.append(name);
 	}
 	if (story) {
 		phrase = tr::lng_forwarded_story(
@@ -249,18 +263,21 @@ void HistoryMessageForwarded::create(const HistoryMessageVia *via) const {
 					: tr::lng_forwarded_psa_default)(
 						tr::now,
 						lt_channel,
-						Ui::Text::Link(phrase.text, QString()), // Link 1.
+						Ui::Text::Wrapped(
+							phrase,
+							EntityType::CustomUrl,
+							QString()), // Link 1.
 						Ui::Text::WithEntities);
 			}
 		} else {
 			phrase = tr::lng_forwarded(
 				tr::now,
 				lt_user,
-				Ui::Text::Link(phrase.text, QString()), // Link 1.
+				Ui::Text::Wrapped(phrase, EntityType::CustomUrl, QString()), // Link 1.
 				Ui::Text::WithEntities);
 		}
 	}
-	text.setMarkedText(st::fwdTextStyle, phrase);
+	text.setMarkedText(st::fwdTextStyle, phrase, kMarkupTextOptions, context);
 
 	text.setLink(1, fromChannel
 		? JumpToMessageClickHandler(originalSender, originalId)
@@ -302,7 +319,7 @@ ReplyFields ReplyFieldsFromMTP(
 		const auto owner = &item->history()->owner();
 		if (const auto id = data.vreply_to_msg_id().value_or_empty()) {
 			result.messageId = data.is_reply_to_scheduled()
-				? owner->scheduledMessages().localMessageId(id)
+				? owner->session().scheduledMessages().localMessageId(id)
 				: item->shortcutId()
 				? owner->shortcutMessages().localMessageId(id)
 				: id;

@@ -51,6 +51,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/view/controls/history_view_characters_limit.h"
+#include "history/view/controls/history_view_compose_media_edit_manager.h"
 #include "history/view/controls/history_view_forward_panel.h"
 #include "history/view/controls/history_view_draft_options.h"
 #include "history/view/controls/history_view_voice_record_bar.h"
@@ -73,6 +74,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/ui_utility.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/dropdown_menu.h"
+#include "ui/widgets/popup_menu.h"
 #include "ui/text/format_values.h"
 #include "ui/controls/emoji_button.h"
 #include "ui/controls/send_button.h"
@@ -85,6 +87,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwindow.h"
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
+#include "styles/style_menu_icons.h"
 
 namespace HistoryView {
 namespace {
@@ -210,6 +213,8 @@ private:
 	bool _photoEditAllowed : 1 = false;
 	bool _repaintScheduled : 1 = false;
 	bool _inClickable : 1 = false;
+
+	HistoryView::MediaEditSpoilerManager _mediaEditSpoiler;
 
 	const not_null<Data::Session*> _data;
 	const not_null<Ui::IconButton*> _cancel;
@@ -399,7 +404,12 @@ void FieldHeader::init() {
 					_editOptionsRequests.fire({});
 				}
 			} else if (!isLeftButton) {
-				if (const auto reply = replyingToMessage()) {
+				if (inPreviewRect && isEditingMessage()) {
+					_mediaEditSpoiler.showMenu(
+						this,
+						_data->message(_editMsgId.current()),
+						[=](bool) { update(); });
+				} else if (const auto reply = replyingToMessage()) {
 					_jumpToItemRequests.fire_copy(reply);
 				}
 			}
@@ -573,10 +583,14 @@ void FieldHeader::paintEditOrReplyToMessage(Painter &p) {
 
 	const auto media = _shownMessage->media();
 	_shownMessageHasPreview = media && media->hasReplyPreview();
-	const auto preview = _shownMessageHasPreview
+	const auto preview = _mediaEditSpoiler.spoilerOverride()
+		? _mediaEditSpoiler.mediaPreview(_shownMessage)
+		: _shownMessageHasPreview
 		? media->replyPreview()
 		: nullptr;
-	const auto spoilered = preview && media->hasSpoiler();
+	const auto spoilered = _mediaEditSpoiler.spoilerOverride()
+		? (*_mediaEditSpoiler.spoilerOverride())
+		: (preview && media->hasSpoiler());
 	if (!spoilered) {
 		_shownPreviewSpoiler = nullptr;
 	} else if (!_shownPreviewSpoiler) {
@@ -721,6 +735,7 @@ void FieldHeader::editMessage(FullMsgId id, bool photoEditAllowed) {
 	_photoEditAllowed = photoEditAllowed;
 	_editMsgId = id;
 	if (!photoEditAllowed) {
+		_mediaEditSpoiler.setSpoilerOverride(std::nullopt);
 		_inPhotoEdit = false;
 		_inPhotoEditOver.stop();
 	}
@@ -768,6 +783,7 @@ MessageToEdit FieldHeader::queryToEdit() {
 			.scheduled = item->isScheduled() ? item->date() : 0,
 			.shortcutId = item->shortcutId(),
 		},
+		.spoilerMediaOverride = _mediaEditSpoiler.spoilerOverride(),
 	};
 }
 
@@ -1979,6 +1995,7 @@ void ComposeControls::applyDraft(FieldHistoryAction fieldHistoryAction) {
 	const auto guard = gsl::finally([&] {
 		updateSendButtonType();
 		updateReplaceMediaButton();
+		updateFieldPlaceholder();
 		updateControlsVisibility();
 		updateControlsGeometry(_wrap->size());
 	});
@@ -2201,7 +2218,7 @@ void ComposeControls::initSendButton() {
 		_send.get(),
 		[=] { return sendButtonMenuType(); },
 		SendMenu::DefaultSilentCallback(send),
-		SendMenu::DefaultScheduleCallback(_wrap.get(), sendMenuType(), send),
+		SendMenu::DefaultScheduleCallback(_show, sendMenuType(), send),
 		SendMenu::DefaultWhenOnlineCallback(send));
 }
 
@@ -2877,9 +2894,12 @@ void ComposeControls::updateHeight() {
 	}
 }
 
-void ComposeControls::editMessage(FullMsgId id) {
+void ComposeControls::editMessage(
+		FullMsgId id,
+		const TextSelection &selection) {
 	if (const auto item = session().data().message(id)) {
 		editMessage(item);
+		SelectTextInFieldWithMargins(_field, selection);
 	}
 }
 
@@ -3454,6 +3474,51 @@ rpl::producer<bool> SendDisabledBySlowmode(not_null<PeerData*> peer) {
 			channel->slowmodeAppliedValue(),
 			std::move(hasSendingMessage),
 			_1 && _2);
+}
+
+void ShowPhotoEditSpoilerMenu(
+		not_null<Ui::RpWidget*> parent,
+		not_null<HistoryItem*> item,
+		const std::optional<bool> &override,
+		Fn<void(bool)> callback) {
+	const auto media = item->media();
+	const auto hasPreview = media && media->hasReplyPreview();
+	const auto preview = hasPreview ? media->replyPreview() : nullptr;
+	if (!preview) {
+		return;
+	}
+	const auto spoilered = override
+		? (*override)
+		: (preview && media->hasSpoiler());
+	const auto menu = Ui::CreateChild<Ui::PopupMenu>(
+		parent,
+		st::popupMenuWithIcons);
+	menu->addAction(
+		spoilered
+			? tr::lng_context_disable_spoiler(tr::now)
+			: tr::lng_context_spoiler_effect(tr::now),
+		[=] { callback(!spoilered); },
+		spoilered ? &st::menuIconSpoilerOff : &st::menuIconSpoiler);
+	menu->popup(QCursor::pos());
+}
+
+Image *MediaPreviewWithOverriddenSpoiler(
+		not_null<HistoryItem*> item,
+		bool spoiler) {
+	if (const auto media = item->media()) {
+		if (const auto photo = media->photo()) {
+			return photo->getReplyPreview(
+				item->fullId(),
+				item->history()->peer,
+				spoiler);
+		} else if (const auto document = media->document()) {
+			return document->getReplyPreview(
+				item->fullId(),
+				item->history()->peer,
+				spoiler);
+		}
+	}
+	return nullptr;
 }
 
 } // namespace HistoryView

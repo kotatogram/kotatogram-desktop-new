@@ -52,6 +52,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/mime_type.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
+#include "data/components/scheduled_messages.h"
 #include "data/data_session.h"
 #include "data/data_document.h"
 #include "data/data_user.h"
@@ -64,7 +65,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/data_shared_media.h"
 #include "data/data_send_action.h"
-#include "data/data_scheduled_messages.h"
 #include "data/data_premium_limits.h"
 #include "storage/storage_media_prepare.h"
 #include "storage/storage_account.h"
@@ -206,6 +206,7 @@ RepliesWidget::RepliesWidget(
 	not_null<History*> history,
 	MsgId rootId)
 : Window::SectionWidget(parent, controller, history->peer)
+, WindowListDelegate(controller)
 , _history(history)
 , _rootId(rootId)
 , _root(lookupRoot())
@@ -231,10 +232,9 @@ RepliesWidget::RepliesWidget(
 		.stickerOrEmojiChosen = controller->stickerOrEmojiChosen(),
 		.scheduledToggleValue = _topic
 			? rpl::single(rpl::empty_value()) | rpl::then(
-				session().data().scheduledMessages().updates(
-					_topic->owningHistory())
+				session().scheduledMessages().updates(_topic->owningHistory())
 			) | rpl::map([=] {
-				return session().data().scheduledMessages().hasFor(_topic);
+				return session().scheduledMessages().hasFor(_topic);
 			}) | rpl::type_erased()
 			: rpl::single(false),
 	}))
@@ -301,7 +301,7 @@ RepliesWidget::RepliesWidget(
 
 	_inner = _scroll->setOwnedWidget(object_ptr<ListWidget>(
 		this,
-		controller,
+		&controller->session(),
 		static_cast<ListDelegate*>(this)));
 	_scroll->move(0, _topBar->height());
 	_scroll->show();
@@ -317,20 +317,23 @@ RepliesWidget::RepliesWidget(
 		if (const auto item = session().data().message(fullId)) {
 			const auto media = item->media();
 			if (!media || media->webpage() || media->allowsEditCaption()) {
-				_composeControls->editMessage(fullId);
+				_composeControls->editMessage(
+					fullId,
+					_inner->getSelectedTextRange(item));
 			}
 		}
 	}, _inner->lifetime());
 
 	_inner->replyToMessageRequested(
-	) | rpl::start_with_next([=](auto fullId) {
+	) | rpl::start_with_next([=](ListWidget::ReplyToMessageRequest request) {
 		const auto canSendReply = _topic
 			? Data::CanSendAnything(_topic)
 			: Data::CanSendAnything(_history->peer);
-		if (_joinGroup || !canSendReply) {
-			Controls::ShowReplyToChatBox(controller->uiShow(), { fullId });
+		const auto &to = request.to;
+		if (_joinGroup || !canSendReply || request.forceAnotherChat) {
+			Controls::ShowReplyToChatBox(controller->uiShow(), { to });
 		} else {
-			replyToMessage(fullId);
+			replyToMessage(to);
 			_composeControls->focus();
 		}
 	}, _inner->lifetime());
@@ -744,7 +747,8 @@ void RepliesWidget::setupComposeControls() {
 	_composeControls->editRequests(
 	) | rpl::start_with_next([=](auto data) {
 		if (const auto item = session().data().message(data.fullId)) {
-			edit(item, data.options, saveEditMsgRequestId);
+			const auto spoiler = data.spoilerMediaOverride;
+			edit(item, data.options, saveEditMsgRequestId, spoiler);
 		}
 	}, lifetime());
 
@@ -887,7 +891,7 @@ void RepliesWidget::chooseAttach(
 	}
 
 	const auto filter = (overrideSendImagesAsPhotos == true)
-		? FileDialog::ImagesOrAllFilter()
+		? FileDialog::PhotoVideoFilesFilter()
 		: FileDialog::AllOrImagesFilter();
 	FileDialog::GetOpenPaths(this, tr::lng_choose_files(tr::now), filter, crl::guard(this, [=](
 			FileDialog::OpenResult &&result) {
@@ -1242,7 +1246,8 @@ void RepliesWidget::send(Api::SendOptions options) {
 void RepliesWidget::edit(
 		not_null<HistoryItem*> item,
 		Api::SendOptions options,
-		mtpRequestId *const saveEditMsgRequestId) {
+		mtpRequestId *const saveEditMsgRequestId,
+		std::optional<bool> spoilerMediaOverride) {
 	if (*saveEditMsgRequestId) {
 		return;
 	}
@@ -1310,7 +1315,8 @@ void RepliesWidget::edit(
 		webpage,
 		options,
 		crl::guard(this, done),
-		crl::guard(this, fail));
+		crl::guard(this, fail),
+		spoilerMediaOverride);
 
 	_composeControls->hidePanelsAnimated();
 	doSetInnerFocus();
@@ -2417,7 +2423,7 @@ bool RepliesWidget::listScrollTo(int top, bool syntetic) {
 		updateInnerVisibleArea();
 	}
 	_synteticScrollEvent = false;
-	return syntetic;
+	return scrolled;
 }
 
 void RepliesWidget::listCancelRequest() {

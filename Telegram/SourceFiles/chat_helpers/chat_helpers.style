@@ -785,6 +785,12 @@ emojiScroll: ScrollArea(defaultSolidScroll) {
 reactPanelScroll: ScrollArea(emojiScroll) {
 	deltab: 7px;
 }
+reactPanelScrollRounded: ScrollArea(emojiScroll) {
+	width: 8px;
+	deltax: 3px;
+	deltat: 14px;
+	deltab: 14px;
+}
 
 choosePeerGroupIcon: icon {{ "info/edit/create_group", lightButtonFg }};
 choosePeerChannelIcon: icon {{ "info/edit/create_channel", lightButtonFg }};
@@ -860,6 +866,31 @@ historyEmojiStatusInfoLabel: FlatLabel(historyContactStatusLabel) {
 	textFg: windowSubTextFg;
 }
 historyContactStatusMinSkip: 16px;
+
+historyBusinessBotPhoto: UserpicButton(defaultUserpicButton) {
+	size: size(46px, 46px);
+	photoSize: 46px;
+	photoPosition: point(0px, 0px);
+}
+historyBusinessBotName: FlatLabel(defaultFlatLabel) {
+	style: semiboldTextStyle;
+}
+historyBusinessBotStatus: FlatLabel(historyContactStatusLabel) {
+	textFg: windowSubTextFg;
+}
+historyBusinessBotToggle: defaultActiveButton;
+historyBusinessBotSettings: IconButton(defaultIconButton) {
+	icon: icon{{ "menu/customize", menuIconFg }};
+	iconOver: icon{{ "menu/customize", menuIconFgOver }};
+	iconPosition: point(-1px, -1px);
+	rippleAreaSize: 40px;
+	rippleAreaPosition: point(4px, 9px);
+	ripple: RippleAnimation(defaultRippleAnimation) {
+		color: windowBgOver;
+	}
+	height: 58px;
+	width: 48px;
+}
 
 historyReplyCancelIcon: icon {{ "box_button_close", historyReplyCancelFg }};
 historyReplyCancelIconOver: icon {{ "box_button_close", historyReplyCancelFgOver }};
@@ -962,7 +993,7 @@ historyComposeField: InputField(defaultInputField) {
 	placeholderFg: placeholderFg;
 	placeholderFgActive: placeholderFgActive;
 	placeholderFgError: placeholderFgActive;
-	placeholderMargins: margins(7px, 5px, 7px, 5px);
+	placeholderMargins: margins(2px, 0px, 2px, 0px);
 	placeholderAlign: align(topleft);
 	placeholderScale: 0.;
 	placeholderFont: normalFont;
@@ -1092,8 +1123,6 @@ historyRecordVoiceFgOver: historyComposeIconFgOver;
 historyRecordVoiceFgInactive: attentionButtonFg;
 historyRecordVoiceFgActive: windowBgActive;
 historyRecordVoiceFgActiveIcon: windowFgActive;
-historyRecordVoiceShowDuration: 120;
-historyRecordVoiceDuration: 120;
 historyRecordVoice: icon {{ "chat/input_record", historyRecordVoiceFg }};
 historyRecordVoiceOver: icon {{ "chat/input_record", historyRecordVoiceFgOver }};
 historyRecordVoiceOnceBg: icon {{ "voice_lock/audio_once_bg", historySendIconFg }};

@@ -162,11 +162,13 @@ bool DarkTasbarValueValid/* = false*/;
 	if ((!monochrome || !darkMode) && supportMode) {
 		Window::ConvertIconToBlack(result);
 	}
-	if (::Kotato::JsonSettings::GetBool("disable_tray_counter") || !args.count) {
+	if (!args.count) {
 		return result;
 	} else if (smallIcon) {
 		if (monochrome && darkMode) {
 			return MonochromeWithDot(std::move(result), args.bg);
+		} else if (::Kotato::JsonSettings::GetBool("disable_tray_counter")) {
+			return result;
 		}
 		return Window::WithSmallCounter(std::move(result), std::move(args));
 	}

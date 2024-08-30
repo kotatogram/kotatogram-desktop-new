@@ -11,8 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "payments/ui/payments_panel.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
-#include "main/main_domain.h"
-#include "storage/storage_domain.h"
+#include "storage/storage_account.h"
 #include "history/history_item.h"
 #include "history/history.h"
 #include "data/data_user.h" // UserData::isBot.
@@ -25,7 +24,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "api/api_cloud_password.h"
 #include "window/themes/window_theme.h"
-#include "webview/webview_interface.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -766,12 +764,12 @@ void CheckoutProcess::requestPassword() {
 			(index < list.size()) ? list[index].title : QString());
 		fields.customSubmitButton = tr::lng_payments_password_submit();
 		fields.customCheckCallback = [=](
-				const Core::CloudPasswordResult &result) {
+				const Core::CloudPasswordResult &result,
+				QPointer<PasscodeBox> box) {
+			_enterPasswordBox = box;
 			_form->submit(result);
 		};
-		auto owned = Box<PasscodeBox>(_session, fields);
-		_enterPasswordBox = owned.data();
-		_panel->showBox(std::move(owned));
+		_panel->showBox(Box<PasscodeBox>(_session, fields));
 	});
 }
 
@@ -877,8 +875,8 @@ void CheckoutProcess::performInitialSilentValidation() {
 	_form->validateInformation(saved);
 }
 
-QString CheckoutProcess::panelWebviewDataPath() {
-	return _session->domain().local().webviewDataPath();
+Webview::StorageId CheckoutProcess::panelWebviewStorageId() {
+	return _session->local().resolveStorageIdOther();
 }
 
 Webview::ThemeParams CheckoutProcess::panelWebviewThemeParams() {

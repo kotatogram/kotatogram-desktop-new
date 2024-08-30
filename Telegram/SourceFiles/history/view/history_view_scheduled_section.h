@@ -52,7 +52,7 @@ class StickerToast;
 
 class ScheduledWidget final
 	: public Window::SectionWidget
-	, private ListDelegate
+	, private WindowListDelegate
 	, private CornerButtonsDelegate {
 public:
 	ScheduledWidget(
@@ -215,7 +215,8 @@ private:
 	void edit(
 		not_null<HistoryItem*> item,
 		Api::SendOptions options,
-		mtpRequestId *const saveEditMsgRequestId);
+		mtpRequestId *const saveEditMsgRequestId,
+		std::optional<bool> spoilerMediaOverride);
 	void highlightSingleNewMessage(const Data::MessagesSlice &slice);
 	void chooseAttach();
 	[[nodiscard]] SendMenu::Type sendMenuType() const;
@@ -282,7 +283,7 @@ private:
 
 };
 
-class ScheduledMemento : public Window::SectionMemento {
+class ScheduledMemento final : public Window::SectionMemento {
 public:
 	ScheduledMemento(not_null<History*> history);
 	ScheduledMemento(not_null<Data::ForumTopic*> forumTopic);

@@ -141,6 +141,7 @@ public:
 		-> HistoryView::Reactions::CachedIconFactory &;
 
 	void show(not_null<Data::Story*> story, Data::StoriesContext context);
+	void jumpTo(not_null<Data::Story*> story, Data::StoriesContext context);
 	void ready();
 
 	void updateVideoPlayback(const Player::TrackState &state);
@@ -171,7 +172,7 @@ public:
 	void shareRequested();
 	void deleteRequested();
 	void reportRequested();
-	void togglePinnedRequested(bool pinned);
+	void toggleInProfileRequested(bool inProfile);
 
 	[[nodiscard]] bool ignoreWindowMove(QPoint position) const;
 	void tryProcessKeyInput(not_null<QKeyEvent*> e);
@@ -193,6 +194,7 @@ private:
 	struct StoriesList {
 		not_null<PeerData*> peer;
 		Data::StoriesIds ids;
+		std::vector<StoryId> sorted;
 		int total = 0;
 
 		friend inline bool operator==(
@@ -327,10 +329,14 @@ private:
 
 };
 
-[[nodiscard]] Ui::Toast::Config PrepareTogglePinnedToast(
+[[nodiscard]] Ui::Toast::Config PrepareToggleInProfileToast(
 	bool channel,
 	int count,
-	bool pinned);
+	bool inProfile);
+[[nodiscard]] Ui::Toast::Config PrepareTogglePinToast(
+	bool channel,
+	int count,
+	bool pin);
 void ReportRequested(
 	std::shared_ptr<Main::SessionShow> show,
 	FullStoryId id,

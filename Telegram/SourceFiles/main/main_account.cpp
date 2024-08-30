@@ -54,6 +54,7 @@ Account::Account(not_null<Domain*> domain, const QString &dataName, int index)
 Account::~Account() {
 	if (const auto session = maybeSession()) {
 		session->saveSettingsNowIfNeeded();
+		_local->writeSearchSuggestionsIfNeeded();
 	}
 	destroySession(DestroyReason::Quitting);
 }

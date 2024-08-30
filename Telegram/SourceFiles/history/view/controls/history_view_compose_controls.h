@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class History;
 class DocumentData;
 class FieldAutocomplete;
+class Image;
 
 namespace style {
 struct ComposeControls;
@@ -198,7 +199,7 @@ public:
 	void showFinished();
 	void raisePanels();
 
-	void editMessage(FullMsgId id);
+	void editMessage(FullMsgId id, const TextSelection &selection);
 	void cancelEditMessage();
 	void maybeCancelEditMessage(); // Confirm if changed and cancel.
 
@@ -450,5 +451,15 @@ private:
 	not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<bool> SendDisabledBySlowmode(
 	not_null<PeerData*> peer);
+
+void ShowPhotoEditSpoilerMenu(
+	not_null<Ui::RpWidget*> parent,
+	not_null<HistoryItem*> item,
+	const std::optional<bool> &override,
+	Fn<void(bool)> callback);
+
+[[nodiscard]] Image *MediaPreviewWithOverriddenSpoiler(
+	not_null<HistoryItem*> item,
+	bool spoiler);
 
 } // namespace HistoryView

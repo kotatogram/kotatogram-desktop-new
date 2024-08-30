@@ -34,12 +34,6 @@ private:
 	object_ptr<Ui::VerticalLayout> _owned;
 	not_null<Ui::VerticalLayout*> _content;
 
-	QPointer<Ui::Checkbox> _useSystemFont;
-	QPointer<Ui::Checkbox> _useOriginalMetrics;
-	QPointer<Ui::InputField> _mainFontName;
-	QPointer<RpFontListView> _mainFontList;
-	QPointer<Ui::InputField> _semiboldFontName;
-	QPointer<RpFontListView> _semiboldFontList;
 	QPointer<Ui::Checkbox> _semiboldIsBold;
 	QPointer<Ui::InputField> _monospacedFontName;
 	QPointer<RpFontListView> _monospacedFontList;

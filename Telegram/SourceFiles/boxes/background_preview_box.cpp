@@ -467,14 +467,14 @@ void BackgroundPreviewBox::generateBackground() {
 		return;
 	}
 	const auto size = QSize(st::boxWideWidth, st::boxWideWidth)
-		* cIntRetinaFactor();
+		* style::DevicePixelRatio();
 	_generated = Ui::PixmapFromImage((_paper.patternOpacity() >= 0.)
 		? Ui::GenerateBackgroundImage(
 			size,
 			_paper.backgroundColors(),
 			_paper.gradientRotation())
 		: BlackImage(size));
-	_generated.setDevicePixelRatio(cRetinaFactor());
+	_generated.setDevicePixelRatio(style::DevicePixelRatio());
 }
 
 not_null<HistoryView::ElementDelegate*> BackgroundPreviewBox::delegate() {
@@ -593,11 +593,11 @@ void BackgroundPreviewBox::uploadForPeer(bool both) {
 	const auto ready = Window::Theme::PrepareWallPaper(
 		session->mainDcId(),
 		_paper.localThumbnail()->original());
-	const auto documentId = ready.id;
+	const auto documentId = ready->id;
 	_uploadId = FullMsgId(
 		session->userPeerId(),
 		session->data().nextLocalMessageId());
-	session->uploader().uploadMedia(_uploadId, ready);
+	session->uploader().upload(_uploadId, ready);
 	if (_uploadLifetime) {
 		return;
 	}
@@ -889,7 +889,7 @@ void BackgroundPreviewBox::paintEvent(QPaintEvent *e) {
 void BackgroundPreviewBox::paintImage(Painter &p) {
 	Expects(!_scaled.isNull());
 
-	const auto factor = cIntRetinaFactor();
+	const auto factor = style::DevicePixelRatio();
 	const auto size = st::boxWideWidth;
 	const auto from = QRect(
 		0,
@@ -940,7 +940,7 @@ int BackgroundPreviewBox::textsTop() const {
 		- st::historyPaddingBottom
 		- (_service ? _service->height() : 0)
 		- _text1->height()
-		- (forChannel() ? _text2->height() : 0);
+		- (forChannel() ? 0 : _text2->height());
 }
 
 QRect BackgroundPreviewBox::radialRect() const {

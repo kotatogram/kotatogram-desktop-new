@@ -87,8 +87,8 @@ void TabbedSelector::SlideAnimation::setFinalImages(Direction direction, QImage 
 	Assert(!_rightImage.isNull());
 	_width = _leftImage.width();
 	_height = _rightImage.height();
-	Assert(!(_width % cIntRetinaFactor()));
-	Assert(!(_height % cIntRetinaFactor()));
+	Assert(!(_width % style::DevicePixelRatio()));
+	Assert(!(_height % style::DevicePixelRatio()));
 	Assert(_leftImage.devicePixelRatio() == _rightImage.devicePixelRatio());
 	Assert(_rightImage.width() == _width);
 	Assert(_rightImage.height() == _height);
@@ -97,19 +97,19 @@ void TabbedSelector::SlideAnimation::setFinalImages(Direction direction, QImage 
 	_innerTop = inner.y();
 	_innerWidth = inner.width();
 	_innerHeight = inner.height();
-	Assert(!(_innerLeft % cIntRetinaFactor()));
-	Assert(!(_innerTop % cIntRetinaFactor()));
-	Assert(!(_innerWidth % cIntRetinaFactor()));
-	Assert(!(_innerHeight % cIntRetinaFactor()));
+	Assert(!(_innerLeft % style::DevicePixelRatio()));
+	Assert(!(_innerTop % style::DevicePixelRatio()));
+	Assert(!(_innerWidth % style::DevicePixelRatio()));
+	Assert(!(_innerHeight % style::DevicePixelRatio()));
 	_innerRight = _innerLeft + _innerWidth;
 	_innerBottom = _innerTop + _innerHeight;
 
-	_painterInnerLeft = _innerLeft / cIntRetinaFactor();
-	_painterInnerTop = _innerTop / cIntRetinaFactor();
-	_painterInnerRight = _innerRight / cIntRetinaFactor();
-	_painterInnerBottom = _innerBottom / cIntRetinaFactor();
-	_painterInnerWidth = _innerWidth / cIntRetinaFactor();
-	_painterInnerHeight = _innerHeight / cIntRetinaFactor();
+	_painterInnerLeft = _innerLeft / style::DevicePixelRatio();
+	_painterInnerTop = _innerTop / style::DevicePixelRatio();
+	_painterInnerRight = _innerRight / style::DevicePixelRatio();
+	_painterInnerBottom = _innerBottom / style::DevicePixelRatio();
+	_painterInnerWidth = _innerWidth / style::DevicePixelRatio();
+	_painterInnerHeight = _innerHeight / style::DevicePixelRatio();
 	_painterCategoriesTop = _painterInnerBottom - st::defaultEmojiPan.footer;
 
 	_wasSectionIcons = wasSectionIcons;
@@ -148,10 +148,10 @@ void TabbedSelector::SlideAnimation::paintFrame(
 
 	auto arrivingCoord = anim::interpolate(_innerWidth, 0, easeOut);
 	auto departingCoord = anim::interpolate(0, _innerWidth, easeIn);
-	if (auto decrease = (arrivingCoord % cIntRetinaFactor())) {
+	if (auto decrease = (arrivingCoord % style::DevicePixelRatio())) {
 		arrivingCoord -= decrease;
 	}
-	if (auto decrease = (departingCoord % cIntRetinaFactor())) {
+	if (auto decrease = (departingCoord % style::DevicePixelRatio())) {
 		departingCoord -= decrease;
 	}
 	auto arrivingAlpha = easeIn;
@@ -165,7 +165,7 @@ void TabbedSelector::SlideAnimation::paintFrame(
 	auto leftTo = _innerLeft
 		+ std::clamp(_innerWidth + leftCoord, 0, _innerWidth);
 	auto rightFrom = _innerLeft + std::clamp(rightCoord, 0, _innerWidth);
-	auto painterRightFrom = rightFrom / cIntRetinaFactor();
+	auto painterRightFrom = rightFrom / style::DevicePixelRatio();
 	if (opacity < 1.) {
 		_frame.fill(Qt::transparent);
 	}
@@ -202,18 +202,18 @@ void TabbedSelector::SlideAnimation::paintFrame(
 		outerRight += _shadow.extend.right();
 		outerBottom += _shadow.extend.bottom();
 	}
-	if (cIntRetinaFactor() > 1) {
-		if (auto skipLeft = (outerLeft % cIntRetinaFactor())) {
+	if (style::DevicePixelRatio() > 1) {
+		if (auto skipLeft = (outerLeft % style::DevicePixelRatio())) {
 			outerLeft -= skipLeft;
 		}
-		if (auto skipTop = (outerTop % cIntRetinaFactor())) {
+		if (auto skipTop = (outerTop % style::DevicePixelRatio())) {
 			outerTop -= skipTop;
 		}
-		if (auto skipRight = (outerRight % cIntRetinaFactor())) {
-			outerRight += (cIntRetinaFactor() - skipRight);
+		if (auto skipRight = (outerRight % style::DevicePixelRatio())) {
+			outerRight += (style::DevicePixelRatio() - skipRight);
 		}
-		if (auto skipBottom = (outerBottom % cIntRetinaFactor())) {
-			outerBottom += (cIntRetinaFactor() - skipBottom);
+		if (auto skipBottom = (outerBottom % style::DevicePixelRatio())) {
+			outerBottom += (style::DevicePixelRatio() - skipBottom);
 		}
 	}
 
@@ -262,7 +262,14 @@ void TabbedSelector::SlideAnimation::paintFrame(
 	//	frameInts += _frameIntsPerLineAdded;
 	//}
 
-	p.drawImage(outerLeft / cIntRetinaFactor(), outerTop / cIntRetinaFactor(), _frame, outerLeft, outerTop, outerRight - outerLeft, outerBottom - outerTop);
+	p.drawImage(
+		outerLeft / style::DevicePixelRatio(),
+		outerTop / style::DevicePixelRatio(),
+		_frame,
+		outerLeft,
+		outerTop,
+		outerRight - outerLeft,
+		outerBottom - outerTop);
 }
 
 TabbedSelector::Tab::Tab(
@@ -295,21 +302,39 @@ void TabbedSelector::Tab::saveScrollTop() {
 	_scrollTop = widget()->getVisibleTop();
 }
 
+[[nodiscard]] rpl::producer<std::vector<Ui::EmojiGroup>> GreetingGroupFirst(
+		not_null<Data::Session*> owner) {
+	return owner->emojiStatuses().stickerGroupsValue(
+	) | rpl::map([](std::vector<Ui::EmojiGroup> &&groups) {
+		const auto i = ranges::find(
+			groups,
+			Ui::EmojiGroupType::Greeting,
+			&Ui::EmojiGroup::type);
+		if (i != begin(groups) && i != end(groups)) {
+			ranges::rotate(begin(groups), i, i + 1);
+		}
+		return std::move(groups);
+	});
+}
+
 std::unique_ptr<Ui::TabbedSearch> MakeSearch(
 		not_null<Ui::RpWidget*> parent,
 		const style::EmojiPan &st,
 		Fn<void(std::vector<QString>&&)> callback,
 		not_null<Main::Session*> session,
-		bool statusCategories,
-		bool profilePhotoCategories) {
+		TabbedSearchType type) {
 	using Descriptor = Ui::SearchDescriptor;
 	const auto owner = &session->data();
 	auto result = std::make_unique<Ui::TabbedSearch>(parent, st, Descriptor{
 		.st = st.search,
-		.groups = (profilePhotoCategories
+		.groups = ((type == TabbedSearchType::ProfilePhoto)
 			? owner->emojiStatuses().profilePhotoGroupsValue()
-			: statusCategories
+			: (type == TabbedSearchType::Status)
 			? owner->emojiStatuses().statusGroupsValue()
+			: (type == TabbedSearchType::Stickers)
+			? owner->emojiStatuses().stickerGroupsValue()
+			: (type == TabbedSearchType::Greeting)
+			? GreetingGroupFirst(owner)
 			: owner->emojiStatuses().emojiGroupsValue()),
 		.customEmojiFactory = owner->customEmojiManager().factory(
 			Data::CustomEmojiManager::SizeTag::SetIcon,
@@ -371,6 +396,9 @@ TabbedSelector::TabbedSelector(
 		tabs.reserve(2);
 		tabs.push_back(createTab(SelectorTab::Stickers, 0));
 		tabs.push_back(createTab(SelectorTab::Masks, 1));
+	} else if (_mode == Mode::StickersOnly || _mode == Mode::ChatIntro) {
+		tabs.reserve(1);
+		tabs.push_back(createTab(SelectorTab::Stickers, 0));
 	} else {
 		tabs.reserve(1);
 		tabs.push_back(createTab(SelectorTab::Emoji, 0));
@@ -378,10 +406,12 @@ TabbedSelector::TabbedSelector(
 	return tabs;
 }())
 , _currentTabType(full()
-		? session().settings().selectorTab()
-		: mediaEditor()
-		? SelectorTab::Stickers
-		: SelectorTab::Emoji)
+	? session().settings().selectorTab()
+	: (mediaEditor()
+		|| _mode == Mode::StickersOnly
+		|| _mode == Mode::ChatIntro)
+	? SelectorTab::Stickers
+	: SelectorTab::Emoji)
 , _hasEmojiTab(ranges::contains(_tabs, SelectorTab::Emoji, &Tab::type))
 , _hasStickersTab(ranges::contains(_tabs, SelectorTab::Stickers, &Tab::type))
 , _hasGifsTab(ranges::contains(_tabs, SelectorTab::Gifs, &Tab::type))
@@ -479,7 +509,7 @@ TabbedSelector::TabbedSelector(
 			_st.categoriesBg);
 	}, lifetime());
 
-	if (hasEmojiTab()) {
+	if (hasEmojiTab() && _mode == Mode::Full) {
 		session().data().stickers().emojiSetInstalled(
 		) | rpl::start_with_next([=](uint64 setId) {
 			_tabsSlider->setActiveSection(indexByType(SelectorTab::Emoji));
@@ -530,6 +560,8 @@ TabbedSelector::Tab TabbedSelector::createTab(SelectorTab type, int index) {
 					? EmojiMode::FullReactions
 					: _mode == Mode::RecentReactions
 					? EmojiMode::RecentReactions
+					: _mode == Mode::PeerTitle
+					? EmojiMode::PeerTitle
 					: EmojiMode::Full),
 				.customTextColor = _customTextColor,
 				.paused = paused,
@@ -542,7 +574,9 @@ TabbedSelector::Tab TabbedSelector::createTab(SelectorTab type, int index) {
 			using Descriptor = StickersListDescriptor;
 			return object_ptr<StickersListWidget>(this, Descriptor{
 				.show = _show,
-				.mode = StickersMode::Full,
+				.mode = (_mode == Mode::ChatIntro
+					? StickersMode::ChatIntro
+					: StickersMode::Full),
 				.paused = paused,
 				.st = &_st,
 				.features = _features,
@@ -654,7 +688,7 @@ void TabbedSelector::updateTabsSliderGeometry() {
 	if (!_tabsSlider) {
 		return;
 	}
-	const auto w = mediaEditor() && hasMasksTab() && masks()->mySetsEmpty()
+	const auto w = (mediaEditor() && hasMasksTab() && masks()->mySetsEmpty())
 		? width() / 2
 		: width();
 	_tabsSlider->resizeToWidth(w);
@@ -893,9 +927,9 @@ QImage TabbedSelector::grabForAnimation() {
 	Ui::SendPendingMoveResizeEvents(this);
 
 	auto result = QImage(
-		size() * cIntRetinaFactor(),
+		size() * style::DevicePixelRatio(),
 		QImage::Format_ARGB32_Premultiplied);
-	result.setDevicePixelRatio(cRetinaFactor());
+	result.setDevicePixelRatio(style::DevicePixelRatio());
 	result.fill(Qt::transparent);
 	render(&result);
 
@@ -947,6 +981,9 @@ void TabbedSelector::beforeHiding() {
 		if (_beforeHidingCallback) {
 			_beforeHidingCallback(_currentTabType);
 		}
+	}
+	if (Ui::InFocusChain(this)) {
+		window()->setFocus();
 	}
 }
 
@@ -1179,9 +1216,9 @@ void TabbedSelector::switchTab() {
 	_slideAnimation = std::make_unique<SlideAnimation>();
 	const auto slidingRect = QRect(
 		0,
-		_scroll->y() * cIntRetinaFactor(),
-		width() * cIntRetinaFactor(),
-		(height() - _scroll->y()) * cIntRetinaFactor());
+		_scroll->y() * style::DevicePixelRatio(),
+		width() * style::DevicePixelRatio(),
+		(height() - _scroll->y()) * style::DevicePixelRatio());
 	_slideAnimation->setFinalImages(
 		direction,
 		std::move(wasCache),

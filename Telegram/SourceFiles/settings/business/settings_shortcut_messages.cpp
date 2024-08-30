@@ -72,7 +72,7 @@ using namespace HistoryView;
 
 class ShortcutMessages
 	: public AbstractSection
-	, private ListDelegate
+	, private WindowListDelegate
 	, private CornerButtonsDelegate {
 public:
 	ShortcutMessages(
@@ -164,6 +164,7 @@ private:
 	History *listTranslateHistory() override;
 	void listAddTranslatedItems(
 		not_null<TranslateTracker*> tracker) override;
+	bool listIgnorePaintEvent(QWidget *w, QPaintEvent *e) override;
 
 	// CornerButtonsDelegate delegate.
 	void cornerButtonsShowAtPosition(
@@ -238,7 +239,8 @@ private:
 	void edit(
 		not_null<HistoryItem*> item,
 		Api::SendOptions options,
-		mtpRequestId *const saveEditMsgRequestId);
+		mtpRequestId *const saveEditMsgRequestId,
+		std::optional<bool> spoilerMediaOverride);
 	void chooseAttach(std::optional<bool> overrideSendImagesAsPhotos);
 	[[nodiscard]] SendMenu::Type sendMenuType() const;
 	[[nodiscard]] FullReplyTo replyTo() const;
@@ -329,6 +331,7 @@ ShortcutMessages::ShortcutMessages(
 	rpl::producer<Container> containerValue,
 	BusinessShortcutId shortcutId)
 : AbstractSection(parent)
+, WindowListDelegate(controller)
 , _controller(controller)
 , _session(&controller->session())
 , _scroll(scroll)
@@ -369,7 +372,7 @@ ShortcutMessages::ShortcutMessages(
 
 	_inner = Ui::CreateChild<ListWidget>(
 		this,
-		controller,
+		&controller->session(),
 		static_cast<ListDelegate*>(this));
 	_inner->overrideIsChatWide(false);
 
@@ -394,7 +397,9 @@ ShortcutMessages::ShortcutMessages(
 		if (const auto item = _session->data().message(fullId)) {
 			const auto media = item->media();
 			if (!media || media->webpage() || media->allowsEditCaption()) {
-				_composeControls->editMessage(fullId);
+				_composeControls->editMessage(
+					fullId,
+					_inner->getSelectedTextRange(item));
 			}
 		}
 	}, _inner->lifetime());
@@ -671,7 +676,8 @@ void ShortcutMessages::setupComposeControls() {
 	) | rpl::start_with_next([=](auto data) {
 		if (const auto item = _session->data().message(data.fullId)) {
 			if (item->isBusinessShortcut()) {
-				edit(item, data.options, saveEditMsgRequestId);
+				const auto spoiler = data.spoilerMediaOverride;
+				edit(item, data.options, saveEditMsgRequestId, spoiler);
 			}
 		}
 	}, lifetime());
@@ -1049,6 +1055,10 @@ void ShortcutMessages::listAddTranslatedItems(
 	not_null<TranslateTracker*> tracker) {
 }
 
+bool ShortcutMessages::listIgnorePaintEvent(QWidget *w, QPaintEvent *e) {
+	return false;
+}
+
 void ShortcutMessages::cornerButtonsShowAtPosition(
 		Data::MessagePosition position) {
 	showAtPosition(position);
@@ -1211,7 +1221,8 @@ void ShortcutMessages::send(Api::SendOptions options) {
 void ShortcutMessages::edit(
 		not_null<HistoryItem*> item,
 		Api::SendOptions options,
-		mtpRequestId *const saveEditMsgRequestId) {
+		mtpRequestId *const saveEditMsgRequestId,
+		std::optional<bool> spoilerMediaOverride) {
 	if (*saveEditMsgRequestId) {
 		return;
 	}
@@ -1279,7 +1290,8 @@ void ShortcutMessages::edit(
 		webpage,
 		options,
 		crl::guard(this, done),
-		crl::guard(this, fail));
+		crl::guard(this, fail),
+		spoilerMediaOverride);
 
 	_composeControls->hidePanelsAnimated();
 	doSetInnerFocus();
@@ -1426,7 +1438,7 @@ void ShortcutMessages::chooseAttach(
 	_choosingAttach = false;
 
 	const auto filter = (overrideSendImagesAsPhotos == true)
-		? FileDialog::ImagesOrAllFilter()
+		? FileDialog::PhotoVideoFilesFilter()
 		: FileDialog::AllOrImagesFilter();
 	FileDialog::GetOpenPaths(this, tr::lng_choose_files(tr::now), filter, crl::guard(this, [=](
 			FileDialog::OpenResult &&result) {

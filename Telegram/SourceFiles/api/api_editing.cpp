@@ -12,12 +12,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_text_entities.h"
 #include "ui/boxes/confirm_box.h"
 #include "data/business/data_shortcut_messages.h"
+#include "data/components/scheduled_messages.h"
+#include "data/data_file_origin.h"
 #include "data/data_histories.h"
-#include "data/data_scheduled_messages.h"
 #include "data/data_session.h"
 #include "data/data_web_page.h"
 #include "history/history.h"
-#include "history/history_item.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "mtproto/mtproto_response.h"
@@ -29,20 +29,20 @@ namespace {
 using namespace rpl::details;
 
 template <typename T>
-constexpr auto WithId =
-	is_callable_plain_v<T, Fn<void()>, mtpRequestId>;
+constexpr auto WithId
+	= is_callable_plain_v<T, Fn<void()>, mtpRequestId>;
 template <typename T>
-constexpr auto WithoutId =
-	is_callable_plain_v<T, Fn<void()>>;
+constexpr auto WithoutId
+	= is_callable_plain_v<T, Fn<void()>>;
 template <typename T>
-constexpr auto WithoutCallback =
-	is_callable_plain_v<T>;
+constexpr auto WithoutCallback
+	= is_callable_plain_v<T>;
 template <typename T>
-constexpr auto ErrorWithId =
-	is_callable_plain_v<T, QString, mtpRequestId>;
+constexpr auto ErrorWithId
+	= is_callable_plain_v<T, QString, mtpRequestId>;
 template <typename T>
-constexpr auto ErrorWithoutId =
-	is_callable_plain_v<T, QString>;
+constexpr auto ErrorWithoutId
+	= is_callable_plain_v<T, QString>;
 
 template <typename DoneCallback, typename FailCallback>
 mtpRequestId EditMessage(
@@ -95,7 +95,7 @@ mtpRequestId EditMessage(
 		: emptyFlag);
 
 	const auto id = item->isScheduled()
-		? session->data().scheduledMessages().lookupId(item)
+		? session->scheduledMessages().lookupId(item)
 		: item->isBusinessShortcut()
 		? session->data().shortcutMessages().lookupId(item)
 		: item->id;
@@ -253,12 +253,100 @@ mtpRequestId EditTextMessage(
 		Data::WebPageDraft webpage,
 		SendOptions options,
 		Fn<void(mtpRequestId requestId)> done,
-		Fn<void(const QString &, mtpRequestId requestId)> fail) {
+		Fn<void(const QString &error, mtpRequestId requestId)> fail,
+		std::optional<bool> spoilerMediaOverride) {
+	if (spoilerMediaOverride) {
+		const auto spoiler = *spoilerMediaOverride;
+		if (const auto media = item->media()) {
+			auto takeInputMedia = Fn<std::optional<MTPInputMedia>()>(nullptr);
+			auto takeFileReference = Fn<QByteArray()>(nullptr);
+			if (const auto photo = media->photo()) {
+				using Flag = MTPDinputMediaPhoto::Flag;
+				const auto flags = Flag()
+					| (media->ttlSeconds() ? Flag::f_ttl_seconds : Flag())
+					| (spoiler ? Flag::f_spoiler : Flag());
+				takeInputMedia = [=] {
+					return MTP_inputMediaPhoto(
+						MTP_flags(flags),
+						photo->mtpInput(),
+						MTP_int(media->ttlSeconds()));
+				};
+				takeFileReference = [=] { return photo->fileReference(); };
+			} else if (const auto document = media->document()) {
+				using Flag = MTPDinputMediaDocument::Flag;
+				const auto flags = Flag()
+					| (media->ttlSeconds() ? Flag::f_ttl_seconds : Flag())
+					| (spoiler ? Flag::f_spoiler : Flag());
+				takeInputMedia = [=] {
+					return MTP_inputMediaDocument(
+						MTP_flags(flags),
+						document->mtpInput(),
+						MTP_int(media->ttlSeconds()),
+						MTPstring()); // query
+				};
+				takeFileReference = [=] { return document->fileReference(); };
+			}
+
+			const auto usedFileReference = takeFileReference
+				? takeFileReference()
+				: QByteArray();
+			const auto origin = item->fullId();
+			const auto api = &item->history()->session().api();
+			const auto performRequest = [=](
+					const auto &repeatRequest,
+					mtpRequestId originalRequestId) -> mtpRequestId {
+				const auto handleReference = [=](
+						const QString &error,
+						mtpRequestId requestId) {
+					if (error.startsWith(u"FILE_REFERENCE_"_q)) {
+						api->refreshFileReference(origin, [=](const auto &) {
+							if (takeFileReference &&
+								(takeFileReference() != usedFileReference)) {
+								repeatRequest(
+									repeatRequest,
+									originalRequestId
+										? originalRequestId
+										: requestId);
+							} else {
+								fail(error, requestId);
+							}
+						});
+					} else {
+						fail(error, requestId);
+					}
+				};
+				const auto callback = [=](
+						Fn<void()> applyUpdates,
+						mtpRequestId requestId) {
+					applyUpdates();
+					done(originalRequestId ? originalRequestId : requestId);
+				};
+				const auto requestId = EditMessage(
+					item,
+					caption,
+					webpage,
+					options,
+					callback,
+					handleReference,
+					takeInputMedia ? takeInputMedia() : std::nullopt);
+				return originalRequestId ? originalRequestId : requestId;
+			};
+			return performRequest(performRequest, 0);
+		}
+	}
+
 	const auto callback = [=](Fn<void()> applyUpdates, mtpRequestId id) {
 		applyUpdates();
 		done(id);
 	};
-	return EditMessage(item, caption, webpage, options, callback, fail);
+	return EditMessage(
+		item,
+		caption,
+		webpage,
+		options,
+		callback,
+		fail,
+		std::nullopt);
 }
 
 } // namespace Api

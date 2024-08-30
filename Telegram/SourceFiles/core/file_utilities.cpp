@@ -159,7 +159,7 @@ void Launch(const QString &filepath) {
 void ShowInFolder(const QString &filepath) {
 	crl::on_main([=] {
 		Ui::PreventDelayedActivation();
-		if (Platform::IsLinux()) {
+		if (Platform::IsX11()) {
 			// Hide mediaview to make other apps visible.
 			Core::App().hideMediaView();
 		}
@@ -168,7 +168,11 @@ void ShowInFolder(const QString &filepath) {
 }
 
 QString DefaultDownloadPathFolder(not_null<Main::Session*> session) {
+#if OS_MAC_STORE
+	return u"Telegram Lite"_q;
+#else // OS_MAC_STORE
 	return session->supportMode() ? u"Tsupport Desktop"_q : AppName.utf16();
+#endif // OS_MAC_STORE
 }
 
 QString DefaultDownloadPath(not_null<Main::Session*> session) {

@@ -24,6 +24,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtWidgets/QSystemTrayIcon>
 
 namespace Platform {
+namespace {
+
+[[nodiscard]] QString PanelIconName(int counter, bool muted) {
+	const auto useTelegramPanelIcon = ::Kotato::JsonSettings::GetBool("use_telegram_panel_icon");
+	return (counter > 0)
+		? (muted
+			? (useTelegramPanelIcon
+				? u"telegram-mute-panel"_q
+				: u"kotatogram-mute-panel"_q)
+			: (useTelegramPanelIcon
+				? u"telegram-attention-panel"_q
+				: u"kotatogram-attention-panel"_q))
+		: (useTelegramPanelIcon
+			? u"telegram-panel"_q
+			: u"kotatogram-panel"_q);
+}
+
+} // namespace
 
 class IconGraphic final {
 public:
@@ -37,32 +55,26 @@ public:
 		bool muted) const;
 	[[nodiscard]] QIcon systemIcon(
 		const QString &iconThemeName,
+		bool monochrome,
 		int counter,
 		bool muted) const;
 	[[nodiscard]] QIcon trayIcon(
 		const QIcon &systemIcon,
 		const QString &iconThemeName,
+		bool monochrome,
 		int counter,
 		bool muted);
 
 private:
-	[[nodiscard]] QString panelIconName(int counter, bool muted) const;
 	[[nodiscard]] int counterSlice(int counter) const;
-	[[nodiscard]] bool useIconFromTheme(const QString &iconName) const;
 	void updateIconRegenerationNeeded(
 		const QIcon &icon,
 		const QIcon &systemIcon,
 		const QString &iconThemeName,
+		bool monochrome,
 		int counter,
 		bool muted);
 	[[nodiscard]] QSize dprSize(const QImage &image) const;
-
-	const QString _panelTrayIconName;
-	const QString _mutePanelTrayIconName;
-	const QString _attentionPanelTrayIconName;
-	const QString _telegramPanelTrayIconName;
-	const QString _telegramMutePanelTrayIconName;
-	const QString _telegramAttentionPanelTrayIconName;
 
 	const int _iconSizes[7];
 
@@ -72,54 +84,41 @@ private:
 	QIcon _trayIcon;
 	QIcon _systemIcon;
 	QString _themeName;
+	bool _monochrome;
 	int _customId = 0;
 	bool _counterDisabled = false;
+	bool _telegramPanelIcon = false;
 
 };
 
 IconGraphic::IconGraphic()
-: _panelTrayIconName("kotatogram-panel")
-, _mutePanelTrayIconName("kotatogram-mute-panel")
-, _attentionPanelTrayIconName("kotatogram-attention-panel")
-, _telegramPanelTrayIconName("telegram-panel")
-, _telegramMutePanelTrayIconName("telegram-mute-panel")
-, _telegramAttentionPanelTrayIconName("telegram-attention-panel")
-, _iconSizes{ 16, 22, 32, 48, 64, 128, 256 } {
+: _iconSizes{ 16, 22, 32, 48, 64, 128, 256 } {
 }
 
 IconGraphic::~IconGraphic() = default;
 
-QString IconGraphic::panelIconName(int counter, bool muted) const {
-	const auto useTelegramPanelIcon = ::Kotato::JsonSettings::GetBool("use_telegram_panel_icon");
-	return (counter > 0)
-		? (muted
-			? (useTelegramPanelIcon
-				? _telegramMutePanelTrayIconName
-				: _mutePanelTrayIconName)
-			: (useTelegramPanelIcon
-				? _telegramAttentionPanelTrayIconName
-				: _attentionPanelTrayIconName))
-		: (useTelegramPanelIcon
-			? _telegramPanelTrayIconName
-			: _panelTrayIconName);
-}
-
 QIcon IconGraphic::systemIcon(
 		const QString &iconThemeName,
+		bool monochrome,
 		int counter,
 		bool muted) const {
 	if (iconThemeName == _themeName
+		&& monochrome == _monochrome
 		&& (counter > 0) == (_count > 0)
-		&& muted == _muted) {
+		&& muted == _muted
+		&& ::Kotato::JsonSettings::GetBool("use_telegram_panel_icon") == _telegramPanelIcon) {
 		return _systemIcon;
 	}
 
 	const auto candidates = {
-		panelIconName(counter, muted),
+		monochrome ? PanelIconName(counter, muted) : QString(),
 		base::IconName(),
 	};
 
 	for (const auto &candidate : candidates) {
+		if (candidate.isEmpty()) {
+			continue;
+		}
 		const auto icon = QIcon::fromTheme(candidate);
 		if (icon.name() == candidate) {
 			return icon;
@@ -136,13 +135,6 @@ int IconGraphic::counterSlice(int counter) const {
 		: counter;
 }
 
-bool IconGraphic::useIconFromTheme(const QString &iconName) const {
-	return ::Kotato::JsonSettings::GetBool("disable_tray_counter")
-		&& !QFileInfo::exists(cWorkingDir() + "tdata/icon.png")
-		&& ::Kotato::JsonSettings::GetInt("custom_app_icon") == 0
-		&& !iconName.isEmpty();
-}
-
 bool IconGraphic::isRefreshNeeded(
 		const QIcon &systemIcon,
 		const QString &iconThemeName,
@@ -151,25 +143,30 @@ bool IconGraphic::isRefreshNeeded(
 	return _trayIcon.isNull()
 		|| iconThemeName != _themeName
 		|| systemIcon.name() != _systemIcon.name()
-		|| muted != _muted
-		|| counterSlice(counter) != _count
+		|| (systemIcon.name() != PanelIconName(counter, muted)
+			? muted != _muted || counterSlice(counter) != _count
+			: false)
 		|| ::Kotato::JsonSettings::GetInt("custom_app_icon") != _customId
-		|| ::Kotato::JsonSettings::GetBool("disable_tray_counter") != _counterDisabled;
+		|| ::Kotato::JsonSettings::GetBool("disable_tray_counter") != _counterDisabled
+		|| ::Kotato::JsonSettings::GetBool("use_telegram_panel_icon") != _telegramPanelIcon;
 }
 
 void IconGraphic::updateIconRegenerationNeeded(
 		const QIcon &icon,
 		const QIcon &systemIcon,
 		const QString &iconThemeName,
+		bool monochrome,
 		int counter,
 		bool muted) {
 	_trayIcon = icon;
 	_systemIcon = systemIcon;
 	_themeName = iconThemeName;
+	_monochrome = monochrome;
 	_count = counterSlice(counter);
 	_muted = muted;
 	_customId = ::Kotato::JsonSettings::GetInt("custom_app_icon");
 	_counterDisabled = ::Kotato::JsonSettings::GetBool("disable_tray_counter");
+	_telegramPanelIcon = ::Kotato::JsonSettings::GetBool("use_telegram_panel_icon");
 }
 
 QSize IconGraphic::dprSize(const QImage &image) const {
@@ -179,17 +176,19 @@ QSize IconGraphic::dprSize(const QImage &image) const {
 QIcon IconGraphic::trayIcon(
 		const QIcon &systemIcon,
 		const QString &iconThemeName,
+		bool monochrome,
 		int counter,
 		bool muted) {
 	if (!isRefreshNeeded(systemIcon, iconThemeName, counter, muted)) {
 		return _trayIcon;
 	}
 
-	if (useIconFromTheme(systemIcon.name())) {
+	if (systemIcon.name() == PanelIconName(counter, muted)) {
 		updateIconRegenerationNeeded(
 			systemIcon,
 			systemIcon,
 			iconThemeName,
+			monochrome,
 			counter,
 			muted);
 
@@ -263,6 +262,7 @@ QIcon IconGraphic::trayIcon(
 		result,
 		systemIcon,
 		iconThemeName,
+		monochrome,
 		counter,
 		muted);
 
@@ -326,6 +326,7 @@ void Tray::createIcon() {
 		};
 
 		const auto iconThemeName = QIcon::themeName();
+		const auto monochrome = Core::App().settings().trayIconMonochrome();
 		const auto counter = Core::App().unreadBadge();
 		const auto muted = Core::App().unreadBadgeMuted();
 		static const auto workdir = QDir::toNativeSeparators(QDir::cleanPath(cWorkingDir()));
@@ -334,9 +335,11 @@ void Tray::createIcon() {
 		_icon->setIcon(_iconGraphic->trayIcon(
 			_iconGraphic->systemIcon(
 				iconThemeName,
+				monochrome,
 				counter,
 				muted),
 			iconThemeName,
+			monochrome,
 			counter,
 			muted));
 		_icon->setToolTip(AppName.utf16()+"\n"+workdir);
@@ -379,9 +382,11 @@ void Tray::updateIcon() {
 	}
 	const auto counter = Core::App().unreadBadge();
 	const auto muted = Core::App().unreadBadgeMuted();
+	const auto monochrome = Core::App().settings().trayIconMonochrome();
 	const auto iconThemeName = QIcon::themeName();
 	const auto systemIcon = _iconGraphic->systemIcon(
 		iconThemeName,
+		monochrome,
 		counter,
 		muted);
 
@@ -393,6 +398,7 @@ void Tray::updateIcon() {
 		_icon->setIcon(_iconGraphic->trayIcon(
 			systemIcon,
 			iconThemeName,
+			monochrome,
 			counter,
 			muted));
 	}
@@ -472,5 +478,12 @@ rpl::lifetime &Tray::lifetime() {
 }
 
 Tray::~Tray() = default;
+
+bool HasMonochromeSetting() {
+	return QIcon::hasThemeIcon(
+		PanelIconName(
+			Core::App().unreadBadge(),
+			Core::App().unreadBadgeMuted()));
+}
 
 } // namespace Platform

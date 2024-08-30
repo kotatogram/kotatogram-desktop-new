@@ -7,20 +7,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/ui_integration.h"
 
-#include "api/api_text_entities.h"
 #include "kotato/kotato_settings.h"
+#include "api/api_text_entities.h"
 #include "core/local_url_handlers.h"
 #include "core/file_utilities.h"
 #include "core/application.h"
 #include "core/sandbox.h"
 #include "core/click_handler_types.h"
+#include "data/components/sponsored_messages.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "data/data_session.h"
-#include "data/data_sponsored_messages.h"
+#include "iv/iv_instance.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/basic_click_handlers.h"
 #include "ui/emoji_config.h"
-#include "ui/style/style_core_custom_font.h"
 #include "lang/lang_keys.h"
 #include "platform/platform_specific.h"
 #include "boxes/url_auth_box.h"
@@ -144,18 +144,6 @@ void UiIntegration::activationFromTopPanel() {
 	Platform::IgnoreApplicationActivationRightNow();
 }
 
-style::CustomFontSettings UiIntegration::fontSettings() {
-	return {
-		::Kotato::JsonSettings::GetString("fonts/main"),
-		::Kotato::JsonSettings::GetString("fonts/semibold"),
-		::Kotato::JsonSettings::GetString("fonts/monospaced"),
-		::Kotato::JsonSettings::GetInt("fonts/size"),
-		::Kotato::JsonSettings::GetBool("fonts/semibold_is_bold"),
-		::Kotato::JsonSettings::GetBool("fonts/use_system_font"),
-		::Kotato::JsonSettings::GetBool("fonts/use_original_metrics"),
-	};
-}
-
 bool UiIntegration::screenIsLocked() {
 	return Core::App().screenIsLocked();
 }
@@ -252,6 +240,13 @@ bool UiIntegration::handleUrlClick(
 	} else if (local.startsWith(u"internal:"_q, Qt::CaseInsensitive)) {
 		Core::App().openInternalUrl(local, context);
 		return true;
+	} else if (Iv::PreferForUri(url)
+		&& !context.value<ClickHandlerContext>().ignoreIv) {
+		const auto my = context.value<ClickHandlerContext>();
+		if (const auto controller = my.sessionWindow.get()) {
+			Core::App().iv().openWithIvPreferred(controller, url, context);
+			return true;
+		}
 	}
 
 	auto parsed = UrlForAutoLogin(url);
@@ -302,7 +297,7 @@ bool UiIntegration::allowClickHandlerActivation(
 		const ClickContext &context) {
 	const auto my = context.other.value<ClickHandlerContext>();
 	if (const auto window = my.sessionWindow.get()) {
-		window->session().data().sponsoredMessages().clicked(my.itemId);
+		window->session().sponsoredMessages().clicked(my.itemId);
 	}
 	return true;
 }

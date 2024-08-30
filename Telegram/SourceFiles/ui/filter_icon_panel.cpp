@@ -422,7 +422,11 @@ void FilterIconPanel::startShowAnimation() {
 
 		_showAnimation = std::make_unique<Ui::PanelAnimation>(st::emojiPanAnimation, Ui::PanelAnimation::Origin::TopRight);
 		auto inner = rect().marginsRemoved(st::emojiPanMargins);
-		_showAnimation->setFinalImage(std::move(image), QRect(inner.topLeft() * cIntRetinaFactor(), inner.size() * cIntRetinaFactor()));
+		_showAnimation->setFinalImage(
+			std::move(image),
+			QRect(
+				inner.topLeft() * style::DevicePixelRatio(),
+				inner.size() * style::DevicePixelRatio()));
 		_showAnimation->setCornerMasks(Images::CornersMask(ImageRoundRadius::Small));
 		_showAnimation->start();
 	}
@@ -440,9 +444,9 @@ QImage FilterIconPanel::grabForAnimation() {
 	Ui::SendPendingMoveResizeEvents(this);
 
 	auto result = QImage(
-		size() * cIntRetinaFactor(),
+		size() * style::DevicePixelRatio(),
 		QImage::Format_ARGB32_Premultiplied);
-	result.setDevicePixelRatio(cRetinaFactor());
+	result.setDevicePixelRatio(style::DevicePixelRatio());
 	result.fill(Qt::transparent);
 	if (_inner) {
 		QPainter p(&result);

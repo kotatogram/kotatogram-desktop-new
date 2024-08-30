@@ -9,7 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "styles/style_window.h"
 #include "platform/linux/specific_linux.h"
-#include "platform/linux/linux_wayland_integration.h"
 #include "history/history.h"
 #include "history/history_widget.h"
 #include "history/history_inner_widget.h"
@@ -48,7 +47,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Platform {
 namespace {
 
-using internal::WaylandIntegration;
 using WorkMode = Core::Settings::WorkMode;
 
 #ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
@@ -99,50 +97,9 @@ void XCBSkipTaskbar(QWindow *window, bool skip) {
 			| XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
 		reinterpret_cast<const char*>(&xev));
 }
-
-void XCBSetDesktopFileName(QWindow *window) {
-	const auto connection = base::Platform::XCB::GetConnectionFromQt();
-	if (!connection) {
-		return;
-	}
-
-	const auto utf8Atom = base::Platform::XCB::GetAtom(
-		connection,
-		"UTF8_STRING");
-
-	if (!utf8Atom.has_value()) {
-		return;
-	}
-
-	const auto filenameAtoms = {
-		base::Platform::XCB::GetAtom(connection, "_GTK_APPLICATION_ID"),
-		base::Platform::XCB::GetAtom(connection, "_KDE_NET_WM_DESKTOP_FILE"),
-	};
-
-	const auto filename = QGuiApplication::desktopFileName().toUtf8();
-
-	for (const auto atom : filenameAtoms) {
-		if (atom.has_value()) {
-			xcb_change_property(
-				connection,
-				XCB_PROP_MODE_REPLACE,
-				window->winId(),
-				*atom,
-				*utf8Atom,
-				8,
-				filename.size(),
-				filename.data());
-		}
-	}
-}
 #endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
 
 void SkipTaskbar(QWindow *window, bool skip) {
-	if (const auto integration = WaylandIntegration::Instance()) {
-		integration->skipTaskbar(window, skip);
-		return;
-	}
-
 #ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
 	if (IsX11()) {
 		XCBSkipTaskbar(window, skip);
@@ -206,10 +163,6 @@ void MainWindow::initHook() {
 		}
 		return base::EventFilterResult::Continue;
 	});
-
-#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
-	XCBSetDesktopFileName(windowHandle());
-#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
 }
 
 void MainWindow::workmodeUpdated(Core::Settings::WorkMode mode) {

@@ -305,7 +305,7 @@ QSize Gif::countOptimalSize() {
 		auto reply = _parent->Get<Reply>();
 		auto forwarded = item->Get<HistoryMessageForwarded>();
 		if (forwarded) {
-			forwarded->create(via);
+			forwarded->create(via, item);
 		}
 		maxWidth += additionalWidth(reply, via, forwarded);
 		accumulate_max(maxWidth, _parent->reactionsOptimalWidth());
@@ -548,7 +548,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	if (streamed && !skipDrawingContent && !fullHiddenBySpoiler) {
 		auto paused = context.paused;
 		auto request = ::Media::Streaming::FrameRequest{
-			.outer = QSize(usew, painth) * cIntRetinaFactor(),
+			.outer = QSize(usew, painth) * style::DevicePixelRatio(),
 			.blurredBackground = true,
 		};
 		if (isRound) {
@@ -1396,8 +1396,8 @@ void Gif::drawGrouped(
 			{ originalWidth, originalHeight },
 			{ geometry.width(), geometry.height() });
 		auto request = ::Media::Streaming::FrameRequest{
-			.resize = pixSize * cIntRetinaFactor(),
-			.outer = geometry.size() * cIntRetinaFactor(),
+			.resize = pixSize * style::DevicePixelRatio(),
+			.outer = geometry.size() * style::DevicePixelRatio(),
 			.rounding = MediaRoundingMask(rounding),
 		};
 		if (activeOwnPlaying->instance.playerLocked()) {
@@ -2075,6 +2075,7 @@ bool Gif::needCornerStatusDisplay() const {
 void Gif::ensureTranscribeButton() const {
 	if (_data->isVideoMessage()
 		&& !_parent->data()->media()->ttlSeconds()
+		&& !_parent->data()->isScheduled()
 		&& (_data->session().premium()
 			|| _data->session().api().transcribes().trialsSupport())) {
 		if (!_transcribe) {

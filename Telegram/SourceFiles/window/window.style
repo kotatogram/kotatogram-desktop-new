@@ -322,18 +322,22 @@ windowFilterChatsSectionSubtitle: FlatLabel(defaultFlatLabel) {
 	textFg: searchedBarFg;
 }
 windowFilterChatsSectionSubtitlePadding: margins(22px, 5px, 22px, 5px);
-
-windowArchiveToast: Toast(defaultToast) {
-	minWidth: boxWideWidth;
-	maxWidth: boxWideWidth;
-}
-
 windowFilterChatNameStyle: TextStyle(defaultTextStyle) {
 	font: font(11px semibold);
 }
 windowFilterChatDescStyle: TextStyle(defaultTextStyle) {
 	font: font(11px);
 }
+
+windowArchiveToast: Toast(defaultToast) {
+	minWidth: boxWideWidth;
+	maxWidth: boxWideWidth;
+}
+
+ivWidthMin: 380px;
+ivHeightMin: 480px;
+ivWidthDefault: 600px;
+ivHeightDefault: 800px;
 
 // Windows specific
 

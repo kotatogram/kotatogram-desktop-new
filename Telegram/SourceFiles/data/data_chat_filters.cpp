@@ -37,7 +37,7 @@ constexpr auto kLoadExceptionsAfter = 100;
 constexpr auto kLoadExceptionsPerRequest = 100;
 
 [[nodiscard]] crl::time RequestUpdatesEach(not_null<Session*> owner) {
-	const auto appConfig = &owner->session().account().appConfig();
+	const auto appConfig = &owner->session().appConfig();
 	return appConfig->get<int>(u"chatlist_update_period"_q, 3600)
 		* crl::time(1000);
 }
@@ -685,7 +685,7 @@ not_null<Dialogs::MainList*> ChatFilters::chatsList(FilterId filterId) {
 	auto &pointer = _chatsLists[filterId];
 	if (!pointer) {
 		auto limit = rpl::single(rpl::empty_value()) | rpl::then(
-			_owner->session().account().appConfig().refreshed()
+			_owner->session().appConfig().refreshed()
 		) | rpl::map([=] {
 			return _owner->pinnedChatsLimit(filterId);
 		});

@@ -35,9 +35,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/style/style_palette_colorizer.h"
 #include "ui/ui_utility.h"
 #include "ui/boxes/confirm_box.h"
-#include "webview/webview_interface.h"
 #include "boxes/background_box.h"
 #include "core/application.h"
+#include "webview/webview_common.h"
 #include "styles/style_widgets.h"
 #include "styles/style_chat.h"
 
@@ -450,7 +450,7 @@ bool InitializeFromSaved(Saved &&saved) {
 		image = std::move(image).convertToFormat(
 			QImage::Format_ARGB32_Premultiplied);
 	}
-	image.setDevicePixelRatio(cRetinaFactor());
+	image.setDevicePixelRatio(style::DevicePixelRatio());
 	if (Data::IsLegacy3DefaultWallPaper(paper)) {
 		return Images::DitherImage(std::move(image));
 	}
@@ -585,11 +585,11 @@ void ChatBackground::checkUploadWallPaper() {
 	}
 
 	const auto ready = PrepareWallPaper(_session->mainDcId(), _original);
-	const auto documentId = ready.id;
+	const auto documentId = ready->id;
 	_wallPaperUploadId = FullMsgId(
 		_session->userPeerId(),
 		_session->data().nextLocalMessageId());
-	_session->uploader().uploadMedia(_wallPaperUploadId, ready);
+	_session->uploader().upload(_wallPaperUploadId, ready);
 	if (_wallPaperUploadLifetime) {
 		return;
 	}
@@ -662,7 +662,7 @@ void ChatBackground::set(const Data::WallPaper &paper, QImage image) {
 	} else {
 		if (Data::IsLegacy1DefaultWallPaper(_paper)) {
 			image.load(u":/gui/art/bg_initial.jpg"_q);
-			const auto scale = cScale() * cIntRetinaFactor();
+			const auto scale = cScale() * style::DevicePixelRatio();
 			if (scale != 100) {
 				image = image.scaledToWidth(
 					style::ConvertScale(image.width(), scale),
@@ -1529,7 +1529,9 @@ bool ReadPaletteValues(const QByteArray &content, Fn<bool(QLatin1String name, QL
 	};
 }
 
-SendMediaReady PrepareWallPaper(MTP::DcId dcId, const QImage &image) {
+std::shared_ptr<FilePrepareResult> PrepareWallPaper(
+		MTP::DcId dcId,
+		const QImage &image) {
 	PreparedPhotoThumbs thumbnails;
 	QVector<MTPPhotoSize> sizes;
 
@@ -1555,6 +1557,7 @@ SendMediaReady PrepareWallPaper(MTP::DcId dcId, const QImage &image) {
 	};
 	push("s", scaled(320));
 
+	const auto id = base::RandomValue<DocumentId>();
 	const auto filename = u"wallpaper.jpg"_q;
 	auto attributes = QVector<MTPDocumentAttribute>(
 		1,
@@ -1562,8 +1565,20 @@ SendMediaReady PrepareWallPaper(MTP::DcId dcId, const QImage &image) {
 	attributes.push_back(MTP_documentAttributeImageSize(
 		MTP_int(image.width()),
 		MTP_int(image.height())));
-	const auto id = base::RandomValue<DocumentId>();
-	const auto document = MTP_document(
+
+	auto result = MakePreparedFile({
+		.id = id,
+		.type = SendMediaType::ThemeFile,
+	});
+	result->filename = filename;
+	result->content = jpeg;
+	result->filesize = jpeg.size();
+	result->setFileData(jpeg);
+	if (thumbnails.empty()) {
+		result->thumb = thumbnails.front().second.image;
+		result->thumbbytes = thumbnails.front().second.bytes;
+	}
+	result->document = MTP_document(
 		MTP_flags(0),
 		MTP_long(id),
 		MTP_long(0),
@@ -1575,21 +1590,7 @@ SendMediaReady PrepareWallPaper(MTP::DcId dcId, const QImage &image) {
 		MTPVector<MTPVideoSize>(),
 		MTP_int(dcId),
 		MTP_vector<MTPDocumentAttribute>(attributes));
-
-	return SendMediaReady(
-		SendMediaType::ThemeFile,
-		QString(), // filepath
-		filename,
-		jpeg.size(),
-		jpeg,
-		id,
-		0,
-		QString(),
-		PeerId(),
-		MTP_photoEmpty(MTP_long(0)),
-		thumbnails,
-		document,
-		QByteArray());
+	return result;
 }
 
 std::unique_ptr<Ui::ChatTheme> DefaultChatThemeOn(rpl::lifetime &lifetime) {

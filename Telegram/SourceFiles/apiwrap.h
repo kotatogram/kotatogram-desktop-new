@@ -53,6 +53,7 @@ class Key;
 
 namespace Ui {
 struct PreparedList;
+class Show;
 } // namespace Ui
 
 namespace Api {
@@ -69,6 +70,7 @@ class SensitiveContent;
 class GlobalPrivacy;
 class UserPrivacy;
 class InviteLinks;
+class ChatLinks;
 class ViewsManager;
 class ConfirmPhone;
 class PeerPhoto;
@@ -272,6 +274,10 @@ public:
 		Fn<void(not_null<PeerData*>, MsgId)> callback);
 
 	using SliceType = Data::LoadDirection;
+	void requestHistory(
+		not_null<History*> history,
+		MsgId messageId,
+		SliceType slice);
 	void requestSharedMedia(
 		not_null<PeerData*> peer,
 		MsgId topicRootId,
@@ -349,6 +355,7 @@ public:
 		Fn<void(const MTPUpdates &, mtpRequestId)> doneCallback = nullptr,
 		bool forwarding = false);
 	void sendBotStart(
+		std::shared_ptr<Ui::Show> show,
 		not_null<UserData*> bot,
 		PeerData *chat = nullptr,
 		const QString &startTokenForChat = QString());
@@ -391,6 +398,7 @@ public:
 	[[nodiscard]] Api::GlobalPrivacy &globalPrivacy();
 	[[nodiscard]] Api::UserPrivacy &userPrivacy();
 	[[nodiscard]] Api::InviteLinks &inviteLinks();
+	[[nodiscard]] Api::ChatLinks &chatLinks();
 	[[nodiscard]] Api::ViewsManager &views();
 	[[nodiscard]] Api::ConfirmPhone &confirmPhone();
 	[[nodiscard]] Api::PeerPhoto &peerPhoto();
@@ -514,7 +522,8 @@ private:
 		not_null<PeerData*> peer,
 		bool justClear,
 		bool revoke);
-	void applyAffectedMessages(const MTPmessages_AffectedMessages &result) const;
+	void applyAffectedMessages(
+		const MTPmessages_AffectedMessages &result) const;
 
 	void deleteAllFromParticipantSend(
 		not_null<ChannelData*> channel,
@@ -648,6 +657,17 @@ private:
 	};
 	base::flat_set<SharedMediaRequest> _sharedMediaRequests;
 
+	struct HistoryRequest {
+		not_null<PeerData*> peer;
+		MsgId aroundId = 0;
+		SliceType sliceType = {};
+
+		friend inline auto operator<=>(
+			const HistoryRequest&,
+			const HistoryRequest&) = default;
+	};
+	base::flat_set<HistoryRequest> _historyRequests;
+
 	std::unique_ptr<DialogsLoadState> _dialogsLoadState;
 	TimeId _dialogsLoadTill = 0;
 	rpl::variable<bool> _dialogsLoadMayBlockByDate = false;
@@ -710,6 +730,7 @@ private:
 	const std::unique_ptr<Api::GlobalPrivacy> _globalPrivacy;
 	const std::unique_ptr<Api::UserPrivacy> _userPrivacy;
 	const std::unique_ptr<Api::InviteLinks> _inviteLinks;
+	const std::unique_ptr<Api::ChatLinks> _chatLinks;
 	const std::unique_ptr<Api::ViewsManager> _views;
 	const std::unique_ptr<Api::ConfirmPhone> _confirmPhone;
 	const std::unique_ptr<Api::PeerPhoto> _peerPhoto;

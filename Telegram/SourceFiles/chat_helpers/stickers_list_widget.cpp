@@ -553,6 +553,15 @@ void StickersListWidget::sendSearchRequest() {
 	}
 
 	_search->setLoading(true);
+
+	if (_searchQuery == Ui::PremiumGroupFakeEmoticon()) {
+		_search->setLoading(false);
+		_searchRequestId = 0;
+		_searchCache.emplace(_searchQuery, std::vector<uint64>());
+		showSearchResults();
+		return;
+	}
+
 	const auto hash = uint64(0);
 	_searchRequestId = _api.request(MTPmessages_SearchStickerSets(
 		MTP_flags(0),
@@ -576,10 +585,14 @@ void StickersListWidget::searchForSets(
 		return;
 	}
 
-	_filteredStickers = session().data().stickers().getListByEmoji(
-		std::move(emoji),
-		0,
-		true);
+	if (query == Ui::PremiumGroupFakeEmoticon()) {
+		_filteredStickers = session().data().stickers().getPremiumList(0);
+	} else {
+		_filteredStickers = session().data().stickers().getListByEmoji(
+			std::move(emoji),
+			0,
+			true);
+	}
 	if (_searchQuery != cleaned) {
 		_search->setLoading(false);
 		if (const auto requestId = base::take(_searchRequestId)) {
@@ -1193,7 +1206,7 @@ void StickersListWidget::setupLottie(Set &set, int section, int index) {
 		set.lottiePlayer.get(),
 		sticker.documentMedia.get(),
 		StickerLottieSize::StickersPanel,
-		boundingBoxSize() * cIntRetinaFactor());
+		boundingBoxSize() * style::DevicePixelRatio());
 }
 
 void StickersListWidget::setupWebm(Set &set, int section, int index) {
@@ -1391,14 +1404,14 @@ void StickersListWidget::paintSticker(
 	auto lottieFrame = QImage();
 	if (sticker.lottie && sticker.lottie->ready()) {
 		auto request = Lottie::FrameRequest();
-		request.box = boundingBoxSize() * cIntRetinaFactor();
+		request.box = boundingBoxSize() * style::DevicePixelRatio();
 		lottieFrame = sticker.lottie->frame(request);
 		p.drawImage(
-			QRect(ppos, lottieFrame.size() / cIntRetinaFactor()),
+			QRect(ppos, lottieFrame.size() / style::DevicePixelRatio()),
 			lottieFrame);
 		if (sticker.savedFrame.isNull()) {
 			sticker.savedFrame = lottieFrame;
-			sticker.savedFrame.setDevicePixelRatio(cRetinaFactor());
+			sticker.savedFrame.setDevicePixelRatio(style::DevicePixelRatio());
 			sticker.savedFrameFor = _singleSize;
 		}
 		set.lottiePlayer->unpause(sticker.lottie);
@@ -1408,7 +1421,7 @@ void StickersListWidget::paintSticker(
 			paused ? 0 : now);
 		if (sticker.savedFrame.isNull()) {
 			sticker.savedFrame = frame;
-			sticker.savedFrame.setDevicePixelRatio(cRetinaFactor());
+			sticker.savedFrame.setDevicePixelRatio(style::DevicePixelRatio());
 			sticker.savedFrameFor = _singleSize;
 		}
 		p.drawImage(ppos, frame);
@@ -1660,7 +1673,7 @@ base::unique_qptr<Ui::PopupMenu> StickersListWidget::fillContextMenu(
 		menu,
 		type,
 		SendMenu::DefaultSilentCallback(send),
-		SendMenu::DefaultScheduleCallback(this, type, send),
+		SendMenu::DefaultScheduleCallback(_show, type, send),
 		SendMenu::DefaultWhenOnlineCallback(send),
 		icons);
 
@@ -2611,15 +2624,20 @@ void StickersListWidget::beforeHiding() {
 
 void StickersListWidget::setupSearch() {
 	const auto session = &_show->session();
+	const auto type = (_mode == Mode::UserpicBuilder)
+		? TabbedSearchType::ProfilePhoto
+		: (_mode == Mode::ChatIntro)
+		? TabbedSearchType::Greeting
+		: TabbedSearchType::Stickers;
 	_search = MakeSearch(this, st(), [=](std::vector<QString> &&query) {
 		auto set = base::flat_set<EmojiPtr>();
 		auto text = ranges::accumulate(query, QString(), [](
-				QString a,
-				QString b) {
+			QString a,
+			QString b) {
 			return a.isEmpty() ? b : (a + ' ' + b);
 		});
 		searchForSets(std::move(text), SearchEmoji(query, set));
-	}, session, false, (_mode == Mode::UserpicBuilder));
+	}, session, type);
 }
 
 void StickersListWidget::displaySet(uint64 setId) {

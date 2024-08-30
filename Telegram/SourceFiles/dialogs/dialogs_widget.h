@@ -75,6 +75,7 @@ class Key;
 struct ChosenRow;
 class InnerWidget;
 enum class SearchRequestType;
+class Suggestions;
 
 class Widget final : public Window::AbstractSectionWidget {
 public:
@@ -98,11 +99,13 @@ public:
 		not_null<Data::Forum*> forum,
 		const Window::SectionShow &params);
 	void searchInChat(Key chat);
-	void setInnerFocus();
+	void setInnerFocus(bool unfocusSearch = false);
+	[[nodiscard]] bool searchHasFocus() const;
 
 	void jumpToTop(bool belowPinned = false);
 	void raiseWithTooltip();
 
+	[[nodiscard]] QPixmap grabNonNarrowScrollFrame();
 	void startWidthAnimation();
 	void stopWidthAnimation();
 
@@ -123,12 +126,16 @@ public:
 
 	[[nodiscard]] RowDescriptor resolveChatNext(RowDescriptor from = {}) const;
 	[[nodiscard]] RowDescriptor resolveChatPrevious(RowDescriptor from = {}) const;
+	void updateHasFocus(not_null<QWidget*> focused);
 
 	// Float player interface.
 	bool floatPlayerHandleWheelEvent(QEvent *e) override;
 	QRect floatPlayerAvailableRect() override;
 
 	bool cancelSearch();
+	bool cancelSearchByMouseBack();
+
+	QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
 
 	~Widget();
 
@@ -139,13 +146,14 @@ protected:
 	void dropEvent(QDropEvent *e) override;
 	void resizeEvent(QResizeEvent *e) override;
 	void keyPressEvent(QKeyEvent *e) override;
+	void inputMethodEvent(QInputMethodEvent *e) override;
 	void paintEvent(QPaintEvent *e) override;
 
 private:
 	void chosenRow(const ChosenRow &row);
 	void listScrollUpdated();
 	void cancelSearchInChat();
-	void filterCursorMoved();
+	void searchCursorMoved();
 	void completeHashtag(QString tag);
 
 	[[nodiscard]] QString currentSearchQuery() const;
@@ -223,7 +231,8 @@ private:
 	void closeChildList(anim::type animated);
 
 	void fullSearchRefreshOn(rpl::producer<> events);
-	void applyFilterUpdate(bool force = false);
+	void updateCancelSearch();
+	void applySearchUpdate(bool force = false);
 	void refreshLoadMoreButton(bool mayBlock, bool isBlocked);
 	void loadMoreBlockedByDate();
 
@@ -233,6 +242,7 @@ private:
 		mtpRequestId requestId);
 	void peopleFailed(const MTP::Error &error, mtpRequestId requestId);
 
+	void updateForceDisplayWide();
 	void scrollToDefault(bool verytop = false);
 	void scrollToDefaultChecked(bool verytop = false);
 	void setupScrollUpButton();
@@ -240,6 +250,12 @@ private:
 	void startScrollUpButtonAnimation(bool shown);
 	void updateScrollUpPosition();
 	void updateLockUnlockPosition();
+	void updateSuggestions(anim::type animated);
+	void processSearchFocusChange();
+
+	[[nodiscard]] bool redirectToSearchPossible() const;
+	[[nodiscard]] bool redirectKeyToSearch(QKeyEvent *e) const;
+	[[nodiscard]] bool redirectImeToSearch() const;
 
 	MTP::Sender _api;
 
@@ -255,8 +271,8 @@ private:
 		object_ptr<Ui::IconButton> toggle;
 		object_ptr<Ui::AbstractButton> under;
 	} _mainMenu;
-	object_ptr<Ui::IconButton> _searchForNarrowFilters;
-	object_ptr<Ui::InputField> _filter;
+	object_ptr<Ui::IconButton> _searchForNarrowLayout;
+	object_ptr<Ui::InputField> _search;
 	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _chooseFromUser;
 	object_ptr<Ui::FadeWrapScaled<Ui::IconButton>> _jumpToDate;
 	object_ptr<Ui::CrossButton> _cancelSearch;
@@ -271,6 +287,8 @@ private:
 
 	object_ptr<Ui::ElasticScroll> _scroll;
 	QPointer<InnerWidget> _inner;
+	std::unique_ptr<Suggestions> _suggestions;
+	std::vector<std::unique_ptr<Suggestions>> _hidingSuggestions;
 	class BottomButton;
 	object_ptr<BottomButton> _updateTelegram = { nullptr };
 	object_ptr<BottomButton> _loadMoreChats = { nullptr };
@@ -289,12 +307,14 @@ private:
 
 	Data::Folder *_openedFolder = nullptr;
 	Data::Forum *_openedForum = nullptr;
-	Dialogs::Key _searchInChat;
+	Key _searchInChat;
 	History *_searchInMigrated = nullptr;
 	PeerData *_searchFromAuthor = nullptr;
 	std::vector<Data::ReactionId> _searchTags;
 	rpl::lifetime _searchTagsLifetime;
-	QString _lastFilterText;
+	QString _lastSearchText;
+	bool _searchSuggestionsLocked = false;
+	bool _searchHasFocus = false;
 
 	rpl::event_stream<rpl::producer<Stories::Content>> _storiesContents;
 	base::flat_map<PeerId, Ui::PeerUserpicView> _storiesUserpicsViewsHidden;
@@ -306,6 +326,7 @@ private:
 	int _storiesExplicitExpandScrollTop = 0;
 	int _aboveScrollAdded = 0;
 	bool _storiesExplicitExpand = false;
+	bool _postponeProcessSearchFocusChange = false;
 
 	base::Timer _searchTimer;
 

@@ -716,8 +716,11 @@ void Notification::prepareActionsCache() {
 	auto replyRight = _replyPadding - st::notifyBorderWidth;
 	auto actionsCacheWidth = _reply->width() + replyRight + fadeWidth;
 	auto actionsCacheHeight = height() - actionsTop - st::notifyBorderWidth;
-	auto actionsCacheImg = QImage(QSize(actionsCacheWidth, actionsCacheHeight) * cIntRetinaFactor(), QImage::Format_ARGB32_Premultiplied);
-	actionsCacheImg.setDevicePixelRatio(cRetinaFactor());
+	auto actionsCacheImg = QImage(
+		QSize(actionsCacheWidth, actionsCacheHeight)
+			* style::DevicePixelRatio(),
+		QImage::Format_ARGB32_Premultiplied);
+	actionsCacheImg.setDevicePixelRatio(style::DevicePixelRatio());
 	actionsCacheImg.fill(Qt::transparent);
 	{
 		Painter p(&actionsCacheImg);
@@ -859,8 +862,10 @@ void Notification::updateNotifyDisplay() {
 	_hideReplyButton = options.hideReplyButton;
 
 	int32 w = width(), h = height();
-	QImage img(w * cIntRetinaFactor(), h * cIntRetinaFactor(), QImage::Format_ARGB32_Premultiplied);
-	img.setDevicePixelRatio(cRetinaFactor());
+	auto img = QImage(
+		size() * style::DevicePixelRatio(),
+		QImage::Format_ARGB32_Premultiplied);
+	img.setDevicePixelRatio(style::DevicePixelRatio());
 	img.fill(st::notificationBg->c);
 
 	{
@@ -894,7 +899,8 @@ void Notification::updateNotifyDisplay() {
 		if (!options.hideNameAndPhoto) {
 			if (_fromScheduled) {
 				static const auto emoji = Ui::Emoji::Find(QString::fromUtf8("\xF0\x9F\x93\x85"));
-				const auto size = Ui::Emoji::GetSizeNormal() / cIntRetinaFactor();
+				const auto size = Ui::Emoji::GetSizeNormal()
+					/ style::DevicePixelRatio();
 				const auto top = rectForName.top() + (st::semiboldFont->height - size) / 2;
 				Ui::Emoji::Draw(p, emoji, Ui::Emoji::GetSizeNormal(), rectForName.left(), top);
 				rectForName.setLeft(rectForName.left() + size + st::semiboldFont->spacew);

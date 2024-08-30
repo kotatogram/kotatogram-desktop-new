@@ -156,9 +156,9 @@ int BackgroundSelector::resizeGetHeight(int newWidth) {
 void BackgroundSelector::updateThumbnail() {
 	const auto size = _thumbnailSize;
 	auto back = QImage(
-		QSize(size, size) * cIntRetinaFactor(),
+		QSize(size, size) * style::DevicePixelRatio(),
 		QImage::Format_ARGB32_Premultiplied);
-	back.setDevicePixelRatio(cRetinaFactor());
+	back.setDevicePixelRatio(style::DevicePixelRatio());
 	{
 		Painter p(&back);
 		PainterHighQualityEnabler hq(p);
@@ -171,7 +171,7 @@ void BackgroundSelector::updateThumbnail() {
 	}
 	_thumbnail = Ui::PixmapFromImage(
 		Images::Round(std::move(back), ImageRoundRadius::Small));
-	_thumbnail.setDevicePixelRatio(cRetinaFactor());
+	_thumbnail.setDevicePixelRatio(style::DevicePixelRatio());
 	update();
 }
 
@@ -385,7 +385,7 @@ bool CopyColorsToPalette(
 	});
 }
 
-SendMediaReady PrepareThemeMedia(
+std::shared_ptr<FilePrepareResult> PrepareThemeMedia(
 		MTP::DcId dcId,
 		const QString &name,
 		const QByteArray &content) {
@@ -404,28 +404,29 @@ SendMediaReady PrepareThemeMedia(
 		thumbnail.save(&buffer, "JPG", 87);
 	}
 
-	const auto push = [&](
-			const char *type,
-			QImage &&image,
-			QByteArray bytes = QByteArray()) {
-		sizes.push_back(MTP_photoSize(
-			MTP_string(type),
-			MTP_int(image.width()),
-			MTP_int(image.height()), MTP_int(0)));
-		thumbnails.emplace(type[0], PreparedPhotoThumb{
-			.image = std::move(image),
-			.bytes = std::move(bytes)
-		});
-	};
-	push("s", std::move(thumbnail), thumbnailBytes);
+	sizes.push_back(MTP_photoSize(
+		MTP_string("s"),
+		MTP_int(thumbnail.width()),
+		MTP_int(thumbnail.height()), MTP_int(0)));
 
+	const auto id = base::RandomValue<DocumentId>();
 	const auto filename = base::FileNameFromUserString(name)
 		+ u".tdesktop-theme"_q;
 	auto attributes = QVector<MTPDocumentAttribute>(
 		1,
 		MTP_documentAttributeFilename(MTP_string(filename)));
-	const auto id = base::RandomValue<DocumentId>();
-	const auto document = MTP_document(
+
+	auto result = MakePreparedFile({
+		.id = id,
+		.type = SendMediaType::ThemeFile,
+	});
+	result->filename = filename;
+	result->content = content;
+	result->filesize = content.size();
+	result->thumb = thumbnail;
+	result->thumbname = "thumb.jpg";
+	result->setThumbData(thumbnailBytes);
+	result->document = MTP_document(
 		MTP_flags(0),
 		MTP_long(id),
 		MTP_long(0),
@@ -437,21 +438,7 @@ SendMediaReady PrepareThemeMedia(
 		MTPVector<MTPVideoSize>(),
 		MTP_int(dcId),
 		MTP_vector<MTPDocumentAttribute>(attributes));
-
-	return SendMediaReady(
-		SendMediaType::ThemeFile,
-		QString(), // filepath
-		filename,
-		content.size(),
-		content,
-		id,
-		0,
-		QString(),
-		PeerId(),
-		MTP_photoEmpty(MTP_long(0)),
-		thumbnails,
-		document,
-		thumbnailBytes);
+	return result;
 }
 
 Fn<void()> SavePreparedTheme(
@@ -571,7 +558,7 @@ Fn<void()> SavePreparedTheme(
 			session->mainDcId(),
 			fields.title,
 			theme);
-		state->filename = media.filename;
+		state->filename = media->filename;
 		state->themeContent = theme;
 
 		session->uploader().documentReady(
@@ -581,7 +568,7 @@ Fn<void()> SavePreparedTheme(
 			uploadTheme(data);
 		}, state->lifetime);
 
-		session->uploader().uploadMedia(state->id, media);
+		session->uploader().upload(state->id, media);
 	};
 
 	const auto save = [=] {
@@ -1000,12 +987,15 @@ ParsedTheme ParseTheme(
 [[nodiscard]] QString GenerateSlug() {
 	const auto letters = uint8('Z' + 1 - 'A');
 	const auto digits = uint8('9' + 1 - '0');
+	const auto firstValues = uint8(2 * letters);
 	const auto values = uint8(2 * letters + digits);
 
 	auto result = QString();
 	result.reserve(kRandomSlugSize);
 	for (auto i = 0; i != kRandomSlugSize; ++i) {
-		const auto value = base::RandomValue<uint8>() % values;
+		const auto value = i
+			? (base::RandomValue<uint8>() % values)
+			: (base::RandomValue<uint8>() % firstValues);
 		if (value < letters) {
 			result.append(char('A' + value));
 		} else if (value < 2 * letters) {
