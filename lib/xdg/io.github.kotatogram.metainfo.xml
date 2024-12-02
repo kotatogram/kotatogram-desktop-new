@@ -3,10 +3,10 @@
     <id>io.github.kotatogram</id>
     <metadata_license>CC0-1.0</metadata_license>
     <project_license>GPL-3.0</project_license>
-    <name>Kotatogram Desktop</name>
-    <summary>Kotatogram Desktop messenger</summary>
+    <name>Kotatogram</name>
+    <summary>Experimental Telegram messenger</summary>
     <description>
-        <p>Kotatogram Desktop is unofficial messaging based on Telegram Desktop.</p>
+        <p>Unofficial messaging app based on Telegram Desktop.</p>
         <p>Telegram is a popular messaging protocol with encryption and security as its key focus.</p>
     </description>
     <categories>
@@ -18,6 +18,10 @@
     <url type="bugtracker">https://github.com/kotatogram/kotatogram-desktop/issues</url>
     <url type="translate">https://crowdin.com/project/kotatogram-desktop</url>
     <url type="contribute">https://github.com/kotatogram/kotatogram-desktop/blob/dev/.github/CONTRIBUTING.md</url>
+    <branding>
+        <color type="primary" scheme_preference="light">#e1ccff</color>
+        <color type="primary" scheme_preference="dark">#35244d</color>
+    </branding>
     <screenshots>
       <screenshot type="default">
         <image>https://raw.githubusercontent.com/kotatogram/kotatogram-desktop/dev/docs/assets/ktg_preview.png</image>
