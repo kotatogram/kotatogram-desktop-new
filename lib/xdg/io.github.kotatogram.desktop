@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=Kotatogram Desktop
+Name=Kotatogram
 Comment=Experimental Telegram Desktop fork
 TryExec=kotatogram-desktop
 Exec=kotatogram-desktop -- %u
