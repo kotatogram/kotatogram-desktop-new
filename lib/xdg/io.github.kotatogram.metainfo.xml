@@ -25,15 +25,15 @@
     <screenshots>
         <screenshot type="default">
             <caption>Main window with default settings.</caption>
-            <image>https://raw.githubusercontent.com/kotatogram/kotatogram-desktop/dev/docs/assets/flatpak_screenshots/main_window.png</image>
+            <image>https://raw.githubusercontent.com/kotatogram/kotatogram-desktop/dev/docs/assets/linux_screenshots/main_window.png</image>
         </screenshot>
         <screenshot>
             <caption>Menu with Kotatogram-specific settings.</caption>
-            <image>https://raw.githubusercontent.com/kotatogram/kotatogram-desktop/dev/docs/assets/flatpak_screenshots/kotatogram_settings.png</image>
+            <image>https://raw.githubusercontent.com/kotatogram/kotatogram-desktop/dev/docs/assets/linux_screenshots/kotatogram_settings.png</image>
         </screenshot>
         <screenshot>
             <caption>Main window with compact folders and adaptive chat bubbles enabled. Also features profile pictures rounding (currently set in JSON file).</caption>
-            <image>https://raw.githubusercontent.com/kotatogram/kotatogram-desktop/dev/docs/assets/flatpak_screenshots/customized.png</image>
+            <image>https://raw.githubusercontent.com/kotatogram/kotatogram-desktop/dev/docs/assets/linux_screenshots/customized.png</image>
         </screenshot>
     </screenshots>
     <keywords>
